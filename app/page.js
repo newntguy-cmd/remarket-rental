@@ -2,6 +2,16 @@
 
 import { useEffect, useMemo, useState, useRef } from "react";
 import { supabase } from "../lib/supabaseClient";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  Cell,
+} from "recharts";
 
 const C = {
   bg: "#FAF9F5",
@@ -38,6 +48,52 @@ function fmtWon(n) {
   if (n === null || n === undefined || isNaN(n)) return "-";
   return Number(n).toLocaleString("ko-KR") + "원";
 }
+function fmtWonShort(n) {
+  if (n === null || n === undefined || isNaN(n)) return "0";
+  if (n >= 100000000) return (n / 100000000).toFixed(1) + "억";
+  if (n >= 10000) return Math.round(n / 10000) + "만";
+  return String(n);
+}
+
+// 최근 6개월 월별 매출 (렌탈+구매 합산, out_date 기준)
+function computeMonthlyRevenue(rentals) {
+  const months = [];
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  }
+  const byMonth = Object.fromEntries(months.map((m) => [m, 0]));
+  for (const r of rentals) {
+    if (!r.out_date) continue;
+    const key = r.out_date.slice(0, 7);
+    if (key in byMonth) byMonth[key] += Number(r.amount) || 0;
+  }
+  return months.map((m) => ({ month: m.slice(5) + "월", amount: byMonth[m] }));
+}
+
+// 반납예정 타임라인: 회수 안 된 렌탈 건을 임박도 구간으로 분류
+function computeReturnBuckets(rentals) {
+  const buckets = [
+    { key: "overdue", label: "연체", color: C.brick, count: 0 },
+    { key: "d30", label: "~30일", color: C.amber, count: 0 },
+    { key: "d60", label: "31~60일", color: "#6B8CAE", count: 0 },
+    { key: "d90", label: "61~90일", color: "#8B93A6", count: 0 },
+    { key: "later", label: "90일+", color: C.muted, count: 0 },
+  ];
+  const map = Object.fromEntries(buckets.map((b) => [b.key, b]));
+  for (const r of rentals) {
+    if (r.transaction_type !== "rental" || r.collected || !r.due_date) continue;
+    const diff = daysBetween(todayISO(), r.due_date);
+    if (diff < 0) map.overdue.count++;
+    else if (diff <= 30) map.d30.count++;
+    else if (diff <= 60) map.d60.count++;
+    else if (diff <= 90) map.d90.count++;
+    else map.later.count++;
+  }
+  return buckets;
+}
+
 function getStatus(item) {
   if (item.transaction_type === "purchase") return "purchase";
   if (item.collected) return "collected";
@@ -374,6 +430,7 @@ function Dashboard({ profile, onLogout }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [showSummary, setShowSummary] = useState(false);
+  const [showStats, setShowStats] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
   const [importState, setImportState] = useState(null); // parsed preview
   const [importing, setImporting] = useState(false);
@@ -429,6 +486,9 @@ function Dashboard({ profile, onLogout }) {
     }
     return Object.values(byCustomer).sort((a, b) => b.totalAmount - a.totalAmount);
   }, [rentals]);
+
+  const monthlyRevenue = useMemo(() => computeMonthlyRevenue(rentals), [rentals]);
+  const returnBuckets = useMemo(() => computeReturnBuckets(rentals), [rentals]);
 
   async function upsertItem(item) {
     if (item.id) {
@@ -524,6 +584,9 @@ function Dashboard({ profile, onLogout }) {
           <button onClick={() => setShowSummary((s) => !s)} style={ghostBtnStyle}>
             {showSummary ? "고객사 요약 닫기" : "고객사별 요약 보기"}
           </button>
+          <button onClick={() => setShowStats((s) => !s)} style={ghostBtnStyle}>
+            {showStats ? "통계 닫기" : "통계 보기"}
+          </button>
           <div style={{ flex: 1 }} />
           {isAdmin && (
             <>
@@ -556,6 +619,41 @@ function Dashboard({ profile, onLogout }) {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {showStats && (
+          <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+            <div>
+              <div style={{ fontFamily: serif, fontSize: 15, marginBottom: 4 }}>월별 매출 추이</div>
+              <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 10 }}>최근 6개월, 렌탈+구매 합산 (출고일/발행일 기준)</div>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={monthlyRevenue} margin={{ top: 4, right: 4, left: -12, bottom: 0 }}>
+                  <CartesianGrid stroke={C.lineSoft} vertical={false} />
+                  <XAxis dataKey="month" tick={{ fontSize: 11.5, fill: C.inkSoft, fontFamily: sans }} axisLine={{ stroke: C.line }} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: C.muted, fontFamily: sans }} tickFormatter={fmtWonShort} axisLine={false} tickLine={false} width={44} />
+                  <Tooltip formatter={(v) => fmtWon(v)} contentStyle={{ fontFamily: sans, fontSize: 12.5, border: `1px solid ${C.line}` }} cursor={{ fill: C.bg }} />
+                  <Bar dataKey="amount" fill={C.ink} radius={[3, 3, 0, 0]} maxBarSize={36} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div>
+              <div style={{ fontFamily: serif, fontSize: 15, marginBottom: 4 }}>반납예정 타임라인</div>
+              <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 10 }}>회수 안 된 렌탈 건, 임박도 구간별 건수</div>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={returnBuckets} margin={{ top: 4, right: 4, left: -12, bottom: 0 }}>
+                  <CartesianGrid stroke={C.lineSoft} vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 11.5, fill: C.inkSoft, fontFamily: sans }} axisLine={{ stroke: C.line }} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: C.muted, fontFamily: sans }} axisLine={false} tickLine={false} width={28} />
+                  <Tooltip formatter={(v) => `${v}건`} contentStyle={{ fontFamily: sans, fontSize: 12.5, border: `1px solid ${C.line}` }} cursor={{ fill: C.bg }} />
+                  <Bar dataKey="count" radius={[3, 3, 0, 0]} maxBarSize={36}>
+                    {returnBuckets.map((b, i) => (
+                      <Cell key={i} fill={b.color} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         )}
 
