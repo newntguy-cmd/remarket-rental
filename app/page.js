@@ -424,6 +424,8 @@ function StatCell({ label, value, color, active, onClick, last }) {
 function Dashboard({ profile, onLogout }) {
   const isAdmin = profile.role === "admin";
   const [rentals, setRentals] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [customerDetailName, setCustomerDetailName] = useState(null);
   const [typeFilter, setTypeFilter] = useState("all"); // all | rental | purchase
   const [tab, setTab] = useState("all"); // all | normal | soon | overdue | collected
   const [query, setQuery] = useState("");
@@ -438,6 +440,7 @@ function Dashboard({ profile, onLogout }) {
 
   useEffect(() => {
     fetchRentals();
+    fetchCustomers();
   }, []);
 
   async function fetchRentals() {
@@ -445,6 +448,11 @@ function Dashboard({ profile, onLogout }) {
     const { data, error } = await supabase.from("rentals").select("*").order("due_date", { ascending: true, nullsFirst: false });
     if (!error) setRentals(data || []);
     setLoadingData(false);
+  }
+
+  async function fetchCustomers() {
+    const { data, error } = await supabase.from("customers").select("*");
+    if (!error) setCustomers(data || []);
   }
 
   const visible = useMemo(() => {
@@ -489,6 +497,12 @@ function Dashboard({ profile, onLogout }) {
 
   const monthlyRevenue = useMemo(() => computeMonthlyRevenue(rentals), [rentals]);
   const returnBuckets = useMemo(() => computeReturnBuckets(rentals), [rentals]);
+
+  const matchingCustomers = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return summary.filter((s) => s.customer.toLowerCase().includes(q)).slice(0, 5);
+  }, [summary, query]);
 
   async function upsertItem(item) {
     if (item.id) {
@@ -605,13 +619,41 @@ function Dashboard({ profile, onLogout }) {
           )}
         </div>
 
+        {matchingCustomers.length > 0 && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: C.muted }}>고객사 상세 바로가기:</span>
+            {matchingCustomers.map((s) => (
+              <button
+                key={s.customer}
+                onClick={() => setCustomerDetailName(s.customer)}
+                style={{
+                  padding: "5px 12px",
+                  background: C.purpleBg,
+                  color: "#3A3066",
+                  border: "none",
+                  fontSize: 12.5,
+                  cursor: "pointer",
+                  fontFamily: sans,
+                }}
+              >
+                {s.customer} 상세보기
+              </button>
+            ))}
+          </div>
+        )}
+
         {showSummary && (
           <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
             <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 14 }}>고객사별 요약</div>
             {summary.length === 0 && <div style={{ color: C.muted, fontSize: 13.5 }}>데이터가 없습니다.</div>}
             {summary.map((s) => (
               <div key={s.customer} style={{ display: "flex", alignItems: "center", gap: 16, padding: "10px 0", borderBottom: `1px solid ${C.lineSoft}` }}>
-                <div style={{ width: 160, fontSize: 14 }}>{s.customer}</div>
+                <button
+                  onClick={() => setCustomerDetailName(s.customer)}
+                  style={{ width: 160, fontSize: 14, textAlign: "left", background: "none", border: "none", padding: 0, color: C.ink, textDecoration: "underline", textUnderlineOffset: 3, cursor: "pointer", fontFamily: sans }}
+                >
+                  {s.customer}
+                </button>
                 <div style={{ width: 140, fontSize: 13, color: C.inkSoft }}>총 금액 {fmtWon(s.totalAmount)}</div>
                 <div style={{ width: 100, fontSize: 13, color: C.inkSoft }}>품목 {s.itemCount}개</div>
                 <div style={{ flex: 1, fontSize: 12.5, color: s.upcoming.length ? C.amber : C.muted }}>
@@ -655,6 +697,17 @@ function Dashboard({ profile, onLogout }) {
               </ResponsiveContainer>
             </div>
           </div>
+        )}
+
+        {customerDetailName && (
+          <CustomerDetailPanel
+            customerName={customerDetailName}
+            rentals={rentals}
+            customers={customers}
+            isAdmin={isAdmin}
+            onClose={() => setCustomerDetailName(null)}
+            onSaved={fetchCustomers}
+          />
         )}
 
         {importState && (
@@ -741,6 +794,131 @@ function Dashboard({ profile, onLogout }) {
             );
           })}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function CustomerDetailPanel({ customerName, rentals, customers, isAdmin, onClose, onSaved }) {
+  const existing = customers.find((c) => c.name === customerName);
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({
+    contact_name: existing?.contact_name || "",
+    phone: existing?.phone || "",
+    email: existing?.email || "",
+    note: existing?.note || "",
+  });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setForm({
+      contact_name: existing?.contact_name || "",
+      phone: existing?.phone || "",
+      email: existing?.email || "",
+      note: existing?.note || "",
+    });
+    setEditing(false);
+  }, [customerName, existing?.contact_name, existing?.phone, existing?.email, existing?.note]);
+
+  const items = useMemo(() => rentals.filter((r) => r.customer === customerName), [rentals, customerName]);
+
+  const bySite = useMemo(() => {
+    const map = {};
+    for (const r of items) {
+      const key = r.site || "(현장 미지정)";
+      if (!map[key]) map[key] = { site: key, amount: 0, itemCount: 0, normal: 0, soon: 0, overdue: 0, collected: 0, purchase: 0 };
+      map[key].amount += Number(r.amount) || 0;
+      map[key].itemCount += Number(r.qty) || 0;
+      map[key][getStatus(r)]++;
+    }
+    return Object.values(map).sort((a, b) => b.amount - a.amount);
+  }, [items]);
+
+  const totalAmount = items.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+
+  async function save() {
+    setSaving(true);
+    const { error } = await supabase.from("customers").upsert({ name: customerName, ...form }, { onConflict: "name" });
+    setSaving(false);
+    if (error) {
+      alert("저장 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setEditing(false);
+    onSaved();
+  }
+
+  return (
+    <div style={{ border: `1px solid ${C.purple}`, background: C.panel, padding: 20, marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+        <div>
+          <div style={{ fontFamily: serif, fontSize: 18 }}>{customerName}</div>
+          <div style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>총 {fmtWon(totalAmount)} · 현장 {bySite.length}곳 · 품목 {items.reduce((s, r) => s + (Number(r.qty) || 0), 0)}개</div>
+        </div>
+        <button onClick={onClose} style={ghostBtnStyle}>닫기</button>
+      </div>
+
+      <div style={{ border: `1px solid ${C.lineSoft}`, padding: 16, marginBottom: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: editing ? 12 : 0 }}>
+          <div style={{ fontSize: 13, color: C.inkSoft }}>담당자 정보</div>
+          {isAdmin && !editing && (
+            <button onClick={() => setEditing(true)} style={miniBtnStyle}>수정</button>
+          )}
+        </div>
+        {!editing && (
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", fontSize: 13.5, marginTop: 8 }}>
+            <div>담당자: {form.contact_name || "-"}</div>
+            <div>연락처: {form.phone || "-"}</div>
+            <div>이메일: {form.email || "-"}</div>
+            {form.note && <div>비고: {form.note}</div>}
+          </div>
+        )}
+        {editing && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <Field label="담당자명">
+                <input style={smallInputStyle} value={form.contact_name} onChange={(e) => setForm({ ...form, contact_name: e.target.value })} />
+              </Field>
+              <Field label="연락처">
+                <input style={smallInputStyle} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+              </Field>
+              <Field label="이메일">
+                <input style={smallInputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+              </Field>
+            </div>
+            <Field label="비고">
+              <input style={smallInputStyle} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
+            </Field>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button onClick={save} disabled={saving} style={primaryBtnStyle2}>{saving ? "저장 중…" : "저장"}</button>
+              <button onClick={() => setEditing(false)} style={ghostBtnStyle}>취소</button>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div style={{ fontSize: 13, color: C.inkSoft, marginBottom: 8 }}>현장별 현황</div>
+      <div style={{ border: `1px solid ${C.lineSoft}` }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 90px 1fr", gap: 8, padding: "8px 12px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
+          <div>현장/구역</div>
+          <div>금액</div>
+          <div>품목수</div>
+          <div>상태</div>
+        </div>
+        {bySite.map((s, idx) => (
+          <div key={s.site} style={{ display: "grid", gridTemplateColumns: "1fr 110px 90px 1fr", gap: 8, padding: "8px 12px", fontSize: 13, alignItems: "center", borderBottom: idx === bySite.length - 1 ? "none" : `1px solid ${C.lineSoft}` }}>
+            <div>{s.site}</div>
+            <div>{fmtWon(s.amount)}</div>
+            <div>{s.itemCount}개</div>
+            <div style={{ fontSize: 11.5, color: C.muted }}>
+              {s.normal > 0 && `정상 ${s.normal} `}
+              {s.soon > 0 && `임박 ${s.soon} `}
+              {s.overdue > 0 && `연체 ${s.overdue} `}
+              {s.collected > 0 && `회수완료 ${s.collected} `}
+              {s.purchase > 0 && `구매 ${s.purchase}`}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
