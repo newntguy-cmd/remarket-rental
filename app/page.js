@@ -52,6 +52,35 @@ function addMonthsMinusDay(dateStr, months) {
 function daysBetween(a, b) {
   return Math.round((new Date(b) - new Date(a)) / 86400000);
 }
+// 배송일자 기준으로 "YYMMDD + 그날 순번" 형태의 전표번호를 자동 생성 (예: 26091622)
+function nextVoucherNo(outDate, rentals) {
+  if (!outDate) return "";
+  const d = new Date(outDate);
+  if (isNaN(d)) return "";
+  const yy = String(d.getFullYear()).slice(2);
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const prefix = `${yy}${mm}${dd}`;
+  const used = new Set((rentals || []).filter((r) => r.voucher_no && r.voucher_no.startsWith(prefix)).map((r) => r.voucher_no));
+  let seq = 1;
+  while (used.has(`${prefix}${String(seq).padStart(2, "0")}`)) seq++;
+  return `${prefix}${String(seq).padStart(2, "0")}`;
+}
+// 전표번호(voucher_no) 기준으로 rentals 행들을 하나의 "전표" 단위로 묶는다. 전표번호가 없는 건은 각각 단독 전표로 취급.
+function groupRentalsByVoucher(rentals) {
+  const map = new Map();
+  for (const r of rentals) {
+    const key = r.voucher_no || `__single_${r.id}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(r);
+  }
+  return Array.from(map.entries()).map(([key, rows]) => {
+    const head = rows[0];
+    const amount = rows.reduce((s, x) => s + (Number(x.amount) || 0), 0);
+    return { key, voucherNo: head.voucher_no || "", rows, head, amount };
+  });
+}
+const rentalListGrid = "120px 110px 120px 90px 100px 1fr 90px 100px 100px 110px 90px";
 function fmtWon(n) {
   if (n === null || n === undefined || isNaN(n)) return "-";
   return Number(n).toLocaleString("ko-KR") + "원";
@@ -163,8 +192,40 @@ function Field({ label, children }) {
   );
 }
 
+// 단가/금액처럼 숫자를 콤마(1,200,000)로 보여주면서 값은 숫자로 다루는 입력창
+function NumberInput({ value, onChange, style, placeholder }) {
+  const fmt = (v) => (v === null || v === undefined || v === "" || isNaN(Number(v)) ? "" : Number(v).toLocaleString("ko-KR"));
+  const [text, setText] = useState(fmt(value));
+
+  useEffect(() => {
+    const formatted = fmt(value);
+    setText((prev) => (prev === formatted ? prev : formatted));
+  }, [value]);
+
+  const handleChange = (e) => {
+    const cleaned = e.target.value.replace(/[^0-9-]/g, "");
+    const hasDigits = /\d/.test(cleaned);
+    const numeric = hasDigits ? Number(cleaned) : null;
+    setText(hasDigits && !isNaN(numeric) ? numeric.toLocaleString("ko-KR") : cleaned);
+    onChange(hasDigits && !isNaN(numeric) ? numeric : null);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      style={{ ...style, textAlign: "right" }}
+      value={text}
+      onChange={handleChange}
+      placeholder={placeholder}
+    />
+  );
+}
+
 // ---------- 엑셀 견적서 파싱 ----------
-const SKIP_NAMES = ["배송비", "dc", "d.c"];
+// 배송비·DC(할인)는 품목이 아니라 별도 계산 항목처럼 보이지만, 실제 청구 금액(계/합계)에
+// 포함되는 항목이라 건너뛰지 않고 그대로 품목 내역에 포함시킨다 (등록 전 미리보기에서 확인·수정 가능).
+const SKIP_NAMES = [];
 const STOP_NAMES = ["계", "합계(vat 포함)", "합계", "납품확인", "[조건 / condition]", "[조건/condition]"];
 
 function cellText(v) {
@@ -335,9 +396,15 @@ async function parseQuoteExcel(file) {
     if (itemCell) currentItem = itemCell;
     if (!currentItem) continue;
 
-    const qty = qtyRaw != null ? Number(qtyRaw) : 1;
-    const unitPrice = priceRaw != null ? Number(priceRaw) : null;
-    const amount = amountRaw != null ? Number(amountRaw) : unitPrice != null ? unitPrice * qty : null;
+    // 단가/금액 칸이 "-" 같은 텍스트(회계서식의 0원 표기 등)인 경우 Number()가 NaN이 되므로 그런 값은 무시한다.
+    const toNum = (v) => {
+      if (v == null) return null;
+      const n = Number(v);
+      return isNaN(n) ? null : n;
+    };
+    const qty = toNum(qtyRaw) ?? 1;
+    const unitPrice = toNum(priceRaw);
+    const amount = toNum(amountRaw) ?? (unitPrice != null ? unitPrice * qty : null);
 
     items.push({
       item: currentItem,
@@ -517,6 +584,7 @@ function Dashboard({ profile, onLogout }) {
     if (!file) return;
     try {
       const parsed = await parseQuoteExcel(file);
+      if (!parsed.voucherNo) parsed.voucherNo = nextVoucherNo(parsed.outDate, rentals);
       setImportState(parsed);
     } catch (err) {
       alert("엑셀 파일을 읽는 중 문제가 발생했어요. 형식을 확인해주세요.");
@@ -548,12 +616,22 @@ function Dashboard({ profile, onLogout }) {
       amount: it.amount,
       out_date: importState.outDate,
       period_days: importState.periodDays,
+      period_months: importState.periodMonths || null,
       due_date: importState.dueDate,
       collected: false,
       collect_date: null,
       manager: importState.manager,
       voucher_no: importState.voucherNo || null,
       note: it.note,
+      site_name: importState.siteName || null,
+      ref_contact: importState.refContact || null,
+      email: importState.email || null,
+      phone: importState.phone || null,
+      recipient: importState.recipient || null,
+      warehouse: importState.warehouse || null,
+      deal_type: importState.dealType || null,
+      project: importState.project || null,
+      tax_invoice: importState.taxInvoice || null,
     }));
     const { error } = await supabase.from("rentals").insert(rows);
     setImporting(false);
@@ -568,6 +646,7 @@ function Dashboard({ profile, onLogout }) {
 
   const menuItems = [
     ...(isAdmin ? [{ key: "quote", label: "견적서 업로드" }] : []),
+    ...(isAdmin ? [{ key: "rentals", label: "렌탈내역" }] : []),
   ];
 
   return (
@@ -621,6 +700,10 @@ function Dashboard({ profile, onLogout }) {
             importing={importing}
             setImportState={setImportState}
           />
+        )}
+
+        {activeTab === "rentals" && isAdmin && (
+          <RentalListTab rentals={rentals} onRefresh={fetchRentals} />
         )}
 
         {!isAdmin && (
@@ -1135,8 +1218,8 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing }) {
             <input style={smallInputStyle} value={it.item || ""} onChange={(e) => updateItem(idx, { item: e.target.value })} />
             <input style={smallInputStyle} value={it.spec || ""} onChange={(e) => updateItem(idx, { spec: e.target.value })} />
             <input type="number" style={smallInputStyle} value={it.qty ?? ""} onChange={(e) => updateItem(idx, { qty: Number(e.target.value) })} />
-            <input type="number" style={smallInputStyle} value={it.unit_price ?? ""} onChange={(e) => updateItem(idx, { unit_price: Number(e.target.value) })} />
-            <input type="number" style={smallInputStyle} value={it.amount ?? ""} onChange={(e) => updateItem(idx, { amount: Number(e.target.value) })} />
+            <NumberInput style={smallInputStyle} value={it.unit_price} onChange={(v) => updateItem(idx, { unit_price: v })} />
+            <NumberInput style={smallInputStyle} value={it.amount} onChange={(v) => updateItem(idx, { amount: v })} />
           </div>
         ))}
       </div>
@@ -1223,10 +1306,10 @@ function RentalForm({ initial, onCancel, onSubmit }) {
           <input type="number" min={1} style={inputStyle} value={f.qty} onChange={(e) => update({ qty: Number(e.target.value) })} />
         </Field>
         <Field label="단가">
-          <input type="number" style={inputStyle} value={f.unit_price ?? ""} onChange={(e) => update({ unit_price: Number(e.target.value) })} />
+          <NumberInput style={inputStyle} value={f.unit_price} onChange={(v) => update({ unit_price: v })} />
         </Field>
         <Field label="금액">
-          <input type="number" style={inputStyle} value={f.amount ?? ""} onChange={(e) => setF({ ...f, amount: Number(e.target.value) })} />
+          <NumberInput style={inputStyle} value={f.amount} onChange={(v) => setF({ ...f, amount: v })} />
         </Field>
         <Field label={isRental ? "출고일" : "발행일"}>
           <input type="date" style={inputStyle} value={f.out_date} onChange={(e) => update({ out_date: e.target.value })} />
@@ -1258,6 +1341,441 @@ function RentalForm({ initial, onCancel, onSubmit }) {
           저장
         </button>
         <button onClick={onCancel} style={ghostBtnStyle}>취소</button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- 렌탈내역 (목록 + 상세) ----------
+function RentalListTab({ rentals, onRefresh }) {
+  const [query, setQuery] = useState("");
+  const [selectedKey, setSelectedKey] = useState(null);
+
+  const groups = useMemo(() => {
+    const g = groupRentalsByVoucher(rentals);
+    g.sort((a, b) => (b.head.out_date || "").localeCompare(a.head.out_date || "") || (b.voucherNo || "").localeCompare(a.voucherNo || ""));
+    return g;
+  }, [rentals]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return groups;
+    return groups.filter((g) =>
+      [g.voucherNo, g.head.customer, g.head.site_name, g.head.manager, ...g.rows.map((r) => r.item)]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [groups, query]);
+
+  const selected = groups.find((g) => g.key === selectedKey) || null;
+
+  if (selected) {
+    return (
+      <RentalDetailPanel
+        group={selected}
+        onClose={() => setSelectedKey(null)}
+        onSaved={() => {
+          onRefresh();
+          setSelectedKey(null);
+        }}
+      />
+    );
+  }
+
+  const totalAmount = filtered.reduce((s, g) => s + g.amount, 0);
+
+  return (
+    <div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>렌탈내역</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+        전표번호를 클릭하면 세부 내역을 확인·수정할 수 있어요. (견적서 업로드로 등록된 전표 기준)
+      </div>
+
+      <input
+        placeholder="거래처, 현장명, 담당자, 전표번호, 품목 검색"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        style={{ ...inputStyle, width: 320, marginBottom: 14 }}
+      />
+
+      <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 10 }}>
+        검색결과 {filtered.length}건 · 합계 {fmtWon(totalAmount)}
+      </div>
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: rentalListGrid,
+            gap: 8,
+            padding: "10px 14px",
+            fontSize: 11.5,
+            color: C.muted,
+            borderBottom: `1px solid ${C.line}`,
+            minWidth: 1080,
+          }}
+        >
+          <div>전표번호</div>
+          <div>거래처</div>
+          <div>현장명</div>
+          <div>담당자</div>
+          <div>배송일자</div>
+          <div>품목</div>
+          <div>렌탈기간</div>
+          <div>렌탈개시일</div>
+          <div>렌탈만료일</div>
+          <div>금액</div>
+          <div>상태</div>
+        </div>
+
+        {filtered.map((g) => {
+          const status = getStatus({
+            transaction_type: g.head.transaction_type,
+            collected: g.rows.every((r) => r.collected),
+            due_date: g.head.due_date,
+          });
+          const meta = STATUS_META[status];
+          const first = g.rows[0];
+          const extra = g.rows.length - 1;
+          return (
+            <div
+              key={g.key}
+              style={{
+                display: "grid",
+                gridTemplateColumns: rentalListGrid,
+                gap: 8,
+                padding: "12px 14px",
+                fontSize: 13,
+                alignItems: "center",
+                borderBottom: `1px solid ${C.lineSoft}`,
+                minWidth: 1080,
+              }}
+            >
+              <button
+                onClick={() => setSelectedKey(g.key)}
+                style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
+              >
+                {g.voucherNo || "(번호없음)"}
+              </button>
+              <div>{g.head.customer || "-"}</div>
+              <div style={{ color: C.inkSoft, fontSize: 12.5 }}>{g.head.site_name || "-"}</div>
+              <div>{g.head.manager || "-"}</div>
+              <div style={{ fontSize: 12.5 }}>{g.head.out_date || "-"}</div>
+              <div>
+                {first.item}
+                {extra > 0 ? ` 외 ${extra}건` : ""}
+              </div>
+              <div>{g.head.period_months ? `${g.head.period_months}개월` : g.head.period_days ? `${g.head.period_days}일` : "-"}</div>
+              <div style={{ fontSize: 12.5 }}>{g.head.out_date || "-"}</div>
+              <div style={{ fontSize: 12.5 }}>{g.head.due_date || "-"}</div>
+              <div style={{ fontSize: 12.5 }}>{fmtWon(g.amount)}</div>
+              <div>
+                <span style={{ fontSize: 11.5, padding: "3px 9px", background: meta.bg, color: meta.fg }}>{meta.label}</span>
+              </div>
+            </div>
+          );
+        })}
+
+        {filtered.length === 0 && (
+          <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>등록된 렌탈 내역이 없어요.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RentalDetailPanel({ group, onClose, onSaved }) {
+  const [header, setHeader] = useState(() => ({
+    voucherNo: group.head.voucher_no || "",
+    transactionType: group.head.transaction_type || "rental",
+    manager: group.head.manager || "",
+    customer: group.head.customer || "",
+    refContact: group.head.ref_contact || "",
+    email: group.head.email || "",
+    warehouse: group.head.warehouse || "",
+    dealType: group.head.deal_type || "",
+    outDate: group.head.out_date || "",
+    periodMonths: group.head.period_months || "",
+    dueDate: group.head.due_date || "",
+    currency: "내자",
+    siteName: group.head.site_name || "",
+    site: group.head.site || "",
+    project: group.head.project || "",
+    taxInvoice: group.head.tax_invoice || "",
+    recipient: group.head.recipient || "",
+  }));
+  const [items, setItems] = useState(() =>
+    group.rows.map((r) => ({ id: r.id, item: r.item, spec: r.spec, qty: r.qty, unit_price: r.unit_price, amount: r.amount, note: r.note }))
+  );
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const update = (patch) => setHeader((h) => ({ ...h, ...patch }));
+  const updateItem = (idx, patch) => {
+    const next = [...items];
+    next[idx] = { ...next[idx], ...patch };
+    setItems(next);
+  };
+  const addItem = () => setItems([...items, { id: null, item: "", spec: "", qty: 1, unit_price: null, amount: null, note: "" }]);
+  const removeItem = (idx) => setItems(items.filter((_, i) => i !== idx));
+
+  const totalAmount = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+  const isRental = header.transactionType === "rental";
+
+  async function handleSave() {
+    if (!header.customer) {
+      alert("거래처를 입력해주세요.");
+      return;
+    }
+    if (items.length === 0) {
+      alert("품목이 최소 1개 이상 있어야 해요.");
+      return;
+    }
+    setSaving(true);
+
+    const headerPatch = {
+      transaction_type: header.transactionType,
+      manager: header.manager,
+      customer: header.customer,
+      ref_contact: header.refContact,
+      email: header.email,
+      warehouse: header.warehouse,
+      deal_type: header.dealType,
+      out_date: header.outDate,
+      period_months: header.periodMonths || null,
+      period_days: header.periodMonths ? Number(header.periodMonths) * 30 : null,
+      due_date: header.dueDate,
+      site_name: header.siteName,
+      site: header.site,
+      project: header.project,
+      tax_invoice: header.taxInvoice,
+      recipient: header.recipient,
+      voucher_no: header.voucherNo || null,
+    };
+
+    const originalIds = group.rows.map((r) => r.id);
+    const currentIds = items.filter((it) => it.id).map((it) => it.id);
+    const removedIds = originalIds.filter((id) => !currentIds.includes(id));
+
+    if (removedIds.length > 0) {
+      const { error } = await supabase.from("rentals").delete().in("id", removedIds);
+      if (error) {
+        alert("삭제 중 오류가 발생했어요: " + error.message);
+        setSaving(false);
+        return;
+      }
+    }
+
+    if (currentIds.length > 0) {
+      const { error } = await supabase.from("rentals").update(headerPatch).in("id", currentIds);
+      if (error) {
+        alert("저장 중 오류가 발생했어요: " + error.message);
+        setSaving(false);
+        return;
+      }
+      for (const it of items.filter((x) => x.id)) {
+        await supabase
+          .from("rentals")
+          .update({ item: it.item, spec: it.spec, qty: it.qty, unit_price: it.unit_price, amount: it.amount, note: it.note })
+          .eq("id", it.id);
+      }
+    }
+
+    const newItems = items.filter((it) => !it.id);
+    if (newItems.length > 0) {
+      const rows = newItems.map((it) => ({
+        ...headerPatch,
+        item: it.item,
+        spec: it.spec,
+        qty: it.qty,
+        unit_price: it.unit_price,
+        amount: it.amount,
+        note: it.note,
+        collected: false,
+        collect_date: null,
+      }));
+      const { error } = await supabase.from("rentals").insert(rows);
+      if (error) {
+        alert("등록 중 오류가 발생했어요: " + error.message);
+        setSaving(false);
+        return;
+      }
+    }
+
+    setSaving(false);
+    onSaved();
+  }
+
+  async function handleDelete() {
+    if (!confirm("이 전표를 삭제할까요? 되돌릴 수 없어요.")) return;
+    setDeleting(true);
+    const ids = group.rows.map((r) => r.id);
+    const { error } = await supabase.from("rentals").delete().in("id", ids);
+    setDeleting(false);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    onSaved();
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div style={{ fontFamily: serif, fontSize: 16 }}>전표 상세 — {header.voucherNo || "(번호없음)"}</div>
+        <button onClick={onClose} style={ghostBtnStyle}>← 목록으로</button>
+      </div>
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Field label="구분">
+            <select style={inputStyle} value={header.transactionType} onChange={(e) => update({ transactionType: e.target.value })}>
+              <option value="rental">렌탈</option>
+              <option value="purchase">구매</option>
+            </select>
+          </Field>
+          <Field label="전표번호">
+            <input style={inputStyle} value={header.voucherNo} onChange={(e) => update({ voucherNo: e.target.value })} />
+          </Field>
+          <Field label="담당자">
+            <input style={inputStyle} value={header.manager} onChange={(e) => update({ manager: e.target.value })} />
+          </Field>
+          <Field label="거래처">
+            <input style={inputStyle} value={header.customer} onChange={(e) => update({ customer: e.target.value })} />
+          </Field>
+          <Field label="거래처 담당자">
+            <input style={inputStyle} value={header.refContact} onChange={(e) => update({ refContact: e.target.value })} />
+          </Field>
+          <Field label="메일">
+            <input style={inputStyle} value={header.email} onChange={(e) => update({ email: e.target.value })} />
+          </Field>
+          <Field label="출하창고">
+            <input style={inputStyle} value={header.warehouse} onChange={(e) => update({ warehouse: e.target.value })} />
+          </Field>
+          <Field label="거래유형">
+            <input style={inputStyle} value={header.dealType} onChange={(e) => update({ dealType: e.target.value })} />
+          </Field>
+          <Field label={isRental ? "배송일자 (= 렌탈개시일)" : "배송일자"}>
+            <input
+              type="date"
+              style={inputStyle}
+              value={header.outDate || ""}
+              onChange={(e) => {
+                const outDate = e.target.value;
+                update({ outDate, dueDate: header.periodMonths ? addMonthsMinusDay(outDate, header.periodMonths) : header.dueDate });
+              }}
+            />
+          </Field>
+          {isRental ? (
+            <Field label="렌탈기간 (개월)">
+              <input
+                type="number"
+                min={1}
+                style={inputStyle}
+                value={header.periodMonths ?? ""}
+                onChange={(e) => {
+                  const months = Number(e.target.value);
+                  update({ periodMonths: months, dueDate: addMonthsMinusDay(header.outDate, months) });
+                }}
+              />
+            </Field>
+          ) : (
+            <Field label="통화">
+              <select style={inputStyle} value={header.currency} onChange={(e) => update({ currency: e.target.value })}>
+                <option value="내자">내자</option>
+                <option value="외자">외자</option>
+              </select>
+            </Field>
+          )}
+          {isRental && (
+            <>
+              <Field label="렌탈만료일 (자동계산, 직접 수정 가능)">
+                <input type="date" style={inputStyle} value={header.dueDate || ""} onChange={(e) => update({ dueDate: e.target.value })} />
+              </Field>
+              <Field label="통화">
+                <select style={inputStyle} value={header.currency} onChange={(e) => update({ currency: e.target.value })}>
+                  <option value="내자">내자</option>
+                  <option value="외자">외자</option>
+                </select>
+              </Field>
+            </>
+          )}
+          <Field label="현장명">
+            <input style={inputStyle} value={header.siteName} onChange={(e) => update({ siteName: e.target.value })} />
+          </Field>
+          <Field label="배송지 주소">
+            <input style={inputStyle} value={header.site} onChange={(e) => update({ site: e.target.value })} />
+          </Field>
+          <Field label="프로젝트 (선택)">
+            <input style={inputStyle} value={header.project} onChange={(e) => update({ project: e.target.value })} />
+          </Field>
+          <Field label="세금계산서발행여부 (선택)">
+            <input style={inputStyle} value={header.taxInvoice} onChange={(e) => update({ taxInvoice: e.target.value })} />
+          </Field>
+          <div style={{ gridColumn: "span 2" }}>
+            <Field label="수령자/연락처">
+              <input style={inputStyle} value={header.recipient} onChange={(e) => update({ recipient: e.target.value })} />
+            </Field>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ fontFamily: serif, fontSize: 16 }}>품목 내역</div>
+          <button onClick={addItem} style={miniBtnStyle}>+ 품목 추가</button>
+        </div>
+        <div style={{ maxHeight: 360, overflowY: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 100px 55px 100px 100px 32px",
+              gap: 8,
+              padding: "8px 10px",
+              fontSize: 11.5,
+              color: C.muted,
+              borderBottom: `1px solid ${C.lineSoft}`,
+              position: "sticky",
+              top: 0,
+              background: C.panel,
+            }}
+          >
+            <div>품목</div>
+            <div>규격</div>
+            <div>수량</div>
+            <div>단가</div>
+            <div>금액</div>
+            <div></div>
+          </div>
+          {items.map((it, idx) => (
+            <div
+              key={it.id ?? `new-${idx}`}
+              style={{ display: "grid", gridTemplateColumns: "1fr 100px 55px 100px 100px 32px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}
+            >
+              <input style={smallInputStyle} value={it.item || ""} onChange={(e) => updateItem(idx, { item: e.target.value })} />
+              <input style={smallInputStyle} value={it.spec || ""} onChange={(e) => updateItem(idx, { spec: e.target.value })} />
+              <input type="number" style={smallInputStyle} value={it.qty ?? ""} onChange={(e) => updateItem(idx, { qty: Number(e.target.value) })} />
+              <NumberInput style={smallInputStyle} value={it.unit_price} onChange={(v) => updateItem(idx, { unit_price: v })} />
+              <NumberInput style={smallInputStyle} value={it.amount} onChange={(v) => updateItem(idx, { amount: v })} />
+              <button onClick={() => removeItem(idx)} style={{ background: "none", border: "none", color: C.brick, cursor: "pointer", fontSize: 13 }}>✕</button>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: 13, color: C.inkSoft }}>합계 {fmtWon(totalAmount)}</div>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "space-between" }}>
+        <button onClick={handleDelete} disabled={deleting} style={{ ...ghostBtnStyle, borderColor: C.brick, color: C.brick }}>
+          {deleting ? "삭제 중…" : "전표 삭제"}
+        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={onClose} style={ghostBtnStyle}>취소</button>
+          <button onClick={handleSave} disabled={saving} style={primaryBtnStyle2}>
+            {saving ? "저장 중…" : "저장"}
+          </button>
+        </div>
       </div>
     </div>
   );
