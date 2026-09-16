@@ -52,11 +52,10 @@ function addMonthsMinusDay(dateStr, months) {
 function daysBetween(a, b) {
   return Math.round((new Date(b) - new Date(a)) / 86400000);
 }
-// 배송일자 기준으로 "YYMMDD + 그날 순번" 형태의 전표번호를 자동 생성 (예: 26091622)
-function nextVoucherNo(outDate, rentals) {
-  if (!outDate) return "";
-  const d = new Date(outDate);
-  if (isNaN(d)) return "";
+// 등록(오늘) 날짜 기준으로 "YYMMDD + 오늘 등록 순번" 형태의 전표번호를 자동 생성 (예: 오늘 첫 건 26091701, 두 번째 26091702 ...)
+// 배송일자와 무관하게 항상 "오늘" 기준으로 매겨서, 언제 등록했는지로 일련번호가 매겨지게 한다.
+function nextVoucherNo(rentals) {
+  const d = new Date();
   const yy = String(d.getFullYear()).slice(2);
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
@@ -80,7 +79,7 @@ function groupRentalsByVoucher(rentals) {
     return { key, voucherNo: head.voucher_no || "", rows, head, amount };
   });
 }
-const rentalListGrid = "120px 110px 120px 90px 100px 1fr 90px 100px 100px 110px 90px";
+const rentalListGrid = "28px 120px 110px 120px 90px 100px 1fr 90px 100px 100px 110px 90px";
 function fmtWon(n) {
   if (n === null || n === undefined || isNaN(n)) return "-";
   return Number(n).toLocaleString("ko-KR") + "원";
@@ -584,7 +583,7 @@ function Dashboard({ profile, onLogout }) {
     if (!file) return;
     try {
       const parsed = await parseQuoteExcel(file);
-      if (!parsed.voucherNo) parsed.voucherNo = nextVoucherNo(parsed.outDate, rentals);
+      parsed.voucherNo = nextVoucherNo(rentals); // 전표번호는 오늘 날짜 기준 자동 일련번호로 강제 부여
       setImportState(parsed);
     } catch (err) {
       alert("엑셀 파일을 읽는 중 문제가 발생했어요. 형식을 확인해주세요.");
@@ -1073,8 +1072,8 @@ function QuoteHeaderForm({ state, update }) {
             <option value="purchase">구매</option>
           </select>
         </Field>
-        <Field label="전표번호">
-          <input style={inputStyle} value={state.voucherNo || ""} onChange={(e) => update({ voucherNo: e.target.value })} placeholder="예: RT-2026-0001" />
+        <Field label="전표번호 (오늘 날짜 기준 자동 부여, 일련번호라 수정 불필요)">
+          <input style={{ ...inputStyle, background: C.mutedBg, color: C.inkSoft }} value={state.voucherNo || ""} readOnly />
         </Field>
         <Field label="담당자">
           <input style={inputStyle} value={state.manager || ""} onChange={(e) => update({ manager: e.target.value })} placeholder="예: 김영업" />
@@ -1350,6 +1349,17 @@ function RentalForm({ initial, onCancel, onSubmit }) {
 function RentalListTab({ rentals, onRefresh }) {
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState(null);
+  const [checkedKeys, setCheckedKeys] = useState(new Set());
+  const [merging, setMerging] = useState(false);
+
+  const toggleCheck = (key) => {
+    setCheckedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const groups = useMemo(() => {
     const g = groupRentalsByVoucher(rentals);
@@ -1384,6 +1394,23 @@ function RentalListTab({ rentals, onRefresh }) {
     );
   }
 
+  async function handleMerge() {
+    const chosen = groups.filter((g) => checkedKeys.has(g.key));
+    if (chosen.length < 2) return;
+    if (!confirm(`선택한 ${chosen.length}건을 하나의 전표로 합칠까요? (같은 전표번호로 묶여서 목록에 한 줄로 표시돼요)`)) return;
+    setMerging(true);
+    const allIds = chosen.flatMap((g) => g.rows.map((r) => r.id));
+    const voucherNo = nextVoucherNo(rentals);
+    const { error } = await supabase.from("rentals").update({ voucher_no: voucherNo }).in("id", allIds);
+    setMerging(false);
+    if (error) {
+      alert("합치는 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setCheckedKeys(new Set());
+    onRefresh();
+  }
+
   const totalAmount = filtered.reduce((s, g) => s + g.amount, 0);
 
   return (
@@ -1404,6 +1431,17 @@ function RentalListTab({ rentals, onRefresh }) {
         검색결과 {filtered.length}건 · 합계 {fmtWon(totalAmount)}
       </div>
 
+      {checkedKeys.size > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 12px", background: C.amberBg, fontSize: 12.5 }}>
+          <div>{checkedKeys.size}건 선택됨</div>
+          {checkedKeys.size < 2 && <div style={{ color: C.muted }}>(2건 이상 선택하면 하나로 묶을 수 있어요)</div>}
+          <button onClick={handleMerge} disabled={checkedKeys.size < 2 || merging} style={miniBtnStylePrimary}>
+            {merging ? "합치는 중…" : "선택한 건 하나의 전표로 묶기"}
+          </button>
+          <button onClick={() => setCheckedKeys(new Set())} style={miniBtnStyle}>선택 해제</button>
+        </div>
+      )}
+
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
         <div
           style={{
@@ -1414,9 +1452,10 @@ function RentalListTab({ rentals, onRefresh }) {
             fontSize: 11.5,
             color: C.muted,
             borderBottom: `1px solid ${C.line}`,
-            minWidth: 1080,
+            minWidth: 1100,
           }}
         >
+          <div></div>
           <div>전표번호</div>
           <div>거래처</div>
           <div>현장명</div>
@@ -1450,9 +1489,12 @@ function RentalListTab({ rentals, onRefresh }) {
                 fontSize: 13,
                 alignItems: "center",
                 borderBottom: `1px solid ${C.lineSoft}`,
-                minWidth: 1080,
+                minWidth: 1100,
               }}
             >
+              <div>
+                <input type="checkbox" checked={checkedKeys.has(g.key)} onChange={() => toggleCheck(g.key)} />
+              </div>
               <button
                 onClick={() => setSelectedKey(g.key)}
                 style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
