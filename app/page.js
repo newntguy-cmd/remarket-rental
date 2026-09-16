@@ -302,6 +302,7 @@ async function parseQuoteExcel(file) {
     customer,
     site,
     manager,
+    voucherNo: "",
     transactionType,
     outDate,
     dueDate,
@@ -394,7 +395,7 @@ function rowGrid(isAdmin) {
   return {
     display: "grid",
     gridTemplateColumns: isAdmin
-      ? "110px 140px 1fr 55px 100px 110px 150px"
+      ? "24px 110px 140px 1fr 55px 100px 110px 210px"
       : "140px 1fr 55px 100px 110px",
     gap: 10,
   };
@@ -438,6 +439,17 @@ function Dashboard({ profile, onLogout }) {
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef(null);
 
+  // 상세검색(Search) 패널 + 선택삭제
+  const [showAdvSearch, setShowAdvSearch] = useState(false);
+  const [advCustomer, setAdvCustomer] = useState("");
+  const [advSite, setAdvSite] = useState("");
+  const [advManager, setAdvManager] = useState("");
+  const [advVoucher, setAdvVoucher] = useState("");
+  const [advStart, setAdvStart] = useState("");
+  const [advEnd, setAdvEnd] = useState("");
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [deleting, setDeleting] = useState(false);
+
   useEffect(() => {
     fetchRentals();
     fetchCustomers();
@@ -466,11 +478,42 @@ function Dashboard({ profile, onLogout }) {
           (r.item || "").toLowerCase().includes(q) ||
           (r.customer || "").toLowerCase().includes(q) ||
           (r.site || "").toLowerCase().includes(q) ||
-          (r.manager || "").toLowerCase().includes(q)
+          (r.manager || "").toLowerCase().includes(q) ||
+          (r.voucher_no || "").toLowerCase().includes(q)
       );
     }
+    if (advCustomer.trim()) {
+      const q = advCustomer.trim().toLowerCase();
+      list = list.filter((r) => (r.customer || "").toLowerCase().includes(q));
+    }
+    if (advSite.trim()) {
+      const q = advSite.trim().toLowerCase();
+      list = list.filter((r) => (r.site || "").toLowerCase().includes(q));
+    }
+    if (advManager.trim()) {
+      const q = advManager.trim().toLowerCase();
+      list = list.filter((r) => (r.manager || "").toLowerCase().includes(q));
+    }
+    if (advVoucher.trim()) {
+      const q = advVoucher.trim().toLowerCase();
+      list = list.filter((r) => (r.voucher_no || "").toLowerCase().includes(q));
+    }
+    if (advStart) list = list.filter((r) => r.out_date && r.out_date >= advStart);
+    if (advEnd) list = list.filter((r) => r.out_date && r.out_date <= advEnd);
     return list;
-  }, [rentals, typeFilter, tab, query]);
+  }, [rentals, typeFilter, tab, query, advCustomer, advSite, advManager, advVoucher, advStart, advEnd]);
+
+  const visibleTotal = useMemo(() => visible.reduce((s, r) => s + (Number(r.amount) || 0), 0), [visible]);
+  const advCount = [advCustomer, advSite, advManager, advVoucher].filter((v) => v.trim()).length + [advStart, advEnd].filter(Boolean).length;
+
+  function resetAdvSearch() {
+    setAdvCustomer("");
+    setAdvSite("");
+    setAdvManager("");
+    setAdvVoucher("");
+    setAdvStart("");
+    setAdvEnd("");
+  }
 
   const counts = {
     all: rentals.length,
@@ -525,6 +568,55 @@ function Dashboard({ profile, onLogout }) {
     fetchRentals();
   }
 
+  async function handleDeleteOne(row) {
+    const ok = window.confirm(`${row.customer} / ${row.item} 건을 삭제할까요? 삭제하면 되돌릴 수 없습니다.`);
+    if (!ok) return;
+    setDeleting(true);
+    const { error } = await supabase.from("rentals").delete().eq("id", row.id);
+    setDeleting(false);
+    if (!error) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(row.id);
+        return next;
+      });
+      fetchRentals();
+    }
+  }
+
+  async function handleDeleteSelected() {
+    if (selectedIds.size === 0) return;
+    const ok = window.confirm(`선택한 ${selectedIds.size}건을 삭제할까요? 삭제하면 되돌릴 수 없습니다.`);
+    if (!ok) return;
+    setDeleting(true);
+    const { error } = await supabase.from("rentals").delete().in("id", Array.from(selectedIds));
+    setDeleting(false);
+    if (!error) {
+      setSelectedIds(new Set());
+      fetchRentals();
+    }
+  }
+
+  function toggleSelect(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedIds((prev) => {
+      const ids = visible.map((r) => r.id);
+      const allSelected = ids.length > 0 && ids.every((id) => prev.has(id));
+      const next = new Set(prev);
+      if (allSelected) ids.forEach((id) => next.delete(id));
+      else ids.forEach((id) => next.add(id));
+      return next;
+    });
+  }
+
   async function handleFileSelect(e) {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -556,6 +648,7 @@ function Dashboard({ profile, onLogout }) {
       collected: false,
       collect_date: null,
       manager: importState.manager,
+      voucher_no: importState.voucherNo || null,
       note: it.note,
     }));
     const { error } = await supabase.from("rentals").insert(rows);
@@ -583,7 +676,24 @@ function Dashboard({ profile, onLogout }) {
         </div>
       </div>
 
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "28px 24px 60px" }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "28px 24px 60px", display: "flex", gap: 24, alignItems: "flex-start" }}>
+        <aside style={{ width: 160, flexShrink: 0, border: `1px solid ${C.line}`, background: C.panel }}>
+          <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.line}`, fontSize: 11.5, color: C.muted, letterSpacing: 0.3 }}>메뉴</div>
+          <div
+            style={{
+              padding: "12px 16px",
+              background: C.bg,
+              borderLeft: `3px solid ${C.ink}`,
+              color: C.ink,
+              fontSize: 13.5,
+              fontFamily: sans,
+            }}
+          >
+            납품내역
+          </div>
+        </aside>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
           <StatCell label="전체" value={counts.all} active={tab === "all" && typeFilter === "all"} onClick={() => { setTab("all"); setTypeFilter("all"); }} />
           <StatCell label="정상" value={counts.normal} color={C.green} active={tab === "normal"} onClick={() => { setTab("normal"); setTypeFilter("rental"); }} />
@@ -593,8 +703,14 @@ function Dashboard({ profile, onLogout }) {
           <StatCell label="구매" value={counts.purchase} color={C.purple} active={typeFilter === "purchase"} onClick={() => { setTab("all"); setTypeFilter("purchase"); }} last />
         </div>
 
-        <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-          <input placeholder="품목, 고객사, 현장, 담당자 검색" value={query} onChange={(e) => setQuery(e.target.value)} style={{ ...inputStyle, maxWidth: 300 }} />
+        <div style={{ display: "flex", gap: 10, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input placeholder="품목, 고객사, 현장, 담당자, 전표번호 검색" value={query} onChange={(e) => setQuery(e.target.value)} style={{ ...inputStyle, maxWidth: 300 }} />
+          <button
+            onClick={() => setShowAdvSearch((s) => !s)}
+            style={{ ...ghostBtnStyle, background: showAdvSearch ? C.bg : "transparent", borderColor: showAdvSearch ? C.ink : C.line }}
+          >
+            Search{advCount > 0 ? ` (${advCount})` : ""}
+          </button>
           <button onClick={() => setShowSummary((s) => !s)} style={ghostBtnStyle}>
             {showSummary ? "고객사 요약 닫기" : "고객사별 요약 보기"}
           </button>
@@ -602,6 +718,15 @@ function Dashboard({ profile, onLogout }) {
             {showStats ? "통계 닫기" : "통계 보기"}
           </button>
           <div style={{ flex: 1 }} />
+          {isAdmin && selectedIds.size > 0 && (
+            <button
+              onClick={handleDeleteSelected}
+              disabled={deleting}
+              style={{ ...ghostBtnStyle, color: "#fff", background: C.brick, borderColor: C.brick }}
+            >
+              {deleting ? "삭제 중…" : `선택삭제 (${selectedIds.size})`}
+            </button>
+          )}
           {isAdmin && (
             <>
               <input type="file" accept=".xlsx,.xls" ref={fileInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
@@ -617,6 +742,39 @@ function Dashboard({ profile, onLogout }) {
               </button>
             </>
           )}
+        </div>
+
+        {showAdvSearch && (
+          <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
+              <Field label="출고일(시작)">
+                <input type="date" style={inputStyle} value={advStart} onChange={(e) => setAdvStart(e.target.value)} />
+              </Field>
+              <Field label="출고일(종료)">
+                <input type="date" style={inputStyle} value={advEnd} onChange={(e) => setAdvEnd(e.target.value)} />
+              </Field>
+              <Field label="전표번호">
+                <input style={inputStyle} value={advVoucher} onChange={(e) => setAdvVoucher(e.target.value)} />
+              </Field>
+              <Field label="거래처">
+                <input style={inputStyle} value={advCustomer} onChange={(e) => setAdvCustomer(e.target.value)} />
+              </Field>
+              <Field label="현장/구역">
+                <input style={inputStyle} value={advSite} onChange={(e) => setAdvSite(e.target.value)} />
+              </Field>
+              <Field label="담당자">
+                <input style={inputStyle} value={advManager} onChange={(e) => setAdvManager(e.target.value)} />
+              </Field>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setShowAdvSearch(false)} style={primaryBtnStyle2}>검색 적용</button>
+              <button onClick={resetAdvSearch} style={ghostBtnStyle}>초기화</button>
+            </div>
+          </div>
+        )}
+
+        <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 16 }}>
+          검색결과 {visible.length}건 · 합계 {fmtWon(visibleTotal)}
         </div>
 
         {matchingCustomers.length > 0 && (
@@ -733,6 +891,15 @@ function Dashboard({ profile, onLogout }) {
 
         <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
           <div style={{ ...rowGrid(isAdmin), padding: "10px 16px", fontSize: 12, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 700 }}>
+            {isAdmin && (
+              <div>
+                <input
+                  type="checkbox"
+                  checked={visible.length > 0 && visible.every((r) => selectedIds.has(r.id))}
+                  onChange={toggleSelectAllVisible}
+                />
+              </div>
+            )}
             {isAdmin && <div>고객사</div>}
             <div>현장/구역</div>
             <div>품목</div>
@@ -759,11 +926,21 @@ function Dashboard({ profile, onLogout }) {
                   minWidth: 700,
                 }}
               >
+                {isAdmin && (
+                  <div>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(r.id)}
+                      onChange={() => toggleSelect(r.id)}
+                    />
+                  </div>
+                )}
                 {isAdmin && <div style={{ color: C.inkSoft }}>{r.customer}</div>}
                 <div style={{ color: C.inkSoft, fontSize: 12.5 }}>{r.site || "-"}</div>
                 <div>
                   <div>{r.item}</div>
                   {r.spec && <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2 }}>{r.spec}</div>}
+                  {r.voucher_no && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>전표 {r.voucher_no}</div>}
                 </div>
                 <div>{r.qty}</div>
                 <div style={{ fontSize: 12.5 }}>{fmtWon(r.amount)}</div>
@@ -788,11 +965,15 @@ function Dashboard({ profile, onLogout }) {
                       ) : (
                         <button onClick={() => markCollected(r.id)} style={miniBtnStylePrimary}>회수처리</button>
                       ))}
+                    <button onClick={() => handleDeleteOne(r)} style={{ ...miniBtnStyle, color: C.brick, borderColor: C.brick }}>
+                      삭제
+                    </button>
                   </div>
                 )}
               </div>
             );
           })}
+        </div>
         </div>
       </div>
     </div>
@@ -809,6 +990,8 @@ function CustomerDetailPanel({ customerName, rentals, customers, isAdmin, onClos
     note: existing?.note || "",
   });
   const [saving, setSaving] = useState(false);
+  const [periodStart, setPeriodStart] = useState("");
+  const [periodEnd, setPeriodEnd] = useState("");
 
   useEffect(() => {
     setForm({
@@ -820,7 +1003,12 @@ function CustomerDetailPanel({ customerName, rentals, customers, isAdmin, onClos
     setEditing(false);
   }, [customerName, existing?.contact_name, existing?.phone, existing?.email, existing?.note]);
 
-  const items = useMemo(() => rentals.filter((r) => r.customer === customerName), [rentals, customerName]);
+  const items = useMemo(() => {
+    let list = rentals.filter((r) => r.customer === customerName);
+    if (periodStart) list = list.filter((r) => r.out_date && r.out_date >= periodStart);
+    if (periodEnd) list = list.filter((r) => r.out_date && r.out_date <= periodEnd);
+    return list;
+  }, [rentals, customerName, periodStart, periodEnd]);
 
   const bySite = useMemo(() => {
     const map = {};
@@ -856,6 +1044,23 @@ function CustomerDetailPanel({ customerName, rentals, customers, isAdmin, onClos
           <div style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>총 {fmtWon(totalAmount)} · 현장 {bySite.length}곳 · 품목 {items.reduce((s, r) => s + (Number(r.qty) || 0), 0)}개</div>
         </div>
         <button onClick={onClose} style={ghostBtnStyle}>닫기</button>
+      </div>
+
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginBottom: 18, flexWrap: "wrap" }}>
+        <div>
+          <label style={{ display: "block", fontSize: 11.5, color: C.inkSoft, marginBottom: 6 }}>기간 시작 (출고일 기준)</label>
+          <input type="date" style={smallInputStyle} value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
+        </div>
+        <div>
+          <label style={{ display: "block", fontSize: 11.5, color: C.inkSoft, marginBottom: 6 }}>기간 종료</label>
+          <input type="date" style={smallInputStyle} value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} />
+        </div>
+        {(periodStart || periodEnd) && (
+          <button onClick={() => { setPeriodStart(""); setPeriodEnd(""); }} style={miniBtnStyle}>전체 기간</button>
+        )}
+        <div style={{ fontSize: 12, color: C.muted }}>
+          {periodStart || periodEnd ? "선택한 기간의 매출입니다." : "전체 기간 매출입니다."}
+        </div>
       </div>
 
       <div style={{ border: `1px solid ${C.lineSoft}`, padding: 16, marginBottom: 18 }}>
@@ -940,7 +1145,7 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing }) {
         총 {state.items.length}개 품목이 인식됐어요. 등록 전에 내용을 확인·수정해주세요.
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14, marginBottom: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 14, marginBottom: 12 }}>
         <Field label="고객사">
           <input style={smallInputStyle} value={state.customer} onChange={(e) => update({ customer: e.target.value })} />
         </Field>
@@ -955,6 +1160,9 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing }) {
         </Field>
         <Field label="담당자">
           <input style={smallInputStyle} value={state.manager || ""} onChange={(e) => update({ manager: e.target.value })} />
+        </Field>
+        <Field label="전표번호">
+          <input style={smallInputStyle} value={state.voucherNo || ""} onChange={(e) => update({ voucherNo: e.target.value })} />
         </Field>
       </div>
 
@@ -1020,6 +1228,7 @@ function RentalForm({ initial, onCancel, onSubmit }) {
       collected: false,
       collect_date: null,
       manager: "",
+      voucher_no: "",
       note: "",
     }
   );
@@ -1057,6 +1266,9 @@ function RentalForm({ initial, onCancel, onSubmit }) {
         </Field>
         <Field label="담당자">
           <input style={inputStyle} value={f.manager} onChange={(e) => update({ manager: e.target.value })} placeholder="예: 김영업" />
+        </Field>
+        <Field label="전표번호">
+          <input style={inputStyle} value={f.voucher_no || ""} onChange={(e) => update({ voucher_no: e.target.value })} placeholder="예: RT-2026-0001" />
         </Field>
         <Field label="품목명">
           <input style={inputStyle} value={f.item} onChange={(e) => update({ item: e.target.value })} placeholder="예: 노트북 (LG 그램)" />
