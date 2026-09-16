@@ -1496,6 +1496,23 @@ function RentalListTab({ rentals, onRefresh }) {
 
   const selected = groups.find((g) => g.key === selectedKey) || null;
 
+  const visibleKeys = filtered.map((g) => g.key);
+  const allChecked = visibleKeys.length > 0 && visibleKeys.every((k) => checkedKeys.has(k));
+  const someChecked = visibleKeys.some((k) => checkedKeys.has(k));
+  const selectAllRef = useRef(null);
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someChecked && !allChecked;
+  }, [someChecked, allChecked]);
+
+  const toggleSelectAll = () => {
+    setCheckedKeys((prev) => {
+      const next = new Set(prev);
+      if (allChecked) visibleKeys.forEach((k) => next.delete(k));
+      else visibleKeys.forEach((k) => next.add(k));
+      return next;
+    });
+  };
+
   if (selected) {
     return (
       <RentalDetailPanel
@@ -1544,23 +1561,6 @@ function RentalListTab({ rentals, onRefresh }) {
   }
 
   const totalAmount = filtered.reduce((s, g) => s + g.amount, 0);
-
-  const visibleKeys = filtered.map((g) => g.key);
-  const allChecked = visibleKeys.length > 0 && visibleKeys.every((k) => checkedKeys.has(k));
-  const someChecked = visibleKeys.some((k) => checkedKeys.has(k));
-  const selectAllRef = useRef(null);
-  useEffect(() => {
-    if (selectAllRef.current) selectAllRef.current.indeterminate = someChecked && !allChecked;
-  }, [someChecked, allChecked]);
-
-  const toggleSelectAll = () => {
-    setCheckedKeys((prev) => {
-      const next = new Set(prev);
-      if (allChecked) visibleKeys.forEach((k) => next.delete(k));
-      else visibleKeys.forEach((k) => next.add(k));
-      return next;
-    });
-  };
 
   return (
     <div>
