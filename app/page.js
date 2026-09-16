@@ -2109,7 +2109,7 @@ function EquityTab({ rentals, shares, onRefresh }) {
         <div style={{ display: "grid", gridTemplateColumns: equityListGrid, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 820 }}>
           <div>전표번호</div>
           <div>거래처</div>
-          <div>금액</div>
+          <div>총금액(VAT포함)</div>
           <div>지분사</div>
           <div>지분사 몫</div>
         </div>
@@ -2117,7 +2117,8 @@ function EquityTab({ rentals, shares, onRefresh }) {
         {filtered.map((g) => {
           const rows = sharesByVoucher.get(g.voucherNo) || [];
           const totalPercent = rows.reduce((s, r) => s + (Number(r.share_percent) || 0), 0);
-          const partnerAmount = Math.round(g.amount * (totalPercent / 100));
+          const amountVat = Math.round(g.amount * 1.1);
+          const partnerAmount = Math.round(amountVat * (totalPercent / 100));
           return (
             <div
               key={g.key}
@@ -2130,7 +2131,7 @@ function EquityTab({ rentals, shares, onRefresh }) {
                 {g.voucherNo || "(번호없음)"}
               </button>
               <div>{g.head.customer || "-"}</div>
-              <div style={{ fontSize: 12.5 }}>{fmtWon(g.amount)}</div>
+              <div style={{ fontSize: 12.5 }}>{fmtWon(amountVat)}</div>
               <div style={{ fontSize: 12.5 }}>
                 {rows.length === 0 ? <span style={{ color: C.muted }}>{g.head.customer || "거래처"} 100%</span> : rows.map((r) => `${r.partner_name} ${r.share_percent}%`).join(", ")}
               </div>
@@ -2149,6 +2150,7 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
   const [rows, setRows] = useState(() => shares.map((s) => ({ id: s.id, partnerName: s.partner_name, sharePercent: s.share_percent, note: s.note || "" })));
   const [saving, setSaving] = useState(false);
   const totalAmount = group.amount;
+  const totalAmountVat = Math.round(totalAmount * 1.1);
 
   if (!group.voucherNo) {
     return (
@@ -2169,7 +2171,7 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
     next[idx] = { ...next[idx], ...patch };
     setRows(next);
   };
-  const addRow = () => setRows([...rows, { id: null, partnerName: "", sharePercent: "", note: "" }]);
+  const addRow = () => setRows([...rows, { id: null, partnerName: rows.length === 0 ? "주관사" : "", sharePercent: "", note: "" }]);
   const removeRow = (idx) => setRows(rows.filter((_, i) => i !== idx));
 
   const totalPercent = rows.reduce((s, r) => s + (Number(r.sharePercent) || 0), 0);
@@ -2242,8 +2244,8 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
             <div>{group.head.out_date || "-"}</div>
           </div>
           <div>
-            <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 4 }}>전표 총액</div>
-            <div style={{ fontFamily: serif }}>{fmtWon(totalAmount)}</div>
+            <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 4 }}>총금액(VAT포함)</div>
+            <div style={{ fontFamily: serif }}>{fmtWon(totalAmountVat)}</div>
           </div>
         </div>
       </div>
@@ -2268,7 +2270,7 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
               <div></div>
             </div>
             {rows.map((r, idx) => {
-              const amount = Math.round(totalAmount * ((Number(r.sharePercent) || 0) / 100));
+              const amount = Math.round(totalAmountVat * ((Number(r.sharePercent) || 0) / 100));
               return (
                 <div
                   key={r.id ?? `new-${idx}`}
@@ -2294,7 +2296,7 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
         )}
 
         <div style={{ fontSize: 13, color: C.inkSoft }}>
-          지분사 합계 {totalPercent}% ({fmtWon(Math.round(totalAmount * (totalPercent / 100)))}) · {group.head.customer || "거래처"} 몫 {remainingPercent}% ({fmtWon(Math.round(totalAmount * (remainingPercent / 100)))})
+          지분사 합계 {totalPercent}% ({fmtWon(Math.round(totalAmountVat * (totalPercent / 100)))}) · {group.head.customer || "거래처"} 몫 {remainingPercent}% ({fmtWon(Math.round(totalAmountVat * (remainingPercent / 100)))})
         </div>
         {totalPercent > 100 && <div style={{ fontSize: 12.5, color: C.brick, marginTop: 6 }}>지분율 합계가 100%를 넘었어요. 확인해주세요.</div>}
       </div>
