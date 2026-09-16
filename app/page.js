@@ -41,6 +41,14 @@ function addDays(dateStr, days) {
   d.setDate(d.getDate() + Number(days));
   return d.toISOString().slice(0, 10);
 }
+// 렌탈개시일 + 렌탈기간(개월) - 1일 = 렌탈만료일
+function addMonthsMinusDay(dateStr, months) {
+  if (!dateStr || !months) return "";
+  const d = new Date(dateStr);
+  d.setMonth(d.getMonth() + Number(months));
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
 function daysBetween(a, b) {
   return Math.round((new Date(b) - new Date(a)) / 86400000);
 }
@@ -202,50 +210,94 @@ async function parseQuoteExcel(file) {
   let outDate = issueDate;
   let dueDate = null;
   let periodDays = null;
+  let periodMonths = null;
+  let refContact = ""; // 거래처 담당자(참조)
+  let email = "";
+  let phone = "";
+  let recipient = ""; // 수령자/연락처
+  let deliveryDate = ""; // 배송일자 (발행일과 다를 수 있음)
+
+  let siteName = ""; // "수신" 칸의 "거래처 - 현장명" 표기에서 나오는 현장명(있을 때만)
 
   const headerScanRows = rows.slice(0, 15);
   for (const row of headerScanRows) {
-    const line = (row || []).map(cellText).join(" ");
-    if (!line.trim()) continue;
+    // 셀을 한 줄로 합치면 옆 칸(같은 행의 다른 라벨) 텍스트가 붙어버릴 수 있어
+    // 라벨:값 형태의 정보는 셀 단위로 각각 따로 검사한다.
+    const cells = (row || []).map(cellText).filter((t) => t.trim());
+    for (const cell of cells) {
+      let m = cell.match(/수\s*신\s*[:：]\s*([^\n]+)/);
+      if (m) {
+        const raw = m[1].trim();
+        if (raw.includes(" - ")) {
+          const [c, s] = raw.split(" - ");
+          customer = c.trim();
+          siteName = s.trim();
+        } else {
+          customer = raw;
+        }
+      }
 
-    let m = line.match(/수\s*신\s*[:：]\s*([^\n]+)/);
-    if (m) {
-      const raw = m[1].trim();
-      if (raw.includes(" - ")) {
-        const [c, s] = raw.split(" - ");
-        customer = c.trim();
-        site = s.trim();
-      } else {
-        customer = raw;
+      m = cell.match(/배송지\s*[:：]\s*([^\n]+)/);
+      if (m) site = m[1].trim();
+
+      // 참조 = 거래처 담당자
+      m = cell.match(/참\s*조\s*[:：]\s*([^\/\n]+)/);
+      if (m) refContact = m[1].trim();
+
+      // 전화
+      m = cell.match(/전\s*화\s*[:：]\s*([\d\-]+)/);
+      if (m) phone = m[1].trim();
+
+      // 이 견적서 양식은 "팩스" 라벨 칸에 실제로는 이메일을 적는 경우가 있어 이메일 형태면 그대로 사용
+      m = cell.match(/팩\s*스\s*[:：]\s*([^\s]+@[^\s]+)/);
+      if (m) email = m[1].trim();
+      if (!email) {
+        m = cell.match(/([\w.+-]+@[\w-]+\.[\w.-]+)/);
+        if (m) email = m[1].trim();
+      }
+
+      // 수령자/연락처
+      m = cell.match(/수령자\s*\/?\s*연락처\s*[:：]\s*([^\n]+)/);
+      if (m) recipient = m[1].trim();
+
+      // 배송일자 (YYYY-MM-DD, YYYY.MM.DD, YYYY년 MM월 DD일 등)
+      m = cell.match(/배송일자\s*[:：]\s*(\d{4})[.\-\/년]\s*(\d{1,2})[.\-\/월]\s*(\d{1,2})/);
+      if (m) deliveryDate = `${m[1]}-${String(m[2]).padStart(2, "0")}-${String(m[3]).padStart(2, "0")}`;
+
+      m = cell.match(/발행일\s*[:：]\s*(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일/);
+      if (m) {
+        issueDate = `${m[1]}-${String(m[2]).padStart(2, "0")}-${String(m[3]).padStart(2, "0")}`;
+        outDate = issueDate;
+      }
+
+      // "담당자"는 우리 쪽 영업담당자를 가리킴 (거래처 담당자는 "참조"로 따로 옴)
+      m = cell.match(/담당자\s*[:：]\s*([^\/\n]+)/);
+      if (m) manager = m[1].trim();
+
+      m = cell.match(/렌탈\s*(\d+)\s*개월/);
+      if (m) {
+        transactionType = "rental";
+        periodMonths = Number(m[1]);
+        periodDays = Number(m[1]) * 30;
+      }
+      // "(YYYY-MM~YYYY-MM)" 요약 표기는 월 단위라 정확도가 떨어지므로,
+      // "렌탈 N개월" 값을 못 찾았을 때만 보조적으로 사용한다.
+      m = cell.match(/\((\d{4})-(\d{2})~(\d{4})-(\d{2})\)/);
+      if (m && !periodMonths) {
+        transactionType = "rental";
+        outDate = `${m[1]}-${m[2]}-01`;
+        const endYear = Number(m[3]);
+        const endMonth = Number(m[4]);
+        const lastDay = new Date(endYear, endMonth, 0).getDate();
+        dueDate = `${m[3]}-${m[4]}-${String(lastDay).padStart(2, "0")}`;
       }
     }
-    m = line.match(/배송지\s*[:：]\s*([^\n]+)/);
-    if (m && !site) site = m[1].trim();
-
-    m = line.match(/발행일\s*[:：]\s*(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일/);
-    if (m) {
-      issueDate = `${m[1]}-${String(m[2]).padStart(2, "0")}-${String(m[3]).padStart(2, "0")}`;
-      outDate = issueDate;
-    }
-
-    m = line.match(/담당자\s*[:：]\s*([^\/\n]+)/);
-    if (m) manager = m[1].trim();
-
-    m = line.match(/렌탈\s*(\d+)\s*개월/);
-    if (m) {
-      transactionType = "rental";
-      periodDays = Number(m[1]) * 30;
-    }
-    m = line.match(/\((\d{4})-(\d{2})~(\d{4})-(\d{2})\)/);
-    if (m) {
-      transactionType = "rental";
-      outDate = `${m[1]}-${m[2]}-01`;
-      const endYear = Number(m[3]);
-      const endMonth = Number(m[4]);
-      const lastDay = new Date(endYear, endMonth, 0).getDate();
-      dueDate = `${m[3]}-${m[4]}-${String(lastDay).padStart(2, "0")}`;
-    }
   }
+
+  // 배송일자가 별도로 명시돼 있으면 그 값을 출고일(=렌탈개시일)로 사용, 없으면 발행일을 그대로 씀
+  if (deliveryDate) outDate = deliveryDate;
+  else deliveryDate = outDate;
+  if (periodMonths) dueDate = addMonthsMinusDay(outDate, periodMonths);
 
   // 품목 표 시작 행 + 실제 열 위치 찾기 (양식마다 B열부터 시작하거나 C열부터 시작할 수 있음)
   const detected = detectColumns(rows);
@@ -307,6 +359,19 @@ async function parseQuoteExcel(file) {
     outDate,
     dueDate,
     periodDays,
+    periodMonths,
+    refContact,
+    email,
+    phone,
+    recipient,
+    siteName, // "수신" 칸에 "거래처 - 현장명" 식으로 적혀 있으면 자동 인식, 없으면 공란
+    // ECOUNT 스타일 입력 화면용, 데이터에서 유추할 수 없어 고정값/공란으로 두는 필드
+    warehouse: transactionType === "rental" ? "00008" : "",
+    dealType: "소매매출",
+    currency: "내자",
+    project: "",
+    headerNote: "", // 특이사항 (전표 전체에 대한 비고, 품목별 비고와는 별개)
+    taxInvoice: "",
     items,
   };
 }
@@ -395,8 +460,8 @@ function rowGrid(isAdmin) {
   return {
     display: "grid",
     gridTemplateColumns: isAdmin
-      ? "24px 110px 140px 1fr 55px 100px 110px 210px"
-      : "140px 1fr 55px 100px 110px",
+      ? "24px 100px 120px 1fr 55px 100px 110px 190px"
+      : "120px 1fr 55px 100px 110px",
     gap: 10,
   };
 }
@@ -430,14 +495,12 @@ function Dashboard({ profile, onLogout }) {
   const [typeFilter, setTypeFilter] = useState("all"); // all | rental | purchase
   const [tab, setTab] = useState("all"); // all | normal | soon | overdue | collected
   const [query, setQuery] = useState("");
-  const [showForm, setShowForm] = useState(false);
+  const [activeTab, setActiveTab] = useState(isAdmin ? "quote" : "list"); // quote | list | new | customer | statement
   const [editing, setEditing] = useState(null);
-  const [showSummary, setShowSummary] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
   const [importState, setImportState] = useState(null); // parsed preview
   const [importing, setImporting] = useState(false);
-  const fileInputRef = useRef(null);
 
   // 상세검색(Search) 패널 + 선택삭제
   const [showAdvSearch, setShowAdvSearch] = useState(false);
@@ -449,6 +512,9 @@ function Dashboard({ profile, onLogout }) {
   const [advEnd, setAdvEnd] = useState("");
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [deleting, setDeleting] = useState(false);
+
+  // 거래처별 매출 탭 검색
+  const [customerSearchQuery, setCustomerSearchQuery] = useState("");
 
   useEffect(() => {
     fetchRentals();
@@ -541,12 +607,6 @@ function Dashboard({ profile, onLogout }) {
   const monthlyRevenue = useMemo(() => computeMonthlyRevenue(rentals), [rentals]);
   const returnBuckets = useMemo(() => computeReturnBuckets(rentals), [rentals]);
 
-  const matchingCustomers = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    return summary.filter((s) => s.customer.toLowerCase().includes(q)).slice(0, 5);
-  }, [summary, query]);
-
   async function upsertItem(item) {
     if (item.id) {
       const { id, ...rest } = item;
@@ -554,7 +614,7 @@ function Dashboard({ profile, onLogout }) {
     } else {
       await supabase.from("rentals").insert(item);
     }
-    setShowForm(false);
+    setActiveTab("list");
     setEditing(null);
     fetchRentals();
   }
@@ -617,9 +677,7 @@ function Dashboard({ profile, onLogout }) {
     });
   }
 
-  async function handleFileSelect(e) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
+  async function processQuoteFile(file) {
     if (!file) return;
     try {
       const parsed = await parseQuoteExcel(file);
@@ -630,9 +688,25 @@ function Dashboard({ profile, onLogout }) {
     }
   }
 
+  async function handleFileSelect(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    await processQuoteFile(file);
+  }
+
   async function confirmImport() {
     if (!importState) return;
     setImporting(true);
+
+    // 거래처 담당자/연락처/메일이 파악됐으면 customers 테이블에도 반영 (기존 정보는 덮어쓰지 않고 채워진 값만 upsert)
+    if (importState.customer && (importState.refContact || importState.phone || importState.email)) {
+      const patch = { name: importState.customer };
+      if (importState.refContact) patch.contact_name = importState.refContact;
+      if (importState.phone) patch.phone = importState.phone;
+      if (importState.email) patch.email = importState.email;
+      await supabase.from("customers").upsert(patch, { onConflict: "name" });
+    }
+
     const rows = importState.items.map((it) => ({
       transaction_type: importState.transactionType,
       customer: importState.customer,
@@ -658,13 +732,29 @@ function Dashboard({ profile, onLogout }) {
       return;
     }
     setImportState(null);
+    fetchCustomers();
     fetchRentals();
+    setActiveTab("list");
   }
+
+  const menuItems = [
+    ...(isAdmin ? [{ key: "quote", label: "견적서 업로드" }] : []),
+    { key: "list", label: "납품내역" },
+    ...(isAdmin ? [{ key: "new", label: editing ? "정보 수정" : "신규 등록" }] : []),
+    { key: "customer", label: "거래처별 매출" },
+    { key: "statement", label: "거래명세서" },
+  ];
+
+  const filteredSummary = useMemo(() => {
+    const q = customerSearchQuery.trim().toLowerCase();
+    if (!q) return summary;
+    return summary.filter((s) => s.customer.toLowerCase().includes(q));
+  }, [summary, customerSearchQuery]);
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: sans, color: C.ink }}>
       <div style={{ borderBottom: `1px solid ${C.line}`, background: C.panel }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ maxWidth: 1280, margin: "0 auto", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ fontFamily: serif, fontSize: 20 }}>리마켓 렌탈장부</div>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <div style={{ fontSize: 13, color: C.inkSoft, textAlign: "right" }}>
@@ -676,24 +766,49 @@ function Dashboard({ profile, onLogout }) {
         </div>
       </div>
 
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "28px 24px 60px", display: "flex", gap: 24, alignItems: "flex-start" }}>
+      <div style={{ maxWidth: 1280, margin: "0 auto", padding: "28px 24px 60px", display: "flex", gap: 24, alignItems: "flex-start" }}>
         <aside style={{ width: 160, flexShrink: 0, border: `1px solid ${C.line}`, background: C.panel }}>
           <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.line}`, fontSize: 11.5, color: C.muted, letterSpacing: 0.3 }}>메뉴</div>
-          <div
-            style={{
-              padding: "12px 16px",
-              background: C.bg,
-              borderLeft: `3px solid ${C.ink}`,
-              color: C.ink,
-              fontSize: 13.5,
-              fontFamily: sans,
-            }}
-          >
-            납품내역
-          </div>
+          {menuItems.map((m) => (
+            <button
+              key={m.key}
+              onClick={() => {
+                if (m.key === "new") setEditing(null);
+                setActiveTab(m.key);
+              }}
+              style={{
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                padding: "12px 16px",
+                background: activeTab === m.key ? C.bg : "transparent",
+                border: "none",
+                borderLeft: activeTab === m.key ? `3px solid ${C.ink}` : "3px solid transparent",
+                color: activeTab === m.key ? C.ink : C.inkSoft,
+                fontSize: 13.5,
+                cursor: "pointer",
+                fontFamily: sans,
+              }}
+            >
+              {m.label}
+            </button>
+          ))}
         </aside>
 
         <div style={{ flex: 1, minWidth: 0 }}>
+        {activeTab === "quote" && isAdmin && (
+          <QuoteUploadPanel
+            importState={importState}
+            onFile={processQuoteFile}
+            onCancel={() => setImportState(null)}
+            onConfirm={confirmImport}
+            importing={importing}
+            setImportState={setImportState}
+          />
+        )}
+
+        {activeTab === "list" && (
+          <>
         <div style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
           <StatCell label="전체" value={counts.all} active={tab === "all" && typeFilter === "all"} onClick={() => { setTab("all"); setTypeFilter("all"); }} />
           <StatCell label="정상" value={counts.normal} color={C.green} active={tab === "normal"} onClick={() => { setTab("normal"); setTypeFilter("rental"); }} />
@@ -711,9 +826,6 @@ function Dashboard({ profile, onLogout }) {
           >
             Search{advCount > 0 ? ` (${advCount})` : ""}
           </button>
-          <button onClick={() => setShowSummary((s) => !s)} style={ghostBtnStyle}>
-            {showSummary ? "고객사 요약 닫기" : "고객사별 요약 보기"}
-          </button>
           <button onClick={() => setShowStats((s) => !s)} style={ghostBtnStyle}>
             {showStats ? "통계 닫기" : "통계 보기"}
           </button>
@@ -729,12 +841,11 @@ function Dashboard({ profile, onLogout }) {
           )}
           {isAdmin && (
             <>
-              <input type="file" accept=".xlsx,.xls" ref={fileInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
-              <button onClick={() => fileInputRef.current?.click()} style={ghostBtnStyle}>엑셀 견적서 업로드</button>
+              <button onClick={() => setActiveTab("quote")} style={ghostBtnStyle}>견적서 업로드</button>
               <button
                 onClick={() => {
                   setEditing(null);
-                  setShowForm(true);
+                  setActiveTab("new");
                 }}
                 style={primaryBtnStyle2}
               >
@@ -777,51 +888,6 @@ function Dashboard({ profile, onLogout }) {
           검색결과 {visible.length}건 · 합계 {fmtWon(visibleTotal)}
         </div>
 
-        {matchingCustomers.length > 0 && (
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 12, color: C.muted }}>고객사 상세 바로가기:</span>
-            {matchingCustomers.map((s) => (
-              <button
-                key={s.customer}
-                onClick={() => setCustomerDetailName(s.customer)}
-                style={{
-                  padding: "5px 12px",
-                  background: C.purpleBg,
-                  color: "#3A3066",
-                  border: "none",
-                  fontSize: 12.5,
-                  cursor: "pointer",
-                  fontFamily: sans,
-                }}
-              >
-                {s.customer} 상세보기
-              </button>
-            ))}
-          </div>
-        )}
-
-        {showSummary && (
-          <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
-            <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 14 }}>고객사별 요약</div>
-            {summary.length === 0 && <div style={{ color: C.muted, fontSize: 13.5 }}>데이터가 없습니다.</div>}
-            {summary.map((s) => (
-              <div key={s.customer} style={{ display: "flex", alignItems: "center", gap: 16, padding: "10px 0", borderBottom: `1px solid ${C.lineSoft}` }}>
-                <button
-                  onClick={() => setCustomerDetailName(s.customer)}
-                  style={{ width: 160, fontSize: 14, textAlign: "left", background: "none", border: "none", padding: 0, color: C.ink, textDecoration: "underline", textUnderlineOffset: 3, cursor: "pointer", fontFamily: sans }}
-                >
-                  {s.customer}
-                </button>
-                <div style={{ width: 140, fontSize: 13, color: C.inkSoft }}>총 금액 {fmtWon(s.totalAmount)}</div>
-                <div style={{ width: 100, fontSize: 13, color: C.inkSoft }}>품목 {s.itemCount}개</div>
-                <div style={{ flex: 1, fontSize: 12.5, color: s.upcoming.length ? C.amber : C.muted }}>
-                  {s.upcoming.length ? `반납임박/연체 ${s.upcoming.length}건: ${s.upcoming.map((u) => u.site || u.item).slice(0, 3).join(", ")}` : "반납임박 없음"}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
         {showStats && (
           <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
             <div>
@@ -855,38 +921,6 @@ function Dashboard({ profile, onLogout }) {
               </ResponsiveContainer>
             </div>
           </div>
-        )}
-
-        {customerDetailName && (
-          <CustomerDetailPanel
-            customerName={customerDetailName}
-            rentals={rentals}
-            customers={customers}
-            isAdmin={isAdmin}
-            onClose={() => setCustomerDetailName(null)}
-            onSaved={fetchCustomers}
-          />
-        )}
-
-        {importState && (
-          <ImportPreview
-            state={importState}
-            setState={setImportState}
-            onCancel={() => setImportState(null)}
-            onConfirm={confirmImport}
-            importing={importing}
-          />
-        )}
-
-        {showForm && (
-          <RentalForm
-            initial={editing}
-            onCancel={() => {
-              setShowForm(false);
-              setEditing(null);
-            }}
-            onSubmit={upsertItem}
-          />
         )}
 
         <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
@@ -953,7 +987,7 @@ function Dashboard({ profile, onLogout }) {
                     <button
                       onClick={() => {
                         setEditing(r);
-                        setShowForm(true);
+                        setActiveTab("new");
                       }}
                       style={miniBtnStyle}
                     >
@@ -974,8 +1008,207 @@ function Dashboard({ profile, onLogout }) {
             );
           })}
         </div>
+          </>
+        )}
+
+        {activeTab === "new" && isAdmin && (
+          <RentalForm
+            initial={editing}
+            onCancel={() => {
+              setEditing(null);
+              setActiveTab("list");
+            }}
+            onSubmit={upsertItem}
+          />
+        )}
+
+        {activeTab === "customer" && (
+          <div>
+            <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>거래처별 매출</div>
+            <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 14 }}>거래처를 선택하면 현장별 현황과 기간별 매출을 볼 수 있어요.</div>
+            <input
+              placeholder="거래처명 검색"
+              value={customerSearchQuery}
+              onChange={(e) => setCustomerSearchQuery(e.target.value)}
+              style={{ ...inputStyle, maxWidth: 300, marginBottom: 16 }}
+            />
+            <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
+              {filteredSummary.length === 0 && <div style={{ color: C.muted, fontSize: 13.5 }}>데이터가 없습니다.</div>}
+              {filteredSummary.map((s) => (
+                <div key={s.customer} style={{ display: "flex", alignItems: "center", gap: 16, padding: "10px 0", borderBottom: `1px solid ${C.lineSoft}` }}>
+                  <button
+                    onClick={() => setCustomerDetailName(s.customer)}
+                    style={{ width: 160, fontSize: 14, textAlign: "left", background: "none", border: "none", padding: 0, color: C.ink, textDecoration: "underline", textUnderlineOffset: 3, cursor: "pointer", fontFamily: sans }}
+                  >
+                    {s.customer}
+                  </button>
+                  <div style={{ width: 140, fontSize: 13, color: C.inkSoft }}>총 금액 {fmtWon(s.totalAmount)}</div>
+                  <div style={{ width: 100, fontSize: 13, color: C.inkSoft }}>품목 {s.itemCount}개</div>
+                  <div style={{ flex: 1, fontSize: 12.5, color: s.upcoming.length ? C.amber : C.muted }}>
+                    {s.upcoming.length ? `반납임박/연체 ${s.upcoming.length}건: ${s.upcoming.map((u) => u.site || u.item).slice(0, 3).join(", ")}` : "반납임박 없음"}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {customerDetailName && (
+              <CustomerDetailPanel
+                customerName={customerDetailName}
+                rentals={rentals}
+                customers={customers}
+                isAdmin={isAdmin}
+                onClose={() => setCustomerDetailName(null)}
+                onSaved={fetchCustomers}
+              />
+            )}
+          </div>
+        )}
+
+        {activeTab === "statement" && <StatementTab rentals={rentals} />}
         </div>
       </div>
+    </div>
+  );
+}
+
+function StatementTab({ rentals }) {
+  const [voucherQuery, setVoucherQuery] = useState("");
+  const [selectedVoucher, setSelectedVoucher] = useState(null);
+
+  const voucherList = useMemo(() => {
+    const set = new Set();
+    rentals.forEach((r) => {
+      if (r.voucher_no) set.add(r.voucher_no);
+    });
+    return Array.from(set).sort().reverse();
+  }, [rentals]);
+
+  const filteredVouchers = useMemo(() => {
+    const q = voucherQuery.trim().toLowerCase();
+    if (!q) return voucherList;
+    return voucherList.filter((v) => v.toLowerCase().includes(q));
+  }, [voucherList, voucherQuery]);
+
+  const items = useMemo(() => {
+    if (!selectedVoucher) return [];
+    return rentals.filter((r) => r.voucher_no === selectedVoucher);
+  }, [rentals, selectedVoucher]);
+
+  const totalAmount = items.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const head = items[0];
+
+  return (
+    <div>
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #statement-print-area, #statement-print-area * { visibility: visible; }
+          #statement-print-area { position: absolute; top: 0; left: 0; width: 100%; padding: 24px; }
+          .statement-no-print { display: none !important; }
+        }
+      `}</style>
+
+      <div className="statement-no-print">
+        <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>거래명세서</div>
+        <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+          전표번호를 선택하면 인쇄용 거래명세서를 미리보고 출력할 수 있어요. (신규 등록·엑셀 업로드 시 입력한 전표번호 기준)
+        </div>
+        <input
+          placeholder="전표번호 검색"
+          value={voucherQuery}
+          onChange={(e) => setVoucherQuery(e.target.value)}
+          style={{ ...inputStyle, maxWidth: 260, marginBottom: 14 }}
+        />
+        {voucherList.length === 0 ? (
+          <div style={{ color: C.muted, fontSize: 13, marginBottom: 20 }}>
+            아직 전표번호가 입력된 건이 없습니다. 납품내역의 신규 등록/엑셀 업로드에서 전표번호를 입력해주세요.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
+            {filteredVouchers.map((v) => (
+              <button
+                key={v}
+                onClick={() => setSelectedVoucher(v)}
+                style={{
+                  ...ghostBtnStyle,
+                  background: selectedVoucher === v ? C.bg : "transparent",
+                  borderColor: selectedVoucher === v ? C.ink : C.line,
+                  color: selectedVoucher === v ? C.ink : C.inkSoft,
+                }}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {selectedVoucher && items.length > 0 && (
+        <>
+          <div className="statement-no-print" style={{ marginBottom: 16 }}>
+            <button onClick={() => window.print()} style={primaryBtnStyle2}>인쇄 / PDF로 저장</button>
+          </div>
+
+          <div id="statement-print-area" style={{ border: `1px solid ${C.line}`, background: "#fff", padding: 32 }}>
+            <div style={{ textAlign: "center", marginBottom: 24 }}>
+              <div style={{ fontFamily: serif, fontSize: 22 }}>거 래 명 세 서</div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 20 }}>
+              <div>
+                <div>거래처: {head.customer}</div>
+                <div>현장/구역: {head.site || "-"}</div>
+                <div>담당자: {head.manager || "-"}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div>전표번호: {selectedVoucher}</div>
+                <div>거래일자: {head.out_date}</div>
+                <div>공급자: 리마켓</div>
+              </div>
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr>
+                  {["품목", "규격", "수량", "단가", "금액", "비고"].map((h) => (
+                    <th
+                      key={h}
+                      style={{
+                        border: `1px solid ${C.line}`,
+                        padding: "8px 10px",
+                        background: C.bg,
+                        textAlign: h === "품목" || h === "규격" || h === "비고" ? "left" : "right",
+                      }}
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((r) => (
+                  <tr key={r.id}>
+                    <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.item}</td>
+                    <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.spec || "-"}</td>
+                    <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{r.qty}</td>
+                    <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>
+                      {r.unit_price != null ? Number(r.unit_price).toLocaleString("ko-KR") : "-"}
+                    </td>
+                    <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{fmtWon(r.amount)}</td>
+                    <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.note || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={4} style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
+                    합계
+                  </td>
+                  <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>{fmtWon(totalAmount)}</td>
+                  <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1129,8 +1362,186 @@ function CustomerDetailPanel({ customerName, rentals, customers, isAdmin, onClos
   );
 }
 
+function QuoteDropZone({ onFile, hasData }) {
+  const inputRef = useRef(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  function handleDrop(e) {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) onFile(file);
+  }
+
+  return (
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={handleDrop}
+      onClick={() => inputRef.current?.click()}
+      style={{
+        border: `2px dashed ${dragOver ? C.ink : C.line}`,
+        background: dragOver ? C.bg : C.panel,
+        padding: hasData ? 16 : 40,
+        textAlign: "center",
+        cursor: "pointer",
+        marginBottom: 16,
+      }}
+    >
+      <input
+        type="file"
+        accept=".xlsx,.xls"
+        ref={inputRef}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) onFile(file);
+        }}
+        style={{ display: "none" }}
+      />
+      {hasData ? (
+        <div style={{ fontSize: 12.5, color: C.inkSoft }}>다른 견적서로 다시 채우려면 여기로 새 파일을 드래그하거나 클릭하세요</div>
+      ) : (
+        <>
+          <div style={{ fontSize: 15, color: C.ink, marginBottom: 6 }}>여기로 렌탈·구매 견적서 엑셀 파일을 끌어다 놓으세요</div>
+          <div style={{ fontSize: 12.5, color: C.muted }}>또는 클릭해서 파일 선택 (.xlsx, .xls)</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function QuoteHeaderForm({ state, update }) {
+  const isRental = state.transactionType === "rental";
+  return (
+    <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 16 }}>견적서입력(수정)</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <Field label="구분">
+          <select style={inputStyle} value={state.transactionType} onChange={(e) => update({ transactionType: e.target.value })}>
+            <option value="rental">렌탈</option>
+            <option value="purchase">구매</option>
+          </select>
+        </Field>
+        <Field label="전표번호">
+          <input style={inputStyle} value={state.voucherNo || ""} onChange={(e) => update({ voucherNo: e.target.value })} placeholder="예: RT-2026-0001" />
+        </Field>
+        <Field label="담당자">
+          <input style={inputStyle} value={state.manager || ""} onChange={(e) => update({ manager: e.target.value })} placeholder="예: 김영업" />
+        </Field>
+        <Field label="거래처">
+          <input style={inputStyle} value={state.customer || ""} onChange={(e) => update({ customer: e.target.value })} placeholder="예: 한우리건설" />
+        </Field>
+        <Field label="거래처 담당자">
+          <input style={inputStyle} value={state.refContact || ""} onChange={(e) => update({ refContact: e.target.value })} placeholder="예: 양지훈 대리" />
+        </Field>
+        <Field label="메일">
+          <input style={inputStyle} value={state.email || ""} onChange={(e) => update({ email: e.target.value })} placeholder="예: name@company.com" />
+        </Field>
+        <Field label="출하창고">
+          <input style={inputStyle} value={state.warehouse || ""} onChange={(e) => update({ warehouse: e.target.value })} />
+        </Field>
+        <Field label="거래유형">
+          <input style={inputStyle} value={state.dealType || ""} onChange={(e) => update({ dealType: e.target.value })} />
+        </Field>
+        <Field label={isRental ? "배송일자 (= 렌탈개시일)" : "배송일자"}>
+          <input
+            type="date"
+            style={inputStyle}
+            value={state.outDate || ""}
+            onChange={(e) => {
+              const outDate = e.target.value;
+              update({ outDate, dueDate: state.periodMonths ? addMonthsMinusDay(outDate, state.periodMonths) : state.dueDate });
+            }}
+          />
+        </Field>
+        {isRental ? (
+          <Field label="렌탈기간 (개월)">
+            <input
+              type="number"
+              min={1}
+              style={inputStyle}
+              value={state.periodMonths ?? ""}
+              onChange={(e) => {
+                const months = Number(e.target.value);
+                update({ periodMonths: months, periodDays: months * 30, dueDate: addMonthsMinusDay(state.outDate, months) });
+              }}
+            />
+          </Field>
+        ) : (
+          <Field label="통화">
+            <select style={inputStyle} value={state.currency || "내자"} onChange={(e) => update({ currency: e.target.value })}>
+              <option value="내자">내자</option>
+              <option value="외자">외자</option>
+            </select>
+          </Field>
+        )}
+        {isRental && (
+          <>
+            <Field label="렌탈만료일 (자동계산, 직접 수정 가능)">
+              <input type="date" style={inputStyle} value={state.dueDate || ""} onChange={(e) => update({ dueDate: e.target.value })} />
+            </Field>
+            <Field label="통화">
+              <select style={inputStyle} value={state.currency || "내자"} onChange={(e) => update({ currency: e.target.value })}>
+                <option value="내자">내자</option>
+                <option value="외자">외자</option>
+              </select>
+            </Field>
+          </>
+        )}
+        <Field label="현장명 (선택 입력, 공란 가능)">
+          <input style={inputStyle} value={state.siteName || ""} onChange={(e) => update({ siteName: e.target.value })} />
+        </Field>
+        <Field label="배송지 주소">
+          <input style={inputStyle} value={state.site || ""} onChange={(e) => update({ site: e.target.value })} placeholder="예: 경북 청도군 ..." />
+        </Field>
+        <Field label="프로젝트 (선택)">
+          <input style={inputStyle} value={state.project || ""} onChange={(e) => update({ project: e.target.value })} />
+        </Field>
+        <Field label="세금계산서발행여부 (선택)">
+          <input style={inputStyle} value={state.taxInvoice || ""} onChange={(e) => update({ taxInvoice: e.target.value })} />
+        </Field>
+        <div style={{ gridColumn: "span 2" }}>
+          <Field label="수령자/연락처">
+            <input style={inputStyle} value={state.recipient || ""} onChange={(e) => update({ recipient: e.target.value })} placeholder="예: 홍길동 과장 / 010-0000-0000" />
+          </Field>
+        </div>
+        <div style={{ gridColumn: "span 2" }}>
+          <Field label="특이사항 (선택 입력)">
+            <input style={inputStyle} value={state.headerNote || ""} onChange={(e) => update({ headerNote: e.target.value })} />
+          </Field>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QuoteUploadPanel({ importState, setImportState, onFile, onCancel, onConfirm, importing }) {
+  const update = (patch) => setImportState({ ...importState, ...patch });
+
+  return (
+    <div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>견적서 업로드</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+        엑셀 견적서를 올리면 아래 전표 정보와 품목이 자동으로 채워져요. 내용을 확인·수정한 뒤 등록해주세요.
+      </div>
+
+      <QuoteDropZone onFile={onFile} hasData={!!importState} />
+
+      {importState && (
+        <>
+          <QuoteHeaderForm state={importState} update={update} />
+          <ImportPreview state={importState} setState={setImportState} onCancel={onCancel} onConfirm={onConfirm} importing={importing} />
+        </>
+      )}
+    </div>
+  );
+}
+
 function ImportPreview({ state, setState, onCancel, onConfirm, importing }) {
-  const update = (patch) => setState({ ...state, ...patch });
   const updateItem = (idx, patch) => {
     const items = [...state.items];
     items[idx] = { ...items[idx], ...patch };
@@ -1139,43 +1550,11 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing }) {
   const totalAmount = state.items.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
 
   return (
-    <div style={{ border: `1px solid ${C.purple}`, background: C.panel, padding: 20, marginBottom: 16 }}>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>엑셀 업로드 미리보기</div>
+    <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>품목 내역</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         총 {state.items.length}개 품목이 인식됐어요. 등록 전에 내용을 확인·수정해주세요.
       </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 14, marginBottom: 12 }}>
-        <Field label="고객사">
-          <input style={smallInputStyle} value={state.customer} onChange={(e) => update({ customer: e.target.value })} />
-        </Field>
-        <Field label="현장">
-          <input style={smallInputStyle} value={state.site} onChange={(e) => update({ site: e.target.value })} />
-        </Field>
-        <Field label="거래유형">
-          <select style={smallInputStyle} value={state.transactionType} onChange={(e) => update({ transactionType: e.target.value })}>
-            <option value="rental">렌탈</option>
-            <option value="purchase">구매</option>
-          </select>
-        </Field>
-        <Field label="담당자">
-          <input style={smallInputStyle} value={state.manager || ""} onChange={(e) => update({ manager: e.target.value })} />
-        </Field>
-        <Field label="전표번호">
-          <input style={smallInputStyle} value={state.voucherNo || ""} onChange={(e) => update({ voucherNo: e.target.value })} />
-        </Field>
-      </div>
-
-      {state.transactionType === "rental" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 12 }}>
-          <Field label="출고일">
-            <input type="date" style={smallInputStyle} value={state.outDate} onChange={(e) => update({ outDate: e.target.value })} />
-          </Field>
-          <Field label="반납예정일">
-            <input type="date" style={smallInputStyle} value={state.dueDate || ""} onChange={(e) => update({ dueDate: e.target.value })} />
-          </Field>
-        </div>
-      )}
 
       <div style={{ maxHeight: 360, overflowY: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 100px 55px 100px 100px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}`, position: "sticky", top: 0, background: C.panel }}>
