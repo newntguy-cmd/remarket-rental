@@ -491,30 +491,10 @@ function Dashboard({ profile, onLogout }) {
   const isAdmin = profile.role === "admin";
   const [rentals, setRentals] = useState([]);
   const [customers, setCustomers] = useState([]);
-  const [customerDetailName, setCustomerDetailName] = useState(null);
-  const [typeFilter, setTypeFilter] = useState("all"); // all | rental | purchase
-  const [tab, setTab] = useState("all"); // all | normal | soon | overdue | collected
-  const [query, setQuery] = useState("");
-  const [activeTab, setActiveTab] = useState(isAdmin ? "quote" : "list"); // quote | list | new | customer | statement
-  const [editing, setEditing] = useState(null);
-  const [showStats, setShowStats] = useState(false);
+  const [activeTab, setActiveTab] = useState("quote"); // 지금은 "quote" 하나뿐. 메뉴는 하나씩 다시 추가할 예정
   const [loadingData, setLoadingData] = useState(true);
   const [importState, setImportState] = useState(null); // parsed preview
   const [importing, setImporting] = useState(false);
-
-  // 상세검색(Search) 패널 + 선택삭제
-  const [showAdvSearch, setShowAdvSearch] = useState(false);
-  const [advCustomer, setAdvCustomer] = useState("");
-  const [advSite, setAdvSite] = useState("");
-  const [advManager, setAdvManager] = useState("");
-  const [advVoucher, setAdvVoucher] = useState("");
-  const [advStart, setAdvStart] = useState("");
-  const [advEnd, setAdvEnd] = useState("");
-  const [selectedIds, setSelectedIds] = useState(new Set());
-  const [deleting, setDeleting] = useState(false);
-
-  // 거래처별 매출 탭 검색
-  const [customerSearchQuery, setCustomerSearchQuery] = useState("");
 
   useEffect(() => {
     fetchRentals();
@@ -533,150 +513,6 @@ function Dashboard({ profile, onLogout }) {
     if (!error) setCustomers(data || []);
   }
 
-  const visible = useMemo(() => {
-    let list = rentals;
-    if (typeFilter !== "all") list = list.filter((r) => r.transaction_type === typeFilter);
-    if (tab !== "all") list = list.filter((r) => getStatus(r) === tab);
-    if (query.trim()) {
-      const q = query.trim().toLowerCase();
-      list = list.filter(
-        (r) =>
-          (r.item || "").toLowerCase().includes(q) ||
-          (r.customer || "").toLowerCase().includes(q) ||
-          (r.site || "").toLowerCase().includes(q) ||
-          (r.manager || "").toLowerCase().includes(q) ||
-          (r.voucher_no || "").toLowerCase().includes(q)
-      );
-    }
-    if (advCustomer.trim()) {
-      const q = advCustomer.trim().toLowerCase();
-      list = list.filter((r) => (r.customer || "").toLowerCase().includes(q));
-    }
-    if (advSite.trim()) {
-      const q = advSite.trim().toLowerCase();
-      list = list.filter((r) => (r.site || "").toLowerCase().includes(q));
-    }
-    if (advManager.trim()) {
-      const q = advManager.trim().toLowerCase();
-      list = list.filter((r) => (r.manager || "").toLowerCase().includes(q));
-    }
-    if (advVoucher.trim()) {
-      const q = advVoucher.trim().toLowerCase();
-      list = list.filter((r) => (r.voucher_no || "").toLowerCase().includes(q));
-    }
-    if (advStart) list = list.filter((r) => r.out_date && r.out_date >= advStart);
-    if (advEnd) list = list.filter((r) => r.out_date && r.out_date <= advEnd);
-    return list;
-  }, [rentals, typeFilter, tab, query, advCustomer, advSite, advManager, advVoucher, advStart, advEnd]);
-
-  const visibleTotal = useMemo(() => visible.reduce((s, r) => s + (Number(r.amount) || 0), 0), [visible]);
-  const advCount = [advCustomer, advSite, advManager, advVoucher].filter((v) => v.trim()).length + [advStart, advEnd].filter(Boolean).length;
-
-  function resetAdvSearch() {
-    setAdvCustomer("");
-    setAdvSite("");
-    setAdvManager("");
-    setAdvVoucher("");
-    setAdvStart("");
-    setAdvEnd("");
-  }
-
-  const counts = {
-    all: rentals.length,
-    normal: rentals.filter((r) => getStatus(r) === "normal").length,
-    soon: rentals.filter((r) => getStatus(r) === "soon").length,
-    overdue: rentals.filter((r) => getStatus(r) === "overdue").length,
-    collected: rentals.filter((r) => getStatus(r) === "collected").length,
-    purchase: rentals.filter((r) => r.transaction_type === "purchase").length,
-  };
-
-  // 고객사별 요약
-  const summary = useMemo(() => {
-    const byCustomer = {};
-    for (const r of rentals) {
-      const key = r.customer || "(미지정)";
-      if (!byCustomer[key]) byCustomer[key] = { customer: key, totalAmount: 0, itemCount: 0, upcoming: [] };
-      byCustomer[key].totalAmount += Number(r.amount) || 0;
-      byCustomer[key].itemCount += Number(r.qty) || 0;
-      const st = getStatus(r);
-      if (st === "soon" || st === "overdue") byCustomer[key].upcoming.push(r);
-    }
-    return Object.values(byCustomer).sort((a, b) => b.totalAmount - a.totalAmount);
-  }, [rentals]);
-
-  const monthlyRevenue = useMemo(() => computeMonthlyRevenue(rentals), [rentals]);
-  const returnBuckets = useMemo(() => computeReturnBuckets(rentals), [rentals]);
-
-  async function upsertItem(item) {
-    if (item.id) {
-      const { id, ...rest } = item;
-      await supabase.from("rentals").update(rest).eq("id", id);
-    } else {
-      await supabase.from("rentals").insert(item);
-    }
-    setActiveTab("list");
-    setEditing(null);
-    fetchRentals();
-  }
-
-  async function markCollected(id) {
-    await supabase.from("rentals").update({ collected: true, collect_date: todayISO() }).eq("id", id);
-    fetchRentals();
-  }
-  async function unmarkCollected(id) {
-    await supabase.from("rentals").update({ collected: false, collect_date: null }).eq("id", id);
-    fetchRentals();
-  }
-
-  async function handleDeleteOne(row) {
-    const ok = window.confirm(`${row.customer} / ${row.item} 건을 삭제할까요? 삭제하면 되돌릴 수 없습니다.`);
-    if (!ok) return;
-    setDeleting(true);
-    const { error } = await supabase.from("rentals").delete().eq("id", row.id);
-    setDeleting(false);
-    if (!error) {
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(row.id);
-        return next;
-      });
-      fetchRentals();
-    }
-  }
-
-  async function handleDeleteSelected() {
-    if (selectedIds.size === 0) return;
-    const ok = window.confirm(`선택한 ${selectedIds.size}건을 삭제할까요? 삭제하면 되돌릴 수 없습니다.`);
-    if (!ok) return;
-    setDeleting(true);
-    const { error } = await supabase.from("rentals").delete().in("id", Array.from(selectedIds));
-    setDeleting(false);
-    if (!error) {
-      setSelectedIds(new Set());
-      fetchRentals();
-    }
-  }
-
-  function toggleSelect(id) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleSelectAllVisible() {
-    setSelectedIds((prev) => {
-      const ids = visible.map((r) => r.id);
-      const allSelected = ids.length > 0 && ids.every((id) => prev.has(id));
-      const next = new Set(prev);
-      if (allSelected) ids.forEach((id) => next.delete(id));
-      else ids.forEach((id) => next.add(id));
-      return next;
-    });
-  }
-
   async function processQuoteFile(file) {
     if (!file) return;
     try {
@@ -686,12 +522,6 @@ function Dashboard({ profile, onLogout }) {
       alert("엑셀 파일을 읽는 중 문제가 발생했어요. 형식을 확인해주세요.");
       console.error(err);
     }
-  }
-
-  async function handleFileSelect(e) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    await processQuoteFile(file);
   }
 
   async function confirmImport() {
@@ -734,22 +564,11 @@ function Dashboard({ profile, onLogout }) {
     setImportState(null);
     fetchCustomers();
     fetchRentals();
-    setActiveTab("list");
   }
 
   const menuItems = [
     ...(isAdmin ? [{ key: "quote", label: "견적서 업로드" }] : []),
-    { key: "list", label: "납품내역" },
-    ...(isAdmin ? [{ key: "new", label: editing ? "정보 수정" : "신규 등록" }] : []),
-    { key: "customer", label: "거래처별 매출" },
-    { key: "statement", label: "거래명세서" },
   ];
-
-  const filteredSummary = useMemo(() => {
-    const q = customerSearchQuery.trim().toLowerCase();
-    if (!q) return summary;
-    return summary.filter((s) => s.customer.toLowerCase().includes(q));
-  }, [summary, customerSearchQuery]);
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: sans, color: C.ink }}>
@@ -772,10 +591,7 @@ function Dashboard({ profile, onLogout }) {
           {menuItems.map((m) => (
             <button
               key={m.key}
-              onClick={() => {
-                if (m.key === "new") setEditing(null);
-                setActiveTab(m.key);
-              }}
+              onClick={() => setActiveTab(m.key)}
               style={{
                 display: "block",
                 width: "100%",
@@ -807,263 +623,11 @@ function Dashboard({ profile, onLogout }) {
           />
         )}
 
-        {activeTab === "list" && (
-          <>
-        <div style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
-          <StatCell label="전체" value={counts.all} active={tab === "all" && typeFilter === "all"} onClick={() => { setTab("all"); setTypeFilter("all"); }} />
-          <StatCell label="정상" value={counts.normal} color={C.green} active={tab === "normal"} onClick={() => { setTab("normal"); setTypeFilter("rental"); }} />
-          <StatCell label="반납임박" value={counts.soon} color={C.amber} active={tab === "soon"} onClick={() => { setTab("soon"); setTypeFilter("rental"); }} />
-          <StatCell label="연체" value={counts.overdue} color={C.brick} active={tab === "overdue"} onClick={() => { setTab("overdue"); setTypeFilter("rental"); }} />
-          <StatCell label="회수완료" value={counts.collected} color={C.muted} active={tab === "collected"} onClick={() => { setTab("collected"); setTypeFilter("rental"); }} />
-          <StatCell label="구매" value={counts.purchase} color={C.purple} active={typeFilter === "purchase"} onClick={() => { setTab("all"); setTypeFilter("purchase"); }} last />
-        </div>
-
-        <div style={{ display: "flex", gap: 10, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <input placeholder="품목, 고객사, 현장, 담당자, 전표번호 검색" value={query} onChange={(e) => setQuery(e.target.value)} style={{ ...inputStyle, maxWidth: 300 }} />
-          <button
-            onClick={() => setShowAdvSearch((s) => !s)}
-            style={{ ...ghostBtnStyle, background: showAdvSearch ? C.bg : "transparent", borderColor: showAdvSearch ? C.ink : C.line }}
-          >
-            Search{advCount > 0 ? ` (${advCount})` : ""}
-          </button>
-          <button onClick={() => setShowStats((s) => !s)} style={ghostBtnStyle}>
-            {showStats ? "통계 닫기" : "통계 보기"}
-          </button>
-          <div style={{ flex: 1 }} />
-          {isAdmin && selectedIds.size > 0 && (
-            <button
-              onClick={handleDeleteSelected}
-              disabled={deleting}
-              style={{ ...ghostBtnStyle, color: "#fff", background: C.brick, borderColor: C.brick }}
-            >
-              {deleting ? "삭제 중…" : `선택삭제 (${selectedIds.size})`}
-            </button>
-          )}
-          {isAdmin && (
-            <>
-              <button onClick={() => setActiveTab("quote")} style={ghostBtnStyle}>견적서 업로드</button>
-              <button
-                onClick={() => {
-                  setEditing(null);
-                  setActiveTab("new");
-                }}
-                style={primaryBtnStyle2}
-              >
-                + 신규 등록
-              </button>
-            </>
-          )}
-        </div>
-
-        {showAdvSearch && (
-          <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
-              <Field label="출고일(시작)">
-                <input type="date" style={inputStyle} value={advStart} onChange={(e) => setAdvStart(e.target.value)} />
-              </Field>
-              <Field label="출고일(종료)">
-                <input type="date" style={inputStyle} value={advEnd} onChange={(e) => setAdvEnd(e.target.value)} />
-              </Field>
-              <Field label="전표번호">
-                <input style={inputStyle} value={advVoucher} onChange={(e) => setAdvVoucher(e.target.value)} />
-              </Field>
-              <Field label="거래처">
-                <input style={inputStyle} value={advCustomer} onChange={(e) => setAdvCustomer(e.target.value)} />
-              </Field>
-              <Field label="현장/구역">
-                <input style={inputStyle} value={advSite} onChange={(e) => setAdvSite(e.target.value)} />
-              </Field>
-              <Field label="담당자">
-                <input style={inputStyle} value={advManager} onChange={(e) => setAdvManager(e.target.value)} />
-              </Field>
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => setShowAdvSearch(false)} style={primaryBtnStyle2}>검색 적용</button>
-              <button onClick={resetAdvSearch} style={ghostBtnStyle}>초기화</button>
-            </div>
+        {!isAdmin && (
+          <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 40, textAlign: "center", color: C.muted, fontSize: 13.5 }}>
+            현재 화면을 새로 만드는 중이에요. 곧 이용하실 수 있어요.
           </div>
         )}
-
-        <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 16 }}>
-          검색결과 {visible.length}건 · 합계 {fmtWon(visibleTotal)}
-        </div>
-
-        {showStats && (
-          <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-            <div>
-              <div style={{ fontFamily: serif, fontSize: 15, marginBottom: 4 }}>월별 매출 추이</div>
-              <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 10 }}>최근 6개월, 렌탈+구매 합산 (출고일/발행일 기준)</div>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={monthlyRevenue} margin={{ top: 4, right: 4, left: -12, bottom: 0 }}>
-                  <CartesianGrid stroke={C.lineSoft} vertical={false} />
-                  <XAxis dataKey="month" tick={{ fontSize: 11.5, fill: C.inkSoft, fontFamily: sans }} axisLine={{ stroke: C.line }} tickLine={false} />
-                  <YAxis tick={{ fontSize: 11, fill: C.muted, fontFamily: sans }} tickFormatter={fmtWonShort} axisLine={false} tickLine={false} width={44} />
-                  <Tooltip formatter={(v) => fmtWon(v)} contentStyle={{ fontFamily: sans, fontSize: 12.5, border: `1px solid ${C.line}` }} cursor={{ fill: C.bg }} />
-                  <Bar dataKey="amount" fill={C.ink} radius={[3, 3, 0, 0]} maxBarSize={36} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            <div>
-              <div style={{ fontFamily: serif, fontSize: 15, marginBottom: 4 }}>반납예정 타임라인</div>
-              <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 10 }}>회수 안 된 렌탈 건, 임박도 구간별 건수</div>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={returnBuckets} margin={{ top: 4, right: 4, left: -12, bottom: 0 }}>
-                  <CartesianGrid stroke={C.lineSoft} vertical={false} />
-                  <XAxis dataKey="label" tick={{ fontSize: 11.5, fill: C.inkSoft, fontFamily: sans }} axisLine={{ stroke: C.line }} tickLine={false} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: C.muted, fontFamily: sans }} axisLine={false} tickLine={false} width={28} />
-                  <Tooltip formatter={(v) => `${v}건`} contentStyle={{ fontFamily: sans, fontSize: 12.5, border: `1px solid ${C.line}` }} cursor={{ fill: C.bg }} />
-                  <Bar dataKey="count" radius={[3, 3, 0, 0]} maxBarSize={36}>
-                    {returnBuckets.map((b, i) => (
-                      <Cell key={i} fill={b.color} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        )}
-
-        <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
-          <div style={{ ...rowGrid(isAdmin), padding: "10px 16px", fontSize: 12, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 700 }}>
-            {isAdmin && (
-              <div>
-                <input
-                  type="checkbox"
-                  checked={visible.length > 0 && visible.every((r) => selectedIds.has(r.id))}
-                  onChange={toggleSelectAllVisible}
-                />
-              </div>
-            )}
-            {isAdmin && <div>고객사</div>}
-            <div>현장/구역</div>
-            <div>품목</div>
-            <div>수량</div>
-            <div>금액</div>
-            <div>상태</div>
-            {isAdmin && <div></div>}
-          </div>
-          {loadingData && <div style={{ padding: "32px 16px", color: C.muted, fontSize: 13.5, textAlign: "center" }}>불러오는 중…</div>}
-          {!loadingData && visible.length === 0 && (
-            <div style={{ padding: "32px 16px", color: C.muted, fontSize: 13.5, textAlign: "center" }}>해당 조건의 항목이 없습니다.</div>
-          )}
-          {visible.map((r, idx) => {
-            const st = STATUS_META[getStatus(r)];
-            return (
-              <div
-                key={r.id}
-                style={{
-                  ...rowGrid(isAdmin),
-                  padding: "13px 16px",
-                  fontSize: 13.5,
-                  alignItems: "center",
-                  borderBottom: idx === visible.length - 1 ? "none" : `1px solid ${C.lineSoft}`,
-                  minWidth: 700,
-                }}
-              >
-                {isAdmin && (
-                  <div>
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(r.id)}
-                      onChange={() => toggleSelect(r.id)}
-                    />
-                  </div>
-                )}
-                {isAdmin && <div style={{ color: C.inkSoft }}>{r.customer}</div>}
-                <div style={{ color: C.inkSoft, fontSize: 12.5 }}>{r.site || "-"}</div>
-                <div>
-                  <div>{r.item}</div>
-                  {r.spec && <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2 }}>{r.spec}</div>}
-                  {r.voucher_no && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>전표 {r.voucher_no}</div>}
-                </div>
-                <div>{r.qty}</div>
-                <div style={{ fontSize: 12.5 }}>{fmtWon(r.amount)}</div>
-                <div>
-                  <span style={{ fontSize: 11.5, padding: "3px 9px", background: st.bg, color: st.fg }}>{st.label}</span>
-                  {r.due_date && <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>~{r.due_date}</div>}
-                </div>
-                {isAdmin && (
-                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                    <button
-                      onClick={() => {
-                        setEditing(r);
-                        setActiveTab("new");
-                      }}
-                      style={miniBtnStyle}
-                    >
-                      수정
-                    </button>
-                    {r.transaction_type === "rental" &&
-                      (r.collected ? (
-                        <button onClick={() => unmarkCollected(r.id)} style={miniBtnStyle}>회수취소</button>
-                      ) : (
-                        <button onClick={() => markCollected(r.id)} style={miniBtnStylePrimary}>회수처리</button>
-                      ))}
-                    <button onClick={() => handleDeleteOne(r)} style={{ ...miniBtnStyle, color: C.brick, borderColor: C.brick }}>
-                      삭제
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-          </>
-        )}
-
-        {activeTab === "new" && isAdmin && (
-          <RentalForm
-            initial={editing}
-            onCancel={() => {
-              setEditing(null);
-              setActiveTab("list");
-            }}
-            onSubmit={upsertItem}
-          />
-        )}
-
-        {activeTab === "customer" && (
-          <div>
-            <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>거래처별 매출</div>
-            <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 14 }}>거래처를 선택하면 현장별 현황과 기간별 매출을 볼 수 있어요.</div>
-            <input
-              placeholder="거래처명 검색"
-              value={customerSearchQuery}
-              onChange={(e) => setCustomerSearchQuery(e.target.value)}
-              style={{ ...inputStyle, maxWidth: 300, marginBottom: 16 }}
-            />
-            <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
-              {filteredSummary.length === 0 && <div style={{ color: C.muted, fontSize: 13.5 }}>데이터가 없습니다.</div>}
-              {filteredSummary.map((s) => (
-                <div key={s.customer} style={{ display: "flex", alignItems: "center", gap: 16, padding: "10px 0", borderBottom: `1px solid ${C.lineSoft}` }}>
-                  <button
-                    onClick={() => setCustomerDetailName(s.customer)}
-                    style={{ width: 160, fontSize: 14, textAlign: "left", background: "none", border: "none", padding: 0, color: C.ink, textDecoration: "underline", textUnderlineOffset: 3, cursor: "pointer", fontFamily: sans }}
-                  >
-                    {s.customer}
-                  </button>
-                  <div style={{ width: 140, fontSize: 13, color: C.inkSoft }}>총 금액 {fmtWon(s.totalAmount)}</div>
-                  <div style={{ width: 100, fontSize: 13, color: C.inkSoft }}>품목 {s.itemCount}개</div>
-                  <div style={{ flex: 1, fontSize: 12.5, color: s.upcoming.length ? C.amber : C.muted }}>
-                    {s.upcoming.length ? `반납임박/연체 ${s.upcoming.length}건: ${s.upcoming.map((u) => u.site || u.item).slice(0, 3).join(", ")}` : "반납임박 없음"}
-                  </div>
-                </div>
-              ))}
-            </div>
-            {customerDetailName && (
-              <CustomerDetailPanel
-                customerName={customerDetailName}
-                rentals={rentals}
-                customers={customers}
-                isAdmin={isAdmin}
-                onClose={() => setCustomerDetailName(null)}
-                onSaved={fetchCustomers}
-              />
-            )}
-          </div>
-        )}
-
-        {activeTab === "statement" && <StatementTab rentals={rentals} />}
         </div>
       </div>
     </div>
