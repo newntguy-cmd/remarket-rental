@@ -557,6 +557,7 @@ function Dashboard({ profile, onLogout }) {
   const isAdmin = profile.role === "admin";
   const [rentals, setRentals] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [shares, setShares] = useState([]);
   const [activeTab, setActiveTab] = useState("quote"); // 지금은 "quote" 하나뿐. 메뉴는 하나씩 다시 추가할 예정
   const [loadingData, setLoadingData] = useState(true);
   const [importState, setImportState] = useState(null); // parsed preview
@@ -565,6 +566,7 @@ function Dashboard({ profile, onLogout }) {
   useEffect(() => {
     fetchRentals();
     fetchCustomers();
+    fetchShares();
   }, []);
 
   async function fetchRentals() {
@@ -577,6 +579,11 @@ function Dashboard({ profile, onLogout }) {
   async function fetchCustomers() {
     const { data, error } = await supabase.from("customers").select("*");
     if (!error) setCustomers(data || []);
+  }
+
+  async function fetchShares() {
+    const { data, error } = await supabase.from("voucher_shares").select("*");
+    if (!error) setShares(data || []);
   }
 
   async function processQuoteFile(file) {
@@ -646,6 +653,7 @@ function Dashboard({ profile, onLogout }) {
   const menuItems = [
     ...(isAdmin ? [{ key: "quote", label: "견적서 업로드" }] : []),
     ...(isAdmin ? [{ key: "rentals", label: "렌탈내역" }] : []),
+    ...(isAdmin ? [{ key: "shares", label: "지분사" }] : []),
   ];
 
   return (
@@ -703,6 +711,10 @@ function Dashboard({ profile, onLogout }) {
 
         {activeTab === "rentals" && isAdmin && (
           <RentalListTab rentals={rentals} onRefresh={fetchRentals} />
+        )}
+
+        {activeTab === "shares" && isAdmin && (
+          <EquityTab rentals={rentals} shares={shares} onRefresh={fetchShares} />
         )}
 
         {!isAdmin && (
@@ -1203,22 +1215,24 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing }) {
       </div>
 
       <div style={{ maxHeight: 360, overflowY: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 100px 55px 100px 100px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}`, position: "sticky", top: 0, background: C.panel }}>
+        <div style={{ display: "grid", gridTemplateColumns: "110px 0.9fr 1.3fr 48px 92px 92px 1fr", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}`, position: "sticky", top: 0, background: C.panel }}>
           <div>현장/구역</div>
           <div>품목</div>
           <div>규격</div>
           <div>수량</div>
           <div>단가</div>
           <div>금액</div>
+          <div>비고</div>
         </div>
         {state.items.map((it, idx) => (
-          <div key={idx} style={{ display: "grid", gridTemplateColumns: "120px 1fr 100px 55px 100px 100px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}>
+          <div key={idx} style={{ display: "grid", gridTemplateColumns: "110px 0.9fr 1.3fr 48px 92px 92px 1fr", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}>
             <input style={smallInputStyle} value={it.site || ""} onChange={(e) => updateItem(idx, { site: e.target.value })} />
             <input style={smallInputStyle} value={it.item || ""} onChange={(e) => updateItem(idx, { item: e.target.value })} />
             <input style={smallInputStyle} value={it.spec || ""} onChange={(e) => updateItem(idx, { spec: e.target.value })} />
             <input type="number" style={smallInputStyle} value={it.qty ?? ""} onChange={(e) => updateItem(idx, { qty: Number(e.target.value) })} />
             <NumberInput style={smallInputStyle} value={it.unit_price} onChange={(v) => updateItem(idx, { unit_price: v })} />
             <NumberInput style={smallInputStyle} value={it.amount} onChange={(v) => updateItem(idx, { amount: v })} />
+            <input style={smallInputStyle} value={it.note || ""} onChange={(e) => updateItem(idx, { note: e.target.value })} />
           </div>
         ))}
       </div>
@@ -1965,6 +1979,268 @@ function RentalDetailPanel({ group, onClose, onSaved }) {
             {saving ? "저장 중…" : "저장"}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- 지분사 관리 ----------
+const equityListGrid = "140px 140px 130px 1fr 130px";
+
+function EquityTab({ rentals, shares, onRefresh }) {
+  const [query, setQuery] = useState("");
+  const [selectedKey, setSelectedKey] = useState(null);
+
+  const groups = useMemo(() => {
+    const g = groupRentalsByVoucher(rentals);
+    g.sort((a, b) => (b.head.out_date || "").localeCompare(a.head.out_date || "") || (b.voucherNo || "").localeCompare(a.voucherNo || ""));
+    return g;
+  }, [rentals]);
+
+  const sharesByVoucher = useMemo(() => {
+    const map = new Map();
+    for (const s of shares) {
+      const key = s.voucher_no || "";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(s);
+    }
+    return map;
+  }, [shares]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return groups;
+    return groups.filter((g) => [g.voucherNo, g.head.customer, g.head.site_name].filter(Boolean).join(" ").toLowerCase().includes(q));
+  }, [groups, query]);
+
+  const selected = groups.find((g) => g.key === selectedKey) || null;
+
+  if (selected) {
+    return (
+      <EquityDetailPanel
+        group={selected}
+        shares={sharesByVoucher.get(selected.voucherNo) || []}
+        onClose={() => setSelectedKey(null)}
+        onSaved={onRefresh}
+      />
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>지분사 관리</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+        전표를 클릭하면 지분사를 추가하고, 지분율을 입력하면 지분금액이 자동으로 계산돼요. 지분사가 없는 전표는 리마켓 단독(100%) 건이에요.
+      </div>
+
+      <input
+        placeholder="거래처, 현장명, 전표번호 검색"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        style={{ ...inputStyle, width: 320, marginBottom: 14 }}
+      />
+
+      <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 10 }}>검색결과 {filtered.length}건</div>
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
+        <div style={{ display: "grid", gridTemplateColumns: equityListGrid, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 820 }}>
+          <div>전표번호</div>
+          <div>거래처</div>
+          <div>금액</div>
+          <div>지분사</div>
+          <div>지분사 몫</div>
+        </div>
+
+        {filtered.map((g) => {
+          const rows = sharesByVoucher.get(g.voucherNo) || [];
+          const totalPercent = rows.reduce((s, r) => s + (Number(r.share_percent) || 0), 0);
+          const partnerAmount = Math.round(g.amount * (totalPercent / 100));
+          return (
+            <div
+              key={g.key}
+              style={{ display: "grid", gridTemplateColumns: equityListGrid, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 820 }}
+            >
+              <button
+                onClick={() => setSelectedKey(g.key)}
+                style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
+              >
+                {g.voucherNo || "(번호없음)"}
+              </button>
+              <div>{g.head.customer || "-"}</div>
+              <div style={{ fontSize: 12.5 }}>{fmtWon(g.amount)}</div>
+              <div style={{ fontSize: 12.5 }}>
+                {rows.length === 0 ? <span style={{ color: C.muted }}>리마켓 100%</span> : rows.map((r) => `${r.partner_name} ${r.share_percent}%`).join(", ")}
+              </div>
+              <div style={{ fontSize: 12.5 }}>{rows.length === 0 ? "-" : fmtWon(partnerAmount)}</div>
+            </div>
+          );
+        })}
+
+        {filtered.length === 0 && <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>등록된 전표가 없어요.</div>}
+      </div>
+    </div>
+  );
+}
+
+function EquityDetailPanel({ group, shares, onClose, onSaved }) {
+  const [rows, setRows] = useState(() => shares.map((s) => ({ id: s.id, partnerName: s.partner_name, sharePercent: s.share_percent, note: s.note || "" })));
+  const [saving, setSaving] = useState(false);
+  const totalAmount = group.amount;
+
+  if (!group.voucherNo) {
+    return (
+      <div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div style={{ fontFamily: serif, fontSize: 16 }}>지분 관리</div>
+          <button onClick={onClose} style={ghostBtnStyle}>← 목록으로</button>
+        </div>
+        <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 40, textAlign: "center", color: C.muted, fontSize: 13.5 }}>
+          이 전표는 전표번호가 없어서 지분사 관리를 지원하지 않아요. 렌탈내역에서 먼저 전표번호를 지정(다른 건과 묶기)한 뒤 다시 시도해주세요.
+        </div>
+      </div>
+    );
+  }
+
+  const updateRow = (idx, patch) => {
+    const next = [...rows];
+    next[idx] = { ...next[idx], ...patch };
+    setRows(next);
+  };
+  const addRow = () => setRows([...rows, { id: null, partnerName: "", sharePercent: "", note: "" }]);
+  const removeRow = (idx) => setRows(rows.filter((_, i) => i !== idx));
+
+  const totalPercent = rows.reduce((s, r) => s + (Number(r.sharePercent) || 0), 0);
+  const remainingPercent = Math.max(0, 100 - totalPercent);
+
+  async function handleSave() {
+    for (const r of rows) {
+      if (!r.partnerName.trim()) {
+        alert("지분사명을 입력해주세요.");
+        return;
+      }
+    }
+    setSaving(true);
+
+    const originalIds = shares.map((s) => s.id);
+    const currentIds = rows.filter((r) => r.id).map((r) => r.id);
+    const removedIds = originalIds.filter((id) => !currentIds.includes(id));
+
+    if (removedIds.length > 0) {
+      const { error } = await supabase.from("voucher_shares").delete().in("id", removedIds);
+      if (error) {
+        alert("삭제 중 오류가 발생했어요: " + error.message);
+        setSaving(false);
+        return;
+      }
+    }
+
+    for (const r of rows.filter((x) => x.id)) {
+      await supabase
+        .from("voucher_shares")
+        .update({ partner_name: r.partnerName, share_percent: r.sharePercent === "" ? 0 : Number(r.sharePercent), note: r.note })
+        .eq("id", r.id);
+    }
+
+    const newRows = rows.filter((r) => !r.id);
+    if (newRows.length > 0) {
+      const insertRows = newRows.map((r) => ({
+        voucher_no: group.voucherNo,
+        partner_name: r.partnerName,
+        share_percent: r.sharePercent === "" ? 0 : Number(r.sharePercent),
+        note: r.note,
+      }));
+      const { error } = await supabase.from("voucher_shares").insert(insertRows);
+      if (error) {
+        alert("등록 중 오류가 발생했어요: " + error.message);
+        setSaving(false);
+        return;
+      }
+    }
+
+    setSaving(false);
+    onSaved();
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div style={{ fontFamily: serif, fontSize: 16 }}>지분 관리 — {group.voucherNo}</div>
+        <button onClick={onClose} style={ghostBtnStyle}>← 목록으로</button>
+      </div>
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, fontSize: 13 }}>
+          <div>
+            <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 4 }}>거래처</div>
+            <div>{group.head.customer || "-"}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 4 }}>배송일자</div>
+            <div>{group.head.out_date || "-"}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 4 }}>전표 총액</div>
+            <div style={{ fontFamily: serif }}>{fmtWon(totalAmount)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ fontFamily: serif, fontSize: 16 }}>지분사</div>
+          <button onClick={addRow} style={miniBtnStyle}>+ 지분사 추가</button>
+        </div>
+
+        {rows.length === 0 && (
+          <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 12 }}>지분사가 없으면 이 전표는 리마켓 단독(100%) 건으로 처리돼요.</div>
+        )}
+
+        {rows.length > 0 && (
+          <div style={{ border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 130px 1fr 32px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
+              <div>지분사명</div>
+              <div>지분율(%)</div>
+              <div>지분금액</div>
+              <div>비고</div>
+              <div></div>
+            </div>
+            {rows.map((r, idx) => {
+              const amount = Math.round(totalAmount * ((Number(r.sharePercent) || 0) / 100));
+              return (
+                <div
+                  key={r.id ?? `new-${idx}`}
+                  style={{ display: "grid", gridTemplateColumns: "1fr 90px 130px 1fr 32px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}
+                >
+                  <input style={smallInputStyle} value={r.partnerName} onChange={(e) => updateRow(idx, { partnerName: e.target.value })} placeholder="예: OO투자" />
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step="0.1"
+                    style={smallInputStyle}
+                    value={r.sharePercent ?? ""}
+                    onChange={(e) => updateRow(idx, { sharePercent: e.target.value === "" ? "" : Number(e.target.value) })}
+                  />
+                  <div style={{ fontSize: 12.5 }}>{fmtWon(amount)}</div>
+                  <input style={smallInputStyle} value={r.note || ""} onChange={(e) => updateRow(idx, { note: e.target.value })} placeholder="선택 입력" />
+                  <button onClick={() => removeRow(idx)} style={{ background: "none", border: "none", color: C.brick, cursor: "pointer", fontSize: 13 }}>✕</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div style={{ fontSize: 13, color: C.inkSoft }}>
+          지분사 합계 {totalPercent}% ({fmtWon(Math.round(totalAmount * (totalPercent / 100)))}) · 리마켓 몫 {remainingPercent}% ({fmtWon(Math.round(totalAmount * (remainingPercent / 100)))})
+        </div>
+        {totalPercent > 100 && <div style={{ fontSize: 12.5, color: C.brick, marginTop: 6 }}>지분율 합계가 100%를 넘었어요. 확인해주세요.</div>}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button onClick={onClose} style={ghostBtnStyle}>취소</button>
+        <button onClick={handleSave} disabled={saving} style={primaryBtnStyle2}>
+          {saving ? "저장 중…" : "저장"}
+        </button>
       </div>
     </div>
   );
