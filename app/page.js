@@ -699,7 +699,7 @@ function Dashboard({ profile, onLogout }) {
   const menuItems = [
     ...(isAdmin ? [{ key: "quote", label: "견적서 업로드" }] : []),
     ...(isAdmin ? [{ key: "rentals", label: "렌탈내역" }] : []),
-    ...(isAdmin ? [{ key: "shares", label: "지분사" }] : []),
+    ...(isAdmin ? [{ key: "shares", label: "지분관리" }] : []),
   ];
 
   return (
@@ -2091,9 +2091,9 @@ function EquityTab({ rentals, shares, onRefresh }) {
 
   return (
     <div>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>지분사 관리</div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>지분관리</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
-        전표를 클릭하면 지분사를 추가하고, 지분율을 입력하면 지분금액이 자동으로 계산돼요. 지분사가 없는 전표는 리마켓 단독(100%) 건이에요.
+        전표를 클릭하면 지분사를 추가하고, 지분율을 입력하면 지분금액이 자동으로 계산돼요. 지분사가 없는 전표는 거래처 단독(100%) 건이에요.
       </div>
 
       <input
@@ -2132,7 +2132,7 @@ function EquityTab({ rentals, shares, onRefresh }) {
               <div>{g.head.customer || "-"}</div>
               <div style={{ fontSize: 12.5 }}>{fmtWon(g.amount)}</div>
               <div style={{ fontSize: 12.5 }}>
-                {rows.length === 0 ? <span style={{ color: C.muted }}>리마켓 100%</span> : rows.map((r) => `${r.partner_name} ${r.share_percent}%`).join(", ")}
+                {rows.length === 0 ? <span style={{ color: C.muted }}>{g.head.customer || "거래처"} 100%</span> : rows.map((r) => `${r.partner_name} ${r.share_percent}%`).join(", ")}
               </div>
               <div style={{ fontSize: 12.5 }}>{rows.length === 0 ? "-" : fmtWon(partnerAmount)}</div>
             </div>
@@ -2255,7 +2255,7 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
         </div>
 
         {rows.length === 0 && (
-          <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 12 }}>지분사가 없으면 이 전표는 리마켓 단독(100%) 건으로 처리돼요.</div>
+          <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 12 }}>지분사가 없으면 이 전표는 {group.head.customer || "거래처"} 단독(100%) 건으로 처리돼요.</div>
         )}
 
         {rows.length > 0 && (
@@ -2294,7 +2294,7 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
         )}
 
         <div style={{ fontSize: 13, color: C.inkSoft }}>
-          지분사 합계 {totalPercent}% ({fmtWon(Math.round(totalAmount * (totalPercent / 100)))}) · 리마켓 몫 {remainingPercent}% ({fmtWon(Math.round(totalAmount * (remainingPercent / 100)))})
+          지분사 합계 {totalPercent}% ({fmtWon(Math.round(totalAmount * (totalPercent / 100)))}) · {group.head.customer || "거래처"} 몫 {remainingPercent}% ({fmtWon(Math.round(totalAmount * (remainingPercent / 100)))})
         </div>
         {totalPercent > 100 && <div style={{ fontSize: 12.5, color: C.brick, marginTop: 6 }}>지분율 합계가 100%를 넘었어요. 확인해주세요.</div>}
       </div>
