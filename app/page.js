@@ -221,6 +221,52 @@ function NumberInput({ value, onChange, style, placeholder }) {
   );
 }
 
+// 표 헤더 칸 경계를 마우스로 드래그해서 좌우로 늘이고 줄일 수 있게 해주는 훅.
+// widths: 각 칸의 px 너비 배열, ColResizeHandle: 각 헤더 칸 오른쪽 끝에 넣는 드래그 손잡이
+function useResizableColumns(initialWidths) {
+  const [widths, setWidths] = useState(initialWidths);
+  const dragRef = useRef(null);
+
+  useEffect(() => {
+    function onMove(e) {
+      if (!dragRef.current) return;
+      const { idx, startX, startWidth } = dragRef.current;
+      const next = Math.max(40, startWidth + (e.clientX - startX));
+      setWidths((prev) => {
+        const copy = [...prev];
+        copy[idx] = next;
+        return copy;
+      });
+    }
+    function onUp() {
+      dragRef.current = null;
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
+
+  const startResize = (idx) => (e) => {
+    e.preventDefault();
+    dragRef.current = { idx, startX: e.clientX, startWidth: widths[idx] };
+  };
+
+  return [widths, startResize];
+}
+
+function ColResizeHandle({ onMouseDown }) {
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      style={{ position: "absolute", top: 0, bottom: 0, right: -6, width: 10, cursor: "col-resize", zIndex: 2 }}
+      onClick={(e) => e.stopPropagation()}
+    />
+  );
+}
+
 // ---------- 엑셀 견적서 파싱 ----------
 // 배송비·DC(할인)는 품목이 아니라 별도 계산 항목처럼 보이지만, 실제 청구 금액(계/합계)에
 // 포함되는 항목이라 건너뛰지 않고 그대로 품목 내역에 포함시킨다 (등록 전 미리보기에서 확인·수정 가능).
@@ -1199,6 +1245,9 @@ function QuoteUploadPanel({ importState, setImportState, onFile, onCancel, onCon
   );
 }
 
+const importPreviewCols = ["현장/구역", "품목", "규격", "수량", "단가", "금액", "비고"];
+const importPreviewInitialWidths = [110, 170, 190, 55, 100, 100, 180];
+
 function ImportPreview({ state, setState, onCancel, onConfirm, importing }) {
   const updateItem = (idx, patch) => {
     const items = [...state.items];
@@ -1206,26 +1255,27 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing }) {
     setState({ ...state, items });
   };
   const totalAmount = state.items.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
+  const [colWidths, startResize] = useResizableColumns(importPreviewInitialWidths);
+  const gridTemplate = colWidths.map((w) => `${w}px`).join(" ");
 
   return (
     <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>품목 내역</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
-        총 {state.items.length}개 품목이 인식됐어요. 등록 전에 내용을 확인·수정해주세요.
+        총 {state.items.length}개 품목이 인식됐어요. 등록 전에 내용을 확인·수정해주세요. (칸 경계를 드래그하면 너비를 늘이고 줄일 수 있어요)
       </div>
 
-      <div style={{ maxHeight: 360, overflowY: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "110px 0.9fr 1.3fr 48px 92px 92px 1fr", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}`, position: "sticky", top: 0, background: C.panel }}>
-          <div>현장/구역</div>
-          <div>품목</div>
-          <div>규격</div>
-          <div>수량</div>
-          <div>단가</div>
-          <div>금액</div>
-          <div>비고</div>
+      <div style={{ maxHeight: 360, overflow: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}`, position: "sticky", top: 0, background: C.panel, minWidth: "max-content" }}>
+          {importPreviewCols.map((label, i) => (
+            <div key={label} style={{ position: "relative" }}>
+              {label}
+              {i < importPreviewCols.length - 1 && <ColResizeHandle onMouseDown={startResize(i)} />}
+            </div>
+          ))}
         </div>
         {state.items.map((it, idx) => (
-          <div key={idx} style={{ display: "grid", gridTemplateColumns: "110px 0.9fr 1.3fr 48px 92px 92px 1fr", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}>
+          <div key={idx} style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content" }}>
             <input style={smallInputStyle} value={it.site || ""} onChange={(e) => updateItem(idx, { site: e.target.value })} />
             <input style={smallInputStyle} value={it.item || ""} onChange={(e) => updateItem(idx, { item: e.target.value })} />
             <input style={smallInputStyle} value={it.spec || ""} onChange={(e) => updateItem(idx, { spec: e.target.value })} />
@@ -1714,6 +1764,8 @@ function RentalDetailPanel({ group, onClose, onSaved }) {
   );
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [colWidths, startResize] = useResizableColumns([220, 160, 55, 100, 100]);
+  const itemsGridTemplate = colWidths.map((w) => `${w}px`).join(" ") + " 32px";
 
   const update = (patch) => setHeader((h) => ({ ...h, ...patch }));
   const updateItem = (idx, patch) => {
@@ -1930,11 +1982,11 @@ function RentalDetailPanel({ group, onClose, onSaved }) {
           <div style={{ fontFamily: serif, fontSize: 16 }}>품목 내역</div>
           <button onClick={addItem} style={miniBtnStyle}>+ 품목 추가</button>
         </div>
-        <div style={{ maxHeight: 360, overflowY: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
+        <div style={{ maxHeight: 360, overflow: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "1fr 100px 55px 100px 100px 32px",
+              gridTemplateColumns: itemsGridTemplate,
               gap: 8,
               padding: "8px 10px",
               fontSize: 11.5,
@@ -1943,19 +1995,21 @@ function RentalDetailPanel({ group, onClose, onSaved }) {
               position: "sticky",
               top: 0,
               background: C.panel,
+              minWidth: "max-content",
             }}
           >
-            <div>품목</div>
-            <div>규격</div>
-            <div>수량</div>
-            <div>단가</div>
-            <div>금액</div>
+            {["품목", "규격", "수량", "단가", "금액"].map((label, i) => (
+              <div key={label} style={{ position: "relative" }}>
+                {label}
+                <ColResizeHandle onMouseDown={startResize(i)} />
+              </div>
+            ))}
             <div></div>
           </div>
           {items.map((it, idx) => (
             <div
               key={it.id ?? `new-${idx}`}
-              style={{ display: "grid", gridTemplateColumns: "1fr 100px 55px 100px 100px 32px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}
+              style={{ display: "grid", gridTemplateColumns: itemsGridTemplate, gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content" }}
             >
               <input style={smallInputStyle} value={it.item || ""} onChange={(e) => updateItem(idx, { item: e.target.value })} />
               <input style={smallInputStyle} value={it.spec || ""} onChange={(e) => updateItem(idx, { spec: e.target.value })} />
