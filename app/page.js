@@ -1764,7 +1764,7 @@ function RentalDetailPanel({ group, onClose, onSaved }) {
   );
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [colWidths, startResize] = useResizableColumns([220, 160, 55, 100, 100]);
+  const [colWidths, startResize] = useResizableColumns([180, 140, 55, 90, 100, 80, 180, 100]);
   const itemsGridTemplate = colWidths.map((w) => `${w}px`).join(" ") + " 32px";
 
   const update = (patch) => setHeader((h) => ({ ...h, ...patch }));
@@ -1998,7 +1998,7 @@ function RentalDetailPanel({ group, onClose, onSaved }) {
               minWidth: "max-content",
             }}
           >
-            {["품목", "규격", "수량", "단가", "금액"].map((label, i) => (
+            {["품목명", "규격", "수량", "단가", "공급가액", "부가세", "적요", "합계"].map((label, i) => (
               <div key={label} style={{ position: "relative" }}>
                 {label}
                 <ColResizeHandle onMouseDown={startResize(i)} />
@@ -2006,21 +2006,30 @@ function RentalDetailPanel({ group, onClose, onSaved }) {
             ))}
             <div></div>
           </div>
-          {items.map((it, idx) => (
-            <div
-              key={it.id ?? `new-${idx}`}
-              style={{ display: "grid", gridTemplateColumns: itemsGridTemplate, gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content" }}
-            >
-              <input style={smallInputStyle} value={it.item || ""} onChange={(e) => updateItem(idx, { item: e.target.value })} />
-              <input style={smallInputStyle} value={it.spec || ""} onChange={(e) => updateItem(idx, { spec: e.target.value })} />
-              <input type="number" style={smallInputStyle} value={it.qty ?? ""} onChange={(e) => updateItem(idx, { qty: Number(e.target.value) })} />
-              <NumberInput style={smallInputStyle} value={it.unit_price} onChange={(v) => updateItem(idx, { unit_price: v })} />
-              <NumberInput style={smallInputStyle} value={it.amount} onChange={(v) => updateItem(idx, { amount: v })} />
-              <button onClick={() => removeItem(idx)} style={{ background: "none", border: "none", color: C.brick, cursor: "pointer", fontSize: 13 }}>✕</button>
-            </div>
-          ))}
+          {items.map((it, idx) => {
+            const vat = Math.round((Number(it.amount) || 0) * 0.1);
+            const lineTotal = (Number(it.amount) || 0) + vat;
+            return (
+              <div
+                key={it.id ?? `new-${idx}`}
+                style={{ display: "grid", gridTemplateColumns: itemsGridTemplate, gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content" }}
+              >
+                <input style={smallInputStyle} value={it.item || ""} onChange={(e) => updateItem(idx, { item: e.target.value })} />
+                <input style={smallInputStyle} value={it.spec || ""} onChange={(e) => updateItem(idx, { spec: e.target.value })} />
+                <input type="number" style={smallInputStyle} value={it.qty ?? ""} onChange={(e) => updateItem(idx, { qty: Number(e.target.value) })} />
+                <NumberInput style={smallInputStyle} value={it.unit_price} onChange={(v) => updateItem(idx, { unit_price: v })} />
+                <NumberInput style={smallInputStyle} value={it.amount} onChange={(v) => updateItem(idx, { amount: v })} />
+                <div style={{ fontSize: 12.5, textAlign: "right", color: C.inkSoft }}>{fmtWon(vat)}</div>
+                <input style={smallInputStyle} value={it.note || ""} onChange={(e) => updateItem(idx, { note: e.target.value })} />
+                <div style={{ fontSize: 12.5, textAlign: "right" }}>{fmtWon(lineTotal)}</div>
+                <button onClick={() => removeItem(idx)} style={{ background: "none", border: "none", color: C.brick, cursor: "pointer", fontSize: 13 }}>✕</button>
+              </div>
+            );
+          })}
         </div>
-        <div style={{ fontSize: 13, color: C.inkSoft }}>합계 {fmtWon(totalAmount)}</div>
+        <div style={{ fontSize: 13, color: C.inkSoft }}>
+          공급가액 합계 {fmtWon(totalAmount)} · 부가세 합계 {fmtWon(Math.round(totalAmount * 0.1))} · 합계(VAT 포함) {fmtWon(Math.round(totalAmount * 1.1))}
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 8, justifyContent: "space-between" }}>
