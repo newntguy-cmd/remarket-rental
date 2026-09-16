@@ -651,7 +651,7 @@ function Dashboard({ profile, onLogout }) {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: sans, color: C.ink }}>
       <div style={{ borderBottom: `1px solid ${C.line}`, background: C.panel }}>
-        <div style={{ maxWidth: 1280, margin: "0 auto", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ maxWidth: 1600, margin: "0 auto", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ fontFamily: serif, fontSize: 20 }}>리마켓 렌탈장부</div>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <div style={{ fontSize: 13, color: C.inkSoft, textAlign: "right" }}>
@@ -663,7 +663,7 @@ function Dashboard({ profile, onLogout }) {
         </div>
       </div>
 
-      <div style={{ maxWidth: 1280, margin: "0 auto", padding: "28px 24px 60px", display: "flex", gap: 24, alignItems: "flex-start" }}>
+      <div style={{ maxWidth: 1600, margin: "0 auto", padding: "28px 24px 60px", display: "flex", gap: 24, alignItems: "flex-start" }}>
         <aside style={{ width: 160, flexShrink: 0, border: `1px solid ${C.line}`, background: C.panel }}>
           <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.line}`, fontSize: 11.5, color: C.muted, letterSpacing: 0.3 }}>메뉴</div>
           {menuItems.map((m) => (
@@ -1346,11 +1346,28 @@ function RentalForm({ initial, onCancel, onSubmit }) {
 }
 
 // ---------- 렌탈내역 (목록 + 상세) ----------
+const emptyAdvSearch = {
+  fromDate: "",
+  toDate: "",
+  dueFromDate: "",
+  dueToDate: "",
+  customer: "",
+  manager: "",
+  voucherNo: "",
+  siteName: "",
+  transactionType: "",
+  status: "",
+};
+
 function RentalListTab({ rentals, onRefresh }) {
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState(null);
   const [checkedKeys, setCheckedKeys] = useState(new Set());
   const [merging, setMerging] = useState(false);
+  const [deletingSelected, setDeletingSelected] = useState(false);
+  const [showAdvSearch, setShowAdvSearch] = useState(false);
+  const [advSearch, setAdvSearch] = useState(emptyAdvSearch);
+  const [appliedAdv, setAppliedAdv] = useState(emptyAdvSearch);
 
   const toggleCheck = (key) => {
     setCheckedKeys((prev) => {
@@ -1367,17 +1384,51 @@ function RentalListTab({ rentals, onRefresh }) {
     return g;
   }, [rentals]);
 
+  const advActive = Object.values(appliedAdv).some((v) => v);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return groups;
-    return groups.filter((g) =>
-      [g.voucherNo, g.head.customer, g.head.site_name, g.head.manager, ...g.rows.map((r) => r.item)]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(q)
-    );
-  }, [groups, query]);
+    let list = groups;
+
+    if (q) {
+      list = list.filter((g) =>
+        [g.voucherNo, g.head.customer, g.head.site_name, g.head.manager, ...g.rows.map((r) => r.item)]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(q)
+      );
+    }
+
+    const a = appliedAdv;
+    if (a.fromDate) list = list.filter((g) => g.head.out_date && g.head.out_date >= a.fromDate);
+    if (a.toDate) list = list.filter((g) => g.head.out_date && g.head.out_date <= a.toDate);
+    if (a.dueFromDate) list = list.filter((g) => g.head.due_date && g.head.due_date >= a.dueFromDate);
+    if (a.dueToDate) list = list.filter((g) => g.head.due_date && g.head.due_date <= a.dueToDate);
+    if (a.customer) list = list.filter((g) => (g.head.customer || "").toLowerCase().includes(a.customer.toLowerCase()));
+    if (a.manager) list = list.filter((g) => (g.head.manager || "").toLowerCase().includes(a.manager.toLowerCase()));
+    if (a.voucherNo) list = list.filter((g) => (g.voucherNo || "").toLowerCase().includes(a.voucherNo.toLowerCase()));
+    if (a.siteName) list = list.filter((g) => (g.head.site_name || "").toLowerCase().includes(a.siteName.toLowerCase()));
+    if (a.transactionType) list = list.filter((g) => g.head.transaction_type === a.transactionType);
+    if (a.status) {
+      list = list.filter((g) => {
+        const status = getStatus({
+          transaction_type: g.head.transaction_type,
+          collected: g.rows.every((r) => r.collected),
+          due_date: g.head.due_date,
+        });
+        return status === a.status;
+      });
+    }
+
+    return list;
+  }, [groups, query, appliedAdv]);
+
+  const applyAdvSearch = () => setAppliedAdv(advSearch);
+  const resetAdvSearch = () => {
+    setAdvSearch(emptyAdvSearch);
+    setAppliedAdv(emptyAdvSearch);
+  };
 
   const selected = groups.find((g) => g.key === selectedKey) || null;
 
@@ -1411,6 +1462,23 @@ function RentalListTab({ rentals, onRefresh }) {
     onRefresh();
   }
 
+  async function handleDeleteSelected() {
+    const chosen = groups.filter((g) => checkedKeys.has(g.key));
+    if (chosen.length === 0) return;
+    const totalRows = chosen.reduce((s, g) => s + g.rows.length, 0);
+    if (!confirm(`선택한 전표 ${chosen.length}건(품목 ${totalRows}개)을 삭제할까요? 되돌릴 수 없어요.`)) return;
+    setDeletingSelected(true);
+    const allIds = chosen.flatMap((g) => g.rows.map((r) => r.id));
+    const { error } = await supabase.from("rentals").delete().in("id", allIds);
+    setDeletingSelected(false);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setCheckedKeys(new Set());
+    onRefresh();
+  }
+
   const totalAmount = filtered.reduce((s, g) => s + g.amount, 0);
 
   return (
@@ -1420,12 +1488,69 @@ function RentalListTab({ rentals, onRefresh }) {
         전표번호를 클릭하면 세부 내역을 확인·수정할 수 있어요. (견적서 업로드로 등록된 전표 기준)
       </div>
 
-      <input
-        placeholder="거래처, 현장명, 담당자, 전표번호, 품목 검색"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        style={{ ...inputStyle, width: 320, marginBottom: 14 }}
-      />
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+        <input
+          placeholder="거래처, 현장명, 담당자, 전표번호, 품목 검색"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{ ...inputStyle, width: 320 }}
+        />
+        <button onClick={() => setShowAdvSearch((v) => !v)} style={advActive ? { ...ghostBtnStyle, borderColor: C.ink, color: C.ink } : ghostBtnStyle}>
+          상세검색{advActive ? " ●" : ""} {showAdvSearch ? "▲" : "▼"}
+        </button>
+      </div>
+
+      {showAdvSearch && (
+        <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+            <Field label="배송일자(시작)">
+              <input type="date" style={inputStyle} value={advSearch.fromDate} onChange={(e) => setAdvSearch({ ...advSearch, fromDate: e.target.value })} />
+            </Field>
+            <Field label="배송일자(종료)">
+              <input type="date" style={inputStyle} value={advSearch.toDate} onChange={(e) => setAdvSearch({ ...advSearch, toDate: e.target.value })} />
+            </Field>
+            <Field label="구분">
+              <select style={inputStyle} value={advSearch.transactionType} onChange={(e) => setAdvSearch({ ...advSearch, transactionType: e.target.value })}>
+                <option value="">전체</option>
+                <option value="rental">렌탈</option>
+                <option value="purchase">구매</option>
+              </select>
+            </Field>
+            <Field label="렌탈만료일(시작)">
+              <input type="date" style={inputStyle} value={advSearch.dueFromDate} onChange={(e) => setAdvSearch({ ...advSearch, dueFromDate: e.target.value })} />
+            </Field>
+            <Field label="렌탈만료일(종료)">
+              <input type="date" style={inputStyle} value={advSearch.dueToDate} onChange={(e) => setAdvSearch({ ...advSearch, dueToDate: e.target.value })} />
+            </Field>
+            <Field label="상태">
+              <select style={inputStyle} value={advSearch.status} onChange={(e) => setAdvSearch({ ...advSearch, status: e.target.value })}>
+                <option value="">전체</option>
+                <option value="normal">정상</option>
+                <option value="soon">반납임박</option>
+                <option value="overdue">연체</option>
+                <option value="collected">회수완료</option>
+                <option value="purchase">구매완료</option>
+              </select>
+            </Field>
+            <Field label="거래처">
+              <input style={inputStyle} value={advSearch.customer} onChange={(e) => setAdvSearch({ ...advSearch, customer: e.target.value })} />
+            </Field>
+            <Field label="현장명">
+              <input style={inputStyle} value={advSearch.siteName} onChange={(e) => setAdvSearch({ ...advSearch, siteName: e.target.value })} />
+            </Field>
+            <Field label="담당자">
+              <input style={inputStyle} value={advSearch.manager} onChange={(e) => setAdvSearch({ ...advSearch, manager: e.target.value })} />
+            </Field>
+            <Field label="전표번호">
+              <input style={inputStyle} value={advSearch.voucherNo} onChange={(e) => setAdvSearch({ ...advSearch, voucherNo: e.target.value })} />
+            </Field>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={applyAdvSearch} style={primaryBtnStyle2}>검색</button>
+            <button onClick={resetAdvSearch} style={ghostBtnStyle}>초기화</button>
+          </div>
+        </div>
+      )}
 
       <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 10 }}>
         검색결과 {filtered.length}건 · 합계 {fmtWon(totalAmount)}
@@ -1437,6 +1562,9 @@ function RentalListTab({ rentals, onRefresh }) {
           {checkedKeys.size < 2 && <div style={{ color: C.muted }}>(2건 이상 선택하면 하나로 묶을 수 있어요)</div>}
           <button onClick={handleMerge} disabled={checkedKeys.size < 2 || merging} style={miniBtnStylePrimary}>
             {merging ? "합치는 중…" : "선택한 건 하나의 전표로 묶기"}
+          </button>
+          <button onClick={handleDeleteSelected} disabled={deletingSelected} style={{ ...miniBtnStyle, borderColor: C.brick, color: C.brick }}>
+            {deletingSelected ? "삭제 중…" : "선택 삭제"}
           </button>
           <button onClick={() => setCheckedKeys(new Set())} style={miniBtnStyle}>선택 해제</button>
         </div>
