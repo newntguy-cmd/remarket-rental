@@ -191,6 +191,123 @@ function Field({ label, children }) {
   );
 }
 
+// ---------- 담당자/거래처 등 자주 반복 입력하는 검색어의 "최근 입력 내역" ----------
+// 브라우저(localStorage)에만 저장되는, 이 컴퓨터·이 브라우저 한정 최근 검색어 목록이다.
+const RECENT_VALUES_MAX = 8;
+
+function getRecentValues(storageKey) {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function addRecentValue(storageKey, value) {
+  if (typeof window === "undefined") return;
+  const v = (value || "").trim();
+  if (!v) return;
+  try {
+    const existing = getRecentValues(storageKey).filter((x) => x !== v);
+    const next = [v, ...existing].slice(0, RECENT_VALUES_MAX);
+    window.localStorage.setItem(storageKey, JSON.stringify(next));
+  } catch {
+    // 프라이빗 모드 등 localStorage를 못 쓰는 환경이면 그냥 무시(최근 입력 기능만 안 될 뿐, 검색 자체는 정상 동작)
+  }
+}
+
+// 오른쪽 화살표(▾)를 누르면 이 필드에 최근 입력·검색했던 값 목록이 드롭다운으로 뜨고, 클릭하면 바로 채워진다.
+function RecentValueInput({ storageKey, value, onChange, onKeyDown, onBlur, placeholder, style }) {
+  const [open, setOpen] = useState(false);
+  const [recent, setRecent] = useState([]);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (open) setRecent(getRecentValues(storageKey));
+  }, [open, storageKey]);
+
+  useEffect(() => {
+    function handleOutside(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, []);
+
+  const filtered = recent.filter((v) => !value.trim() || v.toLowerCase().includes(value.trim().toLowerCase()));
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <input
+        style={{ ...(style || inputStyle), paddingRight: 30 }}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
+        onFocus={() => setOpen(true)}
+        onBlur={(e) => onBlur && onBlur(e)}
+        placeholder={placeholder}
+      />
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()} // 입력창 포커스가 먼저 빠지지 않게
+        onClick={() => setOpen((o) => !o)}
+        tabIndex={-1}
+        aria-label="최근 입력 내역"
+        style={{
+          position: "absolute",
+          right: 0,
+          top: 0,
+          bottom: 0,
+          width: 28,
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          color: C.muted,
+          fontSize: 11,
+        }}
+      >
+        ▾
+      </button>
+      {open && filtered.length > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            right: 0,
+            zIndex: 20,
+            background: C.panel,
+            border: `1px solid ${C.line}`,
+            boxShadow: "0 4px 10px rgba(0,0,0,0.08)",
+            maxHeight: 220,
+            overflowY: "auto",
+            marginTop: 2,
+          }}
+        >
+          {filtered.map((v) => (
+            <div
+              key={v}
+              onMouseDown={(e) => {
+                e.preventDefault(); // 클릭 처리 전에 blur가 먼저 일어나 드롭다운이 닫혀버리는 걸 방지
+                onChange(v);
+                setOpen(false);
+              }}
+              style={{ padding: "8px 12px", fontSize: 13, cursor: "pointer", color: C.ink }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = C.bg)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              {v}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // 단가/금액처럼 숫자를 콤마(1,200,000)로 보여주면서 값은 숫자로 다루는 입력창
 function NumberInput({ value, onChange, style, placeholder }) {
   const fmt = (v) => (v === null || v === undefined || v === "" || isNaN(Number(v)) ? "" : Number(v).toLocaleString("ko-KR"));
@@ -2763,6 +2880,8 @@ function SalesStatusTab({ rentals }) {
   const [hasSearched, setHasSearched] = useState(false); // 검색을 눌러야 결과가 나오게(false면 목록을 아예 안 보여줌)
 
   function runSearch(overrides) {
+    addRecentValue("remarket_recent_manager", managerInput);
+    addRecentValue("remarket_recent_customer", customerInput);
     setApplied({
       manager: managerInput,
       customer: customerInput,
@@ -2869,19 +2988,19 @@ function SalesStatusTab({ rentals }) {
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
           <Field label="담당자">
-            <input
-              style={inputStyle}
+            <RecentValueInput
+              storageKey="remarket_recent_manager"
               value={managerInput}
-              onChange={(e) => setManagerInput(e.target.value)}
+              onChange={setManagerInput}
               onKeyDown={handleSearchKeyDown}
               placeholder="예: 김영업"
             />
           </Field>
           <Field label="거래처">
-            <input
-              style={inputStyle}
+            <RecentValueInput
+              storageKey="remarket_recent_customer"
               value={customerInput}
-              onChange={(e) => setCustomerInput(e.target.value)}
+              onChange={setCustomerInput}
               onKeyDown={handleSearchKeyDown}
               placeholder="예: 엔알비"
             />
@@ -3081,7 +3200,13 @@ function CustomerDataTab({ rentals }) {
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr", gap: 14 }}>
           <Field label="업체명">
-            <input style={inputStyle} value={customerQuery} onChange={(e) => setCustomerQuery(e.target.value)} placeholder="예: 무영씨엠" />
+            <RecentValueInput
+              storageKey="remarket_recent_customer"
+              value={customerQuery}
+              onChange={setCustomerQuery}
+              onBlur={() => addRecentValue("remarket_recent_customer", customerQuery)}
+              placeholder="예: 무영씨엠"
+            />
           </Field>
           <Field label="기간(시작월)">
             <input type="month" style={inputStyle} value={fromMonth} onChange={(e) => setFromMonth(e.target.value)} />
