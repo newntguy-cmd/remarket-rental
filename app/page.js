@@ -1032,6 +1032,8 @@ function Dashboard({ profile, onLogout }) {
   // 렌탈내역도 마찬가지로, 메뉴의 "렌탈내역"을 다시 눌렀을 때(이미 그 탭이어도) 상세화면이 아니라
   // 항상 목록 화면으로 되돌아가도록 이 값을 바꿔서 강제로 새로 마운트시킨다.
   const [rentalsResetKey, setRentalsResetKey] = useState(0);
+  // 판매현황도 전표번호를 눌러 상세화면으로 들어갈 수 있게 됐으니, 메뉴를 다시 눌렀을 때 항상 검색화면으로 되돌아가게 한다.
+  const [salesResetKey, setSalesResetKey] = useState(0);
   const [loadingData, setLoadingData] = useState(true);
   const [importState, setImportState] = useState(null); // parsed preview
   const [importing, setImporting] = useState(false);
@@ -1160,6 +1162,7 @@ function Dashboard({ profile, onLogout }) {
                 setActiveTab(m.key);
                 if (m.key === "shares") setSharesResetKey((k) => k + 1); // 지분관리는 눌릴 때마다 목록 화면으로 리셋
                 if (m.key === "rentals") setRentalsResetKey((k) => k + 1); // 렌탈내역도 눌릴 때마다 목록 화면으로 리셋
+                if (m.key === "sales") setSalesResetKey((k) => k + 1); // 판매현황도 눌릴 때마다 검색 화면으로 리셋
               }}
               style={{
                 display: "block",
@@ -1201,7 +1204,7 @@ function Dashboard({ profile, onLogout }) {
         )}
 
         {activeTab === "sales" && isAdmin && (
-          <SalesStatusTab rentals={rentals} />
+          <SalesStatusTab key={salesResetKey} rentals={rentals} onRefresh={fetchRentals} />
         )}
 
         {activeTab === "customerData" && isAdmin && (
@@ -2862,8 +2865,11 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
 }
 
 const salesListGrid = "120px 130px 90px 60px 100px 70px 120px 100px 120px";
+// 판매현황 목록에만 렌탈종료일자 칸이 하나 더 있다(업체별데이터 목록은 salesListGrid를 그대로 씀).
+const salesListGridWithDue = "120px 130px 90px 60px 100px 100px 70px 120px 100px 120px";
 
-function SalesStatusTab({ rentals }) {
+function SalesStatusTab({ rentals, onRefresh }) {
+  const [selectedVoucherKey, setSelectedVoucherKey] = useState(null);
   const todayStr = todayISO();
   const now0 = new Date();
   const monthStart = todayStr.slice(0, 7) + "-01";
@@ -2982,6 +2988,20 @@ function SalesStatusTab({ rentals }) {
     return Array.from(map.values()).sort((a, b) => b.amount - a.amount);
   }, [groups]);
 
+  const selectedGroup = selectedVoucherKey ? groups.find((g) => g.key === selectedVoucherKey) : null;
+  if (selectedGroup) {
+    return (
+      <RentalDetailPanel
+        group={selectedGroup}
+        onClose={() => setSelectedVoucherKey(null)}
+        onSaved={() => {
+          onRefresh && onRefresh();
+          setSelectedVoucherKey(null);
+        }}
+      />
+    );
+  }
+
   return (
     <div>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>판매현황</div>
@@ -3069,7 +3089,7 @@ function SalesStatusTab({ rentals }) {
 
           {byManager.length > 0 && (
             <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginBottom: 16 }}>
-              <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>담당자별 집계</div>
+              <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>담당자별 집계 (공급가액 기준)</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                 {byManager.map((m) => (
                   <div
@@ -3077,7 +3097,7 @@ function SalesStatusTab({ rentals }) {
                     style={{ border: `1px solid ${C.lineSoft}`, padding: "8px 14px", minWidth: 160 }}
                   >
                     <div style={{ fontSize: 12.5, color: C.inkSoft }}>{m.manager}</div>
-                    <div style={{ fontSize: 15, fontFamily: serif }}>{fmtWon(Math.round(m.amount * 1.1))}</div>
+                    <div style={{ fontSize: 15, fontFamily: serif }}>{fmtWon(m.amount)}</div>
                     <div style={{ fontSize: 11.5, color: C.muted }}>{m.count}건</div>
                   </div>
                 ))}
@@ -3086,12 +3106,13 @@ function SalesStatusTab({ rentals }) {
           )}
 
           <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
-            <div style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 900 }}>
+            <div style={{ display: "grid", gridTemplateColumns: salesListGridWithDue, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 980 }}>
               <div>전표번호</div>
               <div>거래처</div>
               <div>담당자</div>
               <div>구분</div>
               <div>배송일자</div>
+              <div>렌탈종료일자</div>
               <div>품목수</div>
               <div>공급가액</div>
               <div>부가세</div>
@@ -3103,13 +3124,19 @@ function SalesStatusTab({ rentals }) {
               return (
                 <div
                   key={g.key}
-                  style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 900 }}
+                  style={{ display: "grid", gridTemplateColumns: salesListGridWithDue, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 980 }}
                 >
-                  <div>{g.voucherNo || "(번호없음)"}</div>
+                  <button
+                    onClick={() => setSelectedVoucherKey(g.key)}
+                    style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
+                  >
+                    {g.voucherNo || "(번호없음)"}
+                  </button>
                   <div>{g.head.customer || "-"}</div>
                   <div>{g.head.manager || "-"}</div>
                   <div style={{ fontSize: 12.5 }}>{g.head.transaction_type === "rental" ? "렌탈" : "구매"}</div>
                   <div style={{ fontSize: 12.5 }}>{g.head.out_date || "-"}</div>
+                  <div style={{ fontSize: 12.5 }}>{g.head.due_date || "-"}</div>
                   <div style={{ fontSize: 12.5 }}>{g.rows.length}건</div>
                   <div style={{ fontSize: 12.5 }}>{fmtWon(g.amount)}</div>
                   <div style={{ fontSize: 12.5 }}>{fmtWon(vat)}</div>
