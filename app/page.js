@@ -2389,14 +2389,20 @@ const salesListGrid = "120px 130px 90px 60px 100px 70px 120px 100px 120px";
 
 function SalesStatusTab({ rentals }) {
   const todayStr = todayISO();
+  const now0 = new Date();
   const monthStart = todayStr.slice(0, 7) + "-01";
-  const defaultFilters = { manager: "", customer: "", dealType: "", fromDate: monthStart, toDate: todayStr };
+  const monthEnd = (() => {
+    const lastDay = new Date(now0.getFullYear(), now0.getMonth() + 1, 0).getDate();
+    return `${todayStr.slice(0, 7)}-${String(lastDay).padStart(2, "0")}`;
+  })();
+  // 기본값은 이번달 1일~말일. 이 범위 안에서 직접 날짜를 넣고 검색하면 그 기준대로 다시 필터링된다.
+  const defaultFilters = { manager: "", customer: "", dealType: "", fromDate: monthStart, toDate: monthEnd };
 
   // 입력창에 타이핑하는 값(초안)과 실제로 검색에 적용된 값을 분리해서, "검색" 버튼을 눌러야 목록에 반영되게 한다.
   const [managerInput, setManagerInput] = useState("");
   const [customerInput, setCustomerInput] = useState("");
   const [fromDateInput, setFromDateInput] = useState(monthStart);
-  const [toDateInput, setToDateInput] = useState(todayStr);
+  const [toDateInput, setToDateInput] = useState(monthEnd);
   const [dealType, setDealType] = useState(""); // "" | "rental" | "purchase" — 버튼이라 클릭 즉시 적용
   const [applied, setApplied] = useState(defaultFilters);
 
@@ -2415,7 +2421,7 @@ function SalesStatusTab({ rentals }) {
     setManagerInput("");
     setCustomerInput("");
     setFromDateInput(monthStart);
-    setToDateInput(todayStr);
+    setToDateInput(monthEnd);
     setDealType("");
     setApplied(defaultFilters);
   }
@@ -2462,8 +2468,10 @@ function SalesStatusTab({ rentals }) {
 
   const filteredRows = useMemo(() => {
     return (rentals || []).filter((r) => {
-      if (applied.fromDate && (!r.out_date || r.out_date < applied.fromDate)) return false;
-      if (applied.toDate && (!r.out_date || r.out_date > applied.toDate)) return false;
+      // out_date가 시각까지 포함된 문자열로 와도 날짜(앞 10자리)만 비교하도록 안전장치를 둔다.
+      const d = (r.out_date || "").slice(0, 10);
+      if (applied.fromDate && (!d || d < applied.fromDate)) return false;
+      if (applied.toDate && (!d || d > applied.toDate)) return false;
       if (applied.manager.trim() && !(r.manager || "").toLowerCase().includes(applied.manager.trim().toLowerCase())) return false;
       if (applied.customer.trim() && !(r.customer || "").toLowerCase().includes(applied.customer.trim().toLowerCase())) return false;
       if (applied.dealType && r.transaction_type !== applied.dealType) return false;
@@ -2670,7 +2678,8 @@ function CustomerDataTab({ rentals }) {
     const rangeTo = `${lastKey}-${String(lastDay).padStart(2, "0")}`;
     return (rentals || []).filter((r) => {
       if (!(r.customer || "").toLowerCase().includes(q)) return false;
-      if (!r.out_date || r.out_date < rangeFrom || r.out_date > rangeTo) return false;
+      const d = (r.out_date || "").slice(0, 10);
+      if (!d || d < rangeFrom || d > rangeTo) return false;
       return true;
     });
   }, [rentals, customerQuery, monthKeys, searched]);
