@@ -3198,6 +3198,8 @@ function CustomerDataTab({ rentals }) {
   const [fromDate, setFromDate] = useState(monthStart);
   const [toDate, setToDate] = useState(monthEnd);
   const [hasSearched, setHasSearched] = useState(false); // 검색을 눌러야 결과가 나오게(false면 안내문구만 보여줌)
+  const [viewTab, setViewTab] = useState("sales"); // "sales" | "items" — 매출 데이터 / 품목별 수량 데이터 탭 전환
+  const [selectedItemVoucherKey, setSelectedItemVoucherKey] = useState(null); // 품목별 수량 데이터에서 선택한 전표(선택 전엔 전표 목록만 보여줌)
 
   function runSearch() {
     addRecentValue("remarket_recent_customer", customerInput);
@@ -3205,6 +3207,7 @@ function CustomerDataTab({ rentals }) {
     setFromDate(fromDateInput);
     setToDate(toDateInput);
     setHasSearched(true);
+    setSelectedItemVoucherKey(null);
   }
 
   function resetFilters() {
@@ -3215,6 +3218,7 @@ function CustomerDataTab({ rentals }) {
     setFromDate(monthStart);
     setToDate(monthEnd);
     setHasSearched(false);
+    setSelectedItemVoucherKey(null);
   }
 
   const handleSearchKeyDown = (e) => {
@@ -3276,8 +3280,38 @@ function CustomerDataTab({ rentals }) {
     return g;
   }, [filteredRows]);
 
+  // 품목별 수량 데이터는 전표 하나를 선택해야 나온다(여러 전표를 합치지 않음).
+  const selectedItemGroup = selectedItemVoucherKey ? groups.find((g) => g.key === selectedItemVoucherKey) : null;
+
+  // 선택한 전표 "안에서" 같은 품목명+규격끼리 수량/건수/금액을 합산한다(전표 하나 기준 집계).
+  const itemStats = useMemo(() => {
+    const rows = selectedItemGroup ? selectedItemGroup.rows : [];
+    const map = new Map();
+    for (const r of rows) {
+      const itemName = (r.item || "").trim() || "(품목명 없음)";
+      const specName = (r.spec || "").trim();
+      const key = `${itemName}〓${specName}`;
+      if (!map.has(key)) map.set(key, { item: itemName, spec: specName, qty: 0, count: 0, amount: 0 });
+      const e = map.get(key);
+      e.qty += Number(r.qty) || 0;
+      e.count += 1;
+      e.amount += Number(r.amount) || 0;
+    }
+    return Array.from(map.values()).sort((a, b) => b.qty - a.qty);
+  }, [selectedItemGroup]);
+  const itemStatsTotalQty = itemStats.reduce((s, r) => s + r.qty, 0);
+  const itemStatsTotalAmount = itemStats.reduce((s, r) => s + r.amount, 0);
+
   return (
     <div>
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #itemstats-print-area, #itemstats-print-area * { visibility: visible; }
+          #itemstats-print-area { position: absolute; top: 0; left: 0; width: 100%; padding: 24px; }
+          .itemstats-no-print { display: none !important; }
+        }
+      `}</style>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>업체별 데이터</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         업체명과 기간을 입력하면 그 기간 동안의 매출 합계와 월별 추이를 볼 수 있어요. (예: 무영씨엠 · 2026-08-01 ~ 2026-09-16)
@@ -3315,65 +3349,221 @@ function CustomerDataTab({ rentals }) {
 
       {searched && (
         <>
-          <div style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
-            <StatCell label="건수" value={`${groups.length}건`} />
-            <StatCell label="공급가액 합계" value={fmtWon(totalSupply)} />
-            <StatCell label="부가세 합계" value={fmtWon(totalVat)} />
-            <StatCell label="합계(VAT포함)" value={fmtWon(totalWithVat)} color={C.green} last />
+          <div className="itemstats-no-print" style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            <button
+              onClick={() => setViewTab("sales")}
+              style={{
+                ...miniBtnStyle,
+                background: viewTab === "sales" ? C.ink : "transparent",
+                color: viewTab === "sales" ? "#fff" : C.inkSoft,
+                borderColor: viewTab === "sales" ? C.ink : C.line,
+              }}
+            >
+              매출 데이터
+            </button>
+            <button
+              onClick={() => setViewTab("items")}
+              style={{
+                ...miniBtnStyle,
+                background: viewTab === "items" ? C.ink : "transparent",
+                color: viewTab === "items" ? "#fff" : C.inkSoft,
+                borderColor: viewTab === "items" ? C.ink : C.line,
+              }}
+            >
+              품목별 수량 데이터
+            </button>
           </div>
 
-          <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: "20px 18px 8px", marginBottom: 16 }}>
-            <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>월별 매출 추이</div>
-            <ResponsiveContainer width="100%" height={240}>
-              <BarChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.lineSoft} vertical={false} />
-                <XAxis dataKey="month" tick={{ fontSize: 12, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} />
-                <YAxis tickFormatter={(v) => fmtWonShort(v)} tick={{ fontSize: 11, fill: C.muted }} axisLine={false} tickLine={false} width={54} />
-                <Tooltip formatter={(v) => fmtWon(v)} labelStyle={{ color: C.ink }} contentStyle={{ fontSize: 12.5, border: `1px solid ${C.line}`, fontFamily: sans }} />
-                <Bar dataKey="amount" radius={[2, 2, 0, 0]}>
-                  {chartData.map((d, i) => (
-                    <Cell key={i} fill={C.ink} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {viewTab === "sales" && (
+            <>
+              <div style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
+                <StatCell label="건수" value={`${groups.length}건`} />
+                <StatCell label="공급가액 합계" value={fmtWon(totalSupply)} />
+                <StatCell label="부가세 합계" value={fmtWon(totalVat)} />
+                <StatCell label="합계(VAT포함)" value={fmtWon(totalWithVat)} color={C.green} last />
+              </div>
 
-          <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
-            <div style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 900 }}>
-              <div>전표번호</div>
-              <div>거래처</div>
-              <div>담당자</div>
-              <div>구분</div>
-              <div>배송일자</div>
-              <div>품목수</div>
-              <div>공급가액</div>
-              <div>부가세</div>
-              <div>합계(VAT포함)</div>
-            </div>
+              <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: "20px 18px 8px", marginBottom: 16 }}>
+                <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>월별 매출 추이</div>
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.lineSoft} vertical={false} />
+                    <XAxis dataKey="month" tick={{ fontSize: 12, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} />
+                    <YAxis tickFormatter={(v) => fmtWonShort(v)} tick={{ fontSize: 11, fill: C.muted }} axisLine={false} tickLine={false} width={54} />
+                    <Tooltip formatter={(v) => fmtWon(v)} labelStyle={{ color: C.ink }} contentStyle={{ fontSize: 12.5, border: `1px solid ${C.line}`, fontFamily: sans }} />
+                    <Bar dataKey="amount" radius={[2, 2, 0, 0]}>
+                      {chartData.map((d, i) => (
+                        <Cell key={i} fill={C.ink} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
 
-            {groups.map((g) => {
-              const vat = Math.round(g.amount * 0.1);
-              return (
-                <div
-                  key={g.key}
-                  style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 900 }}
-                >
-                  <div>{g.voucherNo || "(번호없음)"}</div>
-                  <div>{g.head.customer || "-"}</div>
-                  <div>{g.head.manager || "-"}</div>
-                  <div style={{ fontSize: 12.5 }}>{g.head.transaction_type === "rental" ? "렌탈" : "구매"}</div>
-                  <div style={{ fontSize: 12.5 }}>{g.head.out_date || "-"}</div>
-                  <div style={{ fontSize: 12.5 }}>{g.rows.length}건</div>
-                  <div style={{ fontSize: 12.5 }}>{fmtWon(g.amount)}</div>
-                  <div style={{ fontSize: 12.5 }}>{fmtWon(vat)}</div>
-                  <div style={{ fontSize: 12.5, fontFamily: serif }}>{fmtWon(g.amount + vat)}</div>
+              <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
+                <div style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 900 }}>
+                  <div>전표번호</div>
+                  <div>거래처</div>
+                  <div>담당자</div>
+                  <div>구분</div>
+                  <div>배송일자</div>
+                  <div>품목수</div>
+                  <div>공급가액</div>
+                  <div>부가세</div>
+                  <div>합계(VAT포함)</div>
                 </div>
-              );
-            })}
 
-            {groups.length === 0 && <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>해당 기간에 이 업체의 매출 데이터가 없어요.</div>}
-          </div>
+                {groups.map((g) => {
+                  const vat = Math.round(g.amount * 0.1);
+                  return (
+                    <div
+                      key={g.key}
+                      style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 900 }}
+                    >
+                      <div>{g.voucherNo || "(번호없음)"}</div>
+                      <div>{g.head.customer || "-"}</div>
+                      <div>{g.head.manager || "-"}</div>
+                      <div style={{ fontSize: 12.5 }}>{g.head.transaction_type === "rental" ? "렌탈" : "구매"}</div>
+                      <div style={{ fontSize: 12.5 }}>{g.head.out_date || "-"}</div>
+                      <div style={{ fontSize: 12.5 }}>{g.rows.length}건</div>
+                      <div style={{ fontSize: 12.5 }}>{fmtWon(g.amount)}</div>
+                      <div style={{ fontSize: 12.5 }}>{fmtWon(vat)}</div>
+                      <div style={{ fontSize: 12.5, fontFamily: serif }}>{fmtWon(g.amount + vat)}</div>
+                    </div>
+                  );
+                })}
+
+                {groups.length === 0 && <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>해당 기간에 이 업체의 매출 데이터가 없어요.</div>}
+              </div>
+            </>
+          )}
+
+          {viewTab === "items" && !selectedItemGroup && (
+            <>
+              <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>
+                전표를 선택하면 그 전표의 품목별 수량 출력물을 볼 수 있어요.
+              </div>
+              <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
+                <div style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 900 }}>
+                  <div>전표번호</div>
+                  <div>거래처</div>
+                  <div>담당자</div>
+                  <div>구분</div>
+                  <div>배송일자</div>
+                  <div>품목수</div>
+                  <div>공급가액</div>
+                  <div>부가세</div>
+                  <div>합계(VAT포함)</div>
+                </div>
+
+                {groups.map((g) => {
+                  const vat = Math.round(g.amount * 0.1);
+                  return (
+                    <div
+                      key={g.key}
+                      style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 900 }}
+                    >
+                      <div>
+                        <button
+                          onClick={() => setSelectedItemVoucherKey(g.key)}
+                          style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
+                        >
+                          {g.voucherNo || "(번호없음)"}
+                        </button>
+                      </div>
+                      <div>{g.head.customer || "-"}</div>
+                      <div>{g.head.manager || "-"}</div>
+                      <div style={{ fontSize: 12.5 }}>{g.head.transaction_type === "rental" ? "렌탈" : "구매"}</div>
+                      <div style={{ fontSize: 12.5 }}>{g.head.out_date || "-"}</div>
+                      <div style={{ fontSize: 12.5 }}>{g.rows.length}건</div>
+                      <div style={{ fontSize: 12.5 }}>{fmtWon(g.amount)}</div>
+                      <div style={{ fontSize: 12.5 }}>{fmtWon(vat)}</div>
+                      <div style={{ fontSize: 12.5, fontFamily: serif }}>{fmtWon(g.amount + vat)}</div>
+                    </div>
+                  );
+                })}
+
+                {groups.length === 0 && <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>해당 기간에 이 업체의 전표가 없어요.</div>}
+              </div>
+            </>
+          )}
+
+          {viewTab === "items" && selectedItemGroup && (
+            <>
+              <div className="itemstats-no-print" style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <button onClick={() => setSelectedItemVoucherKey(null)} style={ghostBtnStyle}>← 전표 목록으로</button>
+                <button onClick={() => window.print()} style={primaryBtnStyle2}>인쇄 / PDF로 저장</button>
+              </div>
+
+              <div className="itemstats-no-print" style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
+                <StatCell label="품목 종류" value={`${itemStats.length}종`} />
+                <StatCell label="총 수량" value={`${itemStatsTotalQty.toLocaleString("ko-KR")}개`} />
+                <StatCell label="금액 합계" value={fmtWon(itemStatsTotalAmount)} color={C.green} last />
+              </div>
+
+              <div id="itemstats-print-area" style={{ border: `1px solid ${C.line}`, background: "#fff", padding: 24 }}>
+                <div style={{ textAlign: "center", marginBottom: 20 }}>
+                  <div style={{ fontFamily: serif, fontSize: 20 }}>품목별 수량 통계</div>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 16 }}>
+                  <div>
+                    <div>거래처: {selectedItemGroup.head.customer || "-"}</div>
+                    <div>담당자: {selectedItemGroup.head.manager || "-"}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div>전표번호: {selectedItemGroup.voucherNo || "(번호없음)"}</div>
+                    <div>배송일자: {selectedItemGroup.head.out_date || "-"}</div>
+                  </div>
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr>
+                      {["품목", "규격", "총수량", "건수", "금액합계"].map((h) => (
+                        <th
+                          key={h}
+                          style={{
+                            border: `1px solid ${C.line}`,
+                            padding: "8px 10px",
+                            background: C.bg,
+                            textAlign: h === "품목" || h === "규격" ? "left" : "right",
+                          }}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {itemStats.map((r) => (
+                      <tr key={`${r.item}〓${r.spec}`}>
+                        <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.item}</td>
+                        <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.spec || "-"}</td>
+                        <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</td>
+                        <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{r.count}건</td>
+                        <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{fmtWon(r.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td colSpan={2} style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
+                        합계
+                      </td>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
+                        {itemStatsTotalQty.toLocaleString("ko-KR")}
+                      </td>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}></td>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>{fmtWon(itemStatsTotalAmount)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+
+                {itemStats.length === 0 && (
+                  <div style={{ padding: 30, textAlign: "center", color: C.muted, fontSize: 13 }}>이 전표에는 품목 데이터가 없어요.</div>
+                )}
+              </div>
+            </>
+          )}
         </>
       )}
     </div>
