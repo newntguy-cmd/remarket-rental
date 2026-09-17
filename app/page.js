@@ -700,6 +700,8 @@ function Dashboard({ profile, onLogout }) {
     ...(isAdmin ? [{ key: "quote", label: "견적서 업로드" }] : []),
     ...(isAdmin ? [{ key: "rentals", label: "렌탈내역" }] : []),
     ...(isAdmin ? [{ key: "shares", label: "지분관리" }] : []),
+    ...(isAdmin ? [{ key: "sales", label: "판매현황" }] : []),
+    ...(isAdmin ? [{ key: "customerData", label: "업체별데이터" }] : []),
   ];
 
   return (
@@ -761,6 +763,14 @@ function Dashboard({ profile, onLogout }) {
 
         {activeTab === "shares" && isAdmin && (
           <EquityTab rentals={rentals} shares={shares} onRefresh={fetchShares} />
+        )}
+
+        {activeTab === "sales" && isAdmin && (
+          <SalesStatusTab rentals={rentals} />
+        )}
+
+        {activeTab === "customerData" && isAdmin && (
+          <CustomerDataTab rentals={rentals} />
         )}
 
         {!isAdmin && (
@@ -2048,11 +2058,22 @@ function RentalDetailPanel({ group, onClose, onSaved }) {
 }
 
 // ---------- 지분사 관리 ----------
-const equityListGrid = "140px 140px 130px 1fr 130px";
+const equityListGrid = "28px 140px 140px 130px 1fr 130px";
 
 function EquityTab({ rentals, shares, onRefresh }) {
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState(null);
+  const [checkedKeys, setCheckedKeys] = useState(new Set());
+  const [deletingSelected, setDeletingSelected] = useState(false);
+
+  const toggleCheck = (key) => {
+    setCheckedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const groups = useMemo(() => {
     const g = groupRentalsByVoucher(rentals);
@@ -2078,6 +2099,23 @@ function EquityTab({ rentals, shares, onRefresh }) {
 
   const selected = groups.find((g) => g.key === selectedKey) || null;
 
+  // 훅은 조건부 return보다 항상 먼저 호출돼야 하므로(React 규칙), 목록 화면에서만 쓰는 값이라도 여기서 계산해둔다.
+  const visibleKeys = filtered.map((g) => g.key);
+  const allChecked = visibleKeys.length > 0 && visibleKeys.every((k) => checkedKeys.has(k));
+  const someChecked = visibleKeys.some((k) => checkedKeys.has(k));
+  const selectAllRef = useRef(null);
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someChecked && !allChecked;
+  }, [someChecked, allChecked]);
+  const toggleSelectAll = () => {
+    setCheckedKeys((prev) => {
+      const next = new Set(prev);
+      if (allChecked) visibleKeys.forEach((k) => next.delete(k));
+      else visibleKeys.forEach((k) => next.add(k));
+      return next;
+    });
+  };
+
   if (selected) {
     return (
       <EquityDetailPanel
@@ -2087,6 +2125,26 @@ function EquityTab({ rentals, shares, onRefresh }) {
         onSaved={onRefresh}
       />
     );
+  }
+
+  async function handleDeleteSelected() {
+    const chosen = filtered.filter((g) => checkedKeys.has(g.key) && g.voucherNo);
+    const withShares = chosen.filter((g) => (sharesByVoucher.get(g.voucherNo) || []).length > 0);
+    if (withShares.length === 0) {
+      alert("선택한 전표에는 등록된 지분사가 없어요.");
+      return;
+    }
+    if (!confirm(`선택한 ${withShares.length}건의 지분 등록을 삭제할까요? 거래처 단독(100%) 상태로 되돌아가고, 렌탈·매출 데이터는 그대로 유지돼요.`)) return;
+    setDeletingSelected(true);
+    const voucherNos = withShares.map((g) => g.voucherNo);
+    const { error } = await supabase.from("voucher_shares").delete().in("voucher_no", voucherNos);
+    setDeletingSelected(false);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setCheckedKeys(new Set());
+    onRefresh();
   }
 
   return (
@@ -2105,8 +2163,21 @@ function EquityTab({ rentals, shares, onRefresh }) {
 
       <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 10 }}>검색결과 {filtered.length}건</div>
 
+      {checkedKeys.size > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 12px", background: C.amberBg, fontSize: 12.5 }}>
+          <div>{checkedKeys.size}건 선택됨</div>
+          <button onClick={handleDeleteSelected} disabled={deletingSelected} style={{ ...miniBtnStyle, borderColor: C.brick, color: C.brick }}>
+            {deletingSelected ? "삭제 중…" : "선택 지분 삭제"}
+          </button>
+          <button onClick={() => setCheckedKeys(new Set())} style={miniBtnStyle}>선택 해제</button>
+        </div>
+      )}
+
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
-        <div style={{ display: "grid", gridTemplateColumns: equityListGrid, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 820 }}>
+        <div style={{ display: "grid", gridTemplateColumns: equityListGrid, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 850 }}>
+          <div>
+            <input ref={selectAllRef} type="checkbox" checked={allChecked} onChange={toggleSelectAll} />
+          </div>
           <div>전표번호</div>
           <div>거래처</div>
           <div>총금액(VAT포함)</div>
@@ -2122,8 +2193,11 @@ function EquityTab({ rentals, shares, onRefresh }) {
           return (
             <div
               key={g.key}
-              style={{ display: "grid", gridTemplateColumns: equityListGrid, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 820 }}
+              style={{ display: "grid", gridTemplateColumns: equityListGrid, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 850 }}
             >
+              <div>
+                <input type="checkbox" checked={checkedKeys.has(g.key)} onChange={() => toggleCheck(g.key)} />
+              </div>
               <button
                 onClick={() => setSelectedKey(g.key)}
                 style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
@@ -2307,6 +2381,356 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
           {saving ? "저장 중…" : "저장"}
         </button>
       </div>
+    </div>
+  );
+}
+
+const salesListGrid = "120px 130px 90px 60px 100px 70px 120px 100px 120px";
+
+function SalesStatusTab({ rentals }) {
+  const todayStr = todayISO();
+  const monthStart = todayStr.slice(0, 7) + "-01";
+
+  const [manager, setManager] = useState("");
+  const [customer, setCustomer] = useState("");
+  const [dealType, setDealType] = useState(""); // "" | "rental" | "purchase"
+  const [fromDate, setFromDate] = useState(monthStart);
+  const [toDate, setToDate] = useState(todayStr);
+
+  function setQuickRange(kind) {
+    const now = new Date();
+    if (kind === "today") {
+      setFromDate(todayStr);
+      setToDate(todayStr);
+    } else if (kind === "week") {
+      const day = now.getDay();
+      const diffToMon = day === 0 ? 6 : day - 1;
+      setFromDate(addDays(todayStr, -diffToMon));
+      setToDate(todayStr);
+    } else if (kind === "month") {
+      setFromDate(monthStart);
+      setToDate(todayStr);
+    } else if (kind === "lastMonth") {
+      const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const lastDay = new Date(y, d.getMonth() + 1, 0).getDate();
+      setFromDate(`${y}-${m}-01`);
+      setToDate(`${y}-${m}-${String(lastDay).padStart(2, "0")}`);
+    } else if (kind === "year") {
+      setFromDate(`${now.getFullYear()}-01-01`);
+      setToDate(todayStr);
+    }
+  }
+
+  const filteredRows = useMemo(() => {
+    return (rentals || []).filter((r) => {
+      if (fromDate && (!r.out_date || r.out_date < fromDate)) return false;
+      if (toDate && (!r.out_date || r.out_date > toDate)) return false;
+      if (manager.trim() && !(r.manager || "").toLowerCase().includes(manager.trim().toLowerCase())) return false;
+      if (customer.trim() && !(r.customer || "").toLowerCase().includes(customer.trim().toLowerCase())) return false;
+      if (dealType && r.transaction_type !== dealType) return false;
+      return true;
+    });
+  }, [rentals, fromDate, toDate, manager, customer, dealType]);
+
+  const groups = useMemo(() => {
+    const g = groupRentalsByVoucher(filteredRows);
+    g.sort((a, b) => (b.head.out_date || "").localeCompare(a.head.out_date || "") || (b.voucherNo || "").localeCompare(a.voucherNo || ""));
+    return g;
+  }, [filteredRows]);
+
+  const totalSupply = filteredRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const totalVat = Math.round(totalSupply * 0.1);
+  const totalWithVat = totalSupply + totalVat;
+
+  const byManager = useMemo(() => {
+    const map = new Map();
+    for (const g of groups) {
+      const key = g.head.manager || "(담당자 미지정)";
+      if (!map.has(key)) map.set(key, { manager: key, count: 0, amount: 0 });
+      const entry = map.get(key);
+      entry.count += 1;
+      entry.amount += g.amount;
+    }
+    return Array.from(map.values()).sort((a, b) => b.amount - a.amount);
+  }, [groups]);
+
+  return (
+    <div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>판매현황</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+        담당자·거래처·기간으로 매출 데이터를 조회할 수 있어요. 배송일자(렌탈개시일) 기준이에요.
+      </div>
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
+          <Field label="담당자">
+            <input style={inputStyle} value={manager} onChange={(e) => setManager(e.target.value)} placeholder="예: 김영업" />
+          </Field>
+          <Field label="거래처">
+            <input style={inputStyle} value={customer} onChange={(e) => setCustomer(e.target.value)} placeholder="예: 엔알비" />
+          </Field>
+          <Field label="기준일자(시작)">
+            <input type="date" style={inputStyle} value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+          </Field>
+          <Field label="기준일자(종료)">
+            <input type="date" style={inputStyle} value={toDate} onChange={(e) => setToDate(e.target.value)} />
+          </Field>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            {[
+              { key: "", label: "전체" },
+              { key: "rental", label: "렌탈" },
+              { key: "purchase", label: "구매" },
+            ].map((opt) => (
+              <button
+                key={opt.key}
+                onClick={() => setDealType(opt.key)}
+                style={{
+                  ...miniBtnStyle,
+                  background: dealType === opt.key ? C.ink : "transparent",
+                  color: dealType === opt.key ? "#fff" : C.inkSoft,
+                  borderColor: dealType === opt.key ? C.ink : C.line,
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ width: 1, alignSelf: "stretch", background: C.line }} />
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => setQuickRange("today")} style={miniBtnStyle}>금일</button>
+            <button onClick={() => setQuickRange("week")} style={miniBtnStyle}>금주(~오늘)</button>
+            <button onClick={() => setQuickRange("month")} style={miniBtnStyle}>금월(~오늘)</button>
+            <button onClick={() => setQuickRange("lastMonth")} style={miniBtnStyle}>전월</button>
+            <button onClick={() => setQuickRange("year")} style={miniBtnStyle}>금년(~오늘)</button>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
+        <StatCell label="건수" value={`${groups.length}건`} />
+        <StatCell label="공급가액 합계" value={fmtWonShort(totalSupply)} />
+        <StatCell label="부가세 합계" value={fmtWonShort(totalVat)} />
+        <StatCell label="합계(VAT포함)" value={fmtWonShort(totalWithVat)} color={C.green} last />
+      </div>
+
+      {byManager.length > 0 && (
+        <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginBottom: 16 }}>
+          <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>담당자별 집계</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+            {byManager.map((m) => (
+              <div
+                key={m.manager}
+                style={{ border: `1px solid ${C.lineSoft}`, padding: "8px 14px", minWidth: 160 }}
+              >
+                <div style={{ fontSize: 12.5, color: C.inkSoft }}>{m.manager}</div>
+                <div style={{ fontSize: 15, fontFamily: serif }}>{fmtWon(Math.round(m.amount * 1.1))}</div>
+                <div style={{ fontSize: 11.5, color: C.muted }}>{m.count}건</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
+        <div style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 900 }}>
+          <div>전표번호</div>
+          <div>거래처</div>
+          <div>담당자</div>
+          <div>구분</div>
+          <div>배송일자</div>
+          <div>품목수</div>
+          <div>공급가액</div>
+          <div>부가세</div>
+          <div>합계(VAT포함)</div>
+        </div>
+
+        {groups.map((g) => {
+          const vat = Math.round(g.amount * 0.1);
+          return (
+            <div
+              key={g.key}
+              style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 900 }}
+            >
+              <div>{g.voucherNo || "(번호없음)"}</div>
+              <div>{g.head.customer || "-"}</div>
+              <div>{g.head.manager || "-"}</div>
+              <div style={{ fontSize: 12.5 }}>{g.head.transaction_type === "rental" ? "렌탈" : "구매"}</div>
+              <div style={{ fontSize: 12.5 }}>{g.head.out_date || "-"}</div>
+              <div style={{ fontSize: 12.5 }}>{g.rows.length}건</div>
+              <div style={{ fontSize: 12.5 }}>{fmtWon(g.amount)}</div>
+              <div style={{ fontSize: 12.5 }}>{fmtWon(vat)}</div>
+              <div style={{ fontSize: 12.5, fontFamily: serif }}>{fmtWon(g.amount + vat)}</div>
+            </div>
+          );
+        })}
+
+        {groups.length === 0 && <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>조건에 맞는 매출 데이터가 없어요.</div>}
+      </div>
+    </div>
+  );
+}
+
+function CustomerDataTab({ rentals }) {
+  const now = new Date();
+  const curMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [fromMonth, setFromMonth] = useState(curMonth);
+  const [toMonth, setToMonth] = useState(curMonth);
+
+  // 시작월~종료월 사이의 "YYYY-MM" 목록 (그래프 X축, 월별 집계에 사용)
+  const monthKeys = useMemo(() => {
+    const keys = [];
+    if (!fromMonth || !toMonth) return keys;
+    const [fy, fm] = fromMonth.split("-").map(Number);
+    const [ty, tm] = toMonth.split("-").map(Number);
+    if (!fy || !fm || !ty || !tm) return keys;
+    if (fy > ty || (fy === ty && fm > tm)) return keys; // 시작이 종료보다 뒤면 빈 목록
+    let y = fy;
+    let m = fm;
+    let guard = 0;
+    while ((y < ty || (y === ty && m <= tm)) && guard < 120) {
+      keys.push(`${y}-${String(m).padStart(2, "0")}`);
+      m++;
+      if (m > 12) {
+        m = 1;
+        y++;
+      }
+      guard++;
+    }
+    return keys;
+  }, [fromMonth, toMonth]);
+
+  const searched = customerQuery.trim().length > 0 && monthKeys.length > 0;
+
+  const filteredRows = useMemo(() => {
+    if (!searched) return [];
+    const q = customerQuery.trim().toLowerCase();
+    const rangeFrom = `${monthKeys[0]}-01`;
+    const lastKey = monthKeys[monthKeys.length - 1];
+    const [ly, lm] = lastKey.split("-").map(Number);
+    const lastDay = new Date(ly, lm, 0).getDate();
+    const rangeTo = `${lastKey}-${String(lastDay).padStart(2, "0")}`;
+    return (rentals || []).filter((r) => {
+      if (!(r.customer || "").toLowerCase().includes(q)) return false;
+      if (!r.out_date || r.out_date < rangeFrom || r.out_date > rangeTo) return false;
+      return true;
+    });
+  }, [rentals, customerQuery, monthKeys, searched]);
+
+  const totalSupply = filteredRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const totalVat = Math.round(totalSupply * 0.1);
+  const totalWithVat = totalSupply + totalVat;
+
+  const chartData = useMemo(() => {
+    const byMonth = Object.fromEntries(monthKeys.map((k) => [k, 0]));
+    for (const r of filteredRows) {
+      const key = (r.out_date || "").slice(0, 7);
+      if (key in byMonth) byMonth[key] += Number(r.amount) || 0;
+    }
+    return monthKeys.map((k) => ({ month: k.slice(2).replace("-", "."), amount: byMonth[k] }));
+  }, [monthKeys, filteredRows]);
+
+  const groups = useMemo(() => {
+    const g = groupRentalsByVoucher(filteredRows);
+    g.sort((a, b) => (b.head.out_date || "").localeCompare(a.head.out_date || "") || (b.voucherNo || "").localeCompare(a.voucherNo || ""));
+    return g;
+  }, [filteredRows]);
+
+  return (
+    <div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>업체별 데이터</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+        업체명과 기간을 입력하면 그 기간 동안의 매출 합계와 월별 추이를 볼 수 있어요. (예: 무영씨엠 · 2026.08 ~ 2026.09)
+      </div>
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr", gap: 14 }}>
+          <Field label="업체명">
+            <input style={inputStyle} value={customerQuery} onChange={(e) => setCustomerQuery(e.target.value)} placeholder="예: 무영씨엠" />
+          </Field>
+          <Field label="기간(시작월)">
+            <input type="month" style={inputStyle} value={fromMonth} onChange={(e) => setFromMonth(e.target.value)} />
+          </Field>
+          <Field label="기간(종료월)">
+            <input type="month" style={inputStyle} value={toMonth} onChange={(e) => setToMonth(e.target.value)} />
+          </Field>
+        </div>
+      </div>
+
+      {!searched && (
+        <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 40, textAlign: "center", color: C.muted, fontSize: 13.5 }}>
+          업체명을 입력하면 결과가 나와요.
+        </div>
+      )}
+
+      {searched && (
+        <>
+          <div style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
+            <StatCell label="건수" value={`${groups.length}건`} />
+            <StatCell label="공급가액 합계" value={fmtWonShort(totalSupply)} />
+            <StatCell label="부가세 합계" value={fmtWonShort(totalVat)} />
+            <StatCell label="합계(VAT포함)" value={fmtWonShort(totalWithVat)} color={C.green} last />
+          </div>
+
+          <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: "20px 18px 8px", marginBottom: 16 }}>
+            <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>월별 매출 추이</div>
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.lineSoft} vertical={false} />
+                <XAxis dataKey="month" tick={{ fontSize: 12, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} />
+                <YAxis tickFormatter={(v) => fmtWonShort(v)} tick={{ fontSize: 11, fill: C.muted }} axisLine={false} tickLine={false} width={54} />
+                <Tooltip formatter={(v) => fmtWon(v)} labelStyle={{ color: C.ink }} contentStyle={{ fontSize: 12.5, border: `1px solid ${C.line}`, fontFamily: sans }} />
+                <Bar dataKey="amount" radius={[2, 2, 0, 0]}>
+                  {chartData.map((d, i) => (
+                    <Cell key={i} fill={C.ink} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
+            <div style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 900 }}>
+              <div>전표번호</div>
+              <div>거래처</div>
+              <div>담당자</div>
+              <div>구분</div>
+              <div>배송일자</div>
+              <div>품목수</div>
+              <div>공급가액</div>
+              <div>부가세</div>
+              <div>합계(VAT포함)</div>
+            </div>
+
+            {groups.map((g) => {
+              const vat = Math.round(g.amount * 0.1);
+              return (
+                <div
+                  key={g.key}
+                  style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 900 }}
+                >
+                  <div>{g.voucherNo || "(번호없음)"}</div>
+                  <div>{g.head.customer || "-"}</div>
+                  <div>{g.head.manager || "-"}</div>
+                  <div style={{ fontSize: 12.5 }}>{g.head.transaction_type === "rental" ? "렌탈" : "구매"}</div>
+                  <div style={{ fontSize: 12.5 }}>{g.head.out_date || "-"}</div>
+                  <div style={{ fontSize: 12.5 }}>{g.rows.length}건</div>
+                  <div style={{ fontSize: 12.5 }}>{fmtWon(g.amount)}</div>
+                  <div style={{ fontSize: 12.5 }}>{fmtWon(vat)}</div>
+                  <div style={{ fontSize: 12.5, fontFamily: serif }}>{fmtWon(g.amount + vat)}</div>
+                </div>
+              );
+            })}
+
+            {groups.length === 0 && <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>해당 기간에 이 업체의 매출 데이터가 없어요.</div>}
+          </div>
+        </>
+      )}
     </div>
   );
 }
