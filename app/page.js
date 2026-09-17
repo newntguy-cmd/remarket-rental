@@ -3181,16 +3181,22 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
 
 function CustomerDataTab({ rentals }) {
   const todayStr = todayISO();
+  const now0 = new Date();
   const monthStart = todayStr.slice(0, 7) + "-01";
+  const monthEnd = (() => {
+    const lastDay = new Date(now0.getFullYear(), now0.getMonth() + 1, 0).getDate();
+    return `${todayStr.slice(0, 7)}-${String(lastDay).padStart(2, "0")}`;
+  })();
 
   // 입력창에 타이핑하는 값(초안)과 실제로 검색에 적용된 값을 분리해서, "검색" 버튼을 눌러야 결과에 반영되게 한다.
+  // 기본 조회 기간은 이번달 1일 ~ 말일(월 전체)로 잡는다.
   const [customerInput, setCustomerInput] = useState("");
   const [fromDateInput, setFromDateInput] = useState(monthStart);
-  const [toDateInput, setToDateInput] = useState(todayStr);
+  const [toDateInput, setToDateInput] = useState(monthEnd);
 
   const [customerQuery, setCustomerQuery] = useState("");
   const [fromDate, setFromDate] = useState(monthStart);
-  const [toDate, setToDate] = useState(todayStr);
+  const [toDate, setToDate] = useState(monthEnd);
   const [hasSearched, setHasSearched] = useState(false); // 검색을 눌러야 결과가 나오게(false면 안내문구만 보여줌)
 
   function runSearch() {
@@ -3204,10 +3210,10 @@ function CustomerDataTab({ rentals }) {
   function resetFilters() {
     setCustomerInput("");
     setFromDateInput(monthStart);
-    setToDateInput(todayStr);
+    setToDateInput(monthEnd);
     setCustomerQuery("");
     setFromDate(monthStart);
-    setToDate(todayStr);
+    setToDate(monthEnd);
     setHasSearched(false);
   }
 
