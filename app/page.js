@@ -1029,6 +1029,9 @@ function Dashboard({ profile, onLogout }) {
   // 지분관리 화면은 목록/상세 중 어디에 있었는지를 자체적으로 기억하고 있어서, 메뉴의 "지분관리"를
   // 다시 눌러도(이미 그 탭이어도) 항상 목록 화면으로 되돌아가도록 이 값을 바꿔서 강제로 새로 마운트시킨다.
   const [sharesResetKey, setSharesResetKey] = useState(0);
+  // 렌탈내역도 마찬가지로, 메뉴의 "렌탈내역"을 다시 눌렀을 때(이미 그 탭이어도) 상세화면이 아니라
+  // 항상 목록 화면으로 되돌아가도록 이 값을 바꿔서 강제로 새로 마운트시킨다.
+  const [rentalsResetKey, setRentalsResetKey] = useState(0);
   const [loadingData, setLoadingData] = useState(true);
   const [importState, setImportState] = useState(null); // parsed preview
   const [importing, setImporting] = useState(false);
@@ -1156,6 +1159,7 @@ function Dashboard({ profile, onLogout }) {
               onClick={() => {
                 setActiveTab(m.key);
                 if (m.key === "shares") setSharesResetKey((k) => k + 1); // 지분관리는 눌릴 때마다 목록 화면으로 리셋
+                if (m.key === "rentals") setRentalsResetKey((k) => k + 1); // 렌탈내역도 눌릴 때마다 목록 화면으로 리셋
               }}
               style={{
                 display: "block",
@@ -1189,7 +1193,7 @@ function Dashboard({ profile, onLogout }) {
         )}
 
         {activeTab === "rentals" && isAdmin && (
-          <RentalListTab rentals={rentals} onRefresh={fetchRentals} />
+          <RentalListTab key={rentalsResetKey} rentals={rentals} onRefresh={fetchRentals} />
         )}
 
         {activeTab === "shares" && isAdmin && (
