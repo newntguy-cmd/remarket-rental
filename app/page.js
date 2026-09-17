@@ -3180,19 +3180,47 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
 }
 
 function CustomerDataTab({ rentals }) {
-  const now = new Date();
-  const curMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const todayStr = todayISO();
+  const monthStart = todayStr.slice(0, 7) + "-01";
+
+  // 입력창에 타이핑하는 값(초안)과 실제로 검색에 적용된 값을 분리해서, "검색" 버튼을 눌러야 결과에 반영되게 한다.
+  const [customerInput, setCustomerInput] = useState("");
+  const [fromDateInput, setFromDateInput] = useState(monthStart);
+  const [toDateInput, setToDateInput] = useState(todayStr);
 
   const [customerQuery, setCustomerQuery] = useState("");
-  const [fromMonth, setFromMonth] = useState(curMonth);
-  const [toMonth, setToMonth] = useState(curMonth);
+  const [fromDate, setFromDate] = useState(monthStart);
+  const [toDate, setToDate] = useState(todayStr);
+  const [hasSearched, setHasSearched] = useState(false); // 검색을 눌러야 결과가 나오게(false면 안내문구만 보여줌)
 
-  // 시작월~종료월 사이의 "YYYY-MM" 목록 (그래프 X축, 월별 집계에 사용)
+  function runSearch() {
+    addRecentValue("remarket_recent_customer", customerInput);
+    setCustomerQuery(customerInput);
+    setFromDate(fromDateInput);
+    setToDate(toDateInput);
+    setHasSearched(true);
+  }
+
+  function resetFilters() {
+    setCustomerInput("");
+    setFromDateInput(monthStart);
+    setToDateInput(todayStr);
+    setCustomerQuery("");
+    setFromDate(monthStart);
+    setToDate(todayStr);
+    setHasSearched(false);
+  }
+
+  const handleSearchKeyDown = (e) => {
+    if (e.key === "Enter") runSearch();
+  };
+
+  // 조회 기간(일 단위)이 걸쳐있는 월들의 "YYYY-MM" 목록 — 그래프 X축·월별 집계에만 쓰고, 실제 데이터 필터링은 일 단위(fromDate~toDate)로 한다.
   const monthKeys = useMemo(() => {
     const keys = [];
-    if (!fromMonth || !toMonth) return keys;
-    const [fy, fm] = fromMonth.split("-").map(Number);
-    const [ty, tm] = toMonth.split("-").map(Number);
+    if (!fromDate || !toDate) return keys;
+    const [fy, fm] = fromDate.slice(0, 7).split("-").map(Number);
+    const [ty, tm] = toDate.slice(0, 7).split("-").map(Number);
     if (!fy || !fm || !ty || !tm) return keys;
     if (fy > ty || (fy === ty && fm > tm)) return keys; // 시작이 종료보다 뒤면 빈 목록
     let y = fy;
@@ -3208,25 +3236,20 @@ function CustomerDataTab({ rentals }) {
       guard++;
     }
     return keys;
-  }, [fromMonth, toMonth]);
+  }, [fromDate, toDate]);
 
-  const searched = customerQuery.trim().length > 0 && monthKeys.length > 0;
+  const searched = hasSearched && customerQuery.trim().length > 0 && !!fromDate && !!toDate && fromDate <= toDate;
 
   const filteredRows = useMemo(() => {
     if (!searched) return [];
     const q = customerQuery.trim().toLowerCase();
-    const rangeFrom = `${monthKeys[0]}-01`;
-    const lastKey = monthKeys[monthKeys.length - 1];
-    const [ly, lm] = lastKey.split("-").map(Number);
-    const lastDay = new Date(ly, lm, 0).getDate();
-    const rangeTo = `${lastKey}-${String(lastDay).padStart(2, "0")}`;
     return (rentals || []).filter((r) => {
       if (!(r.customer || "").toLowerCase().includes(q)) return false;
       const d = (r.out_date || "").slice(0, 10);
-      if (!d || d < rangeFrom || d > rangeTo) return false;
+      if (!d || d < fromDate || d > toDate) return false;
       return true;
     });
-  }, [rentals, customerQuery, monthKeys, searched]);
+  }, [rentals, customerQuery, fromDate, toDate, searched]);
 
   const totalSupply = filteredRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
   const totalVat = Math.round(totalSupply * 0.1);
@@ -3251,7 +3274,7 @@ function CustomerDataTab({ rentals }) {
     <div>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>업체별 데이터</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
-        업체명과 기간을 입력하면 그 기간 동안의 매출 합계와 월별 추이를 볼 수 있어요. (예: 무영씨엠 · 2026.08 ~ 2026.09)
+        업체명과 기간을 입력하면 그 기간 동안의 매출 합계와 월별 추이를 볼 수 있어요. (예: 무영씨엠 · 2026-08-01 ~ 2026-09-16)
       </div>
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
@@ -3259,24 +3282,28 @@ function CustomerDataTab({ rentals }) {
           <Field label="업체명">
             <RecentValueInput
               storageKey="remarket_recent_customer"
-              value={customerQuery}
-              onChange={setCustomerQuery}
-              onBlur={() => addRecentValue("remarket_recent_customer", customerQuery)}
+              value={customerInput}
+              onChange={setCustomerInput}
+              onKeyDown={handleSearchKeyDown}
               placeholder="예: 무영씨엠"
             />
           </Field>
-          <Field label="기간(시작월)">
-            <input type="month" style={inputStyle} value={fromMonth} onChange={(e) => setFromMonth(e.target.value)} />
+          <Field label="기간(시작일)">
+            <input type="date" style={inputStyle} value={fromDateInput} onChange={(e) => setFromDateInput(e.target.value)} />
           </Field>
-          <Field label="기간(종료월)">
-            <input type="month" style={inputStyle} value={toMonth} onChange={(e) => setToMonth(e.target.value)} />
+          <Field label="기간(종료일)">
+            <input type="date" style={inputStyle} value={toDateInput} onChange={(e) => setToDateInput(e.target.value)} />
           </Field>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <button onClick={runSearch} style={primaryBtnStyle2}>검색</button>
+          <button onClick={resetFilters} style={ghostBtnStyle}>초기화</button>
         </div>
       </div>
 
       {!searched && (
         <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 40, textAlign: "center", color: C.muted, fontSize: 13.5 }}>
-          업체명을 입력하면 결과가 나와요.
+          업체명을 입력하고 "검색" 버튼을 누르면 결과가 나와요.
         </div>
       )}
 
