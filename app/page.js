@@ -2405,6 +2405,7 @@ function SalesStatusTab({ rentals }) {
   const [toDateInput, setToDateInput] = useState(monthEnd);
   const [dealType, setDealType] = useState(""); // "" | "rental" | "purchase" — 버튼이라 클릭 즉시 적용
   const [applied, setApplied] = useState(defaultFilters);
+  const [hasSearched, setHasSearched] = useState(false); // 검색을 눌러야 결과가 나오게(false면 목록을 아예 안 보여줌)
 
   function runSearch(overrides) {
     setApplied({
@@ -2415,6 +2416,7 @@ function SalesStatusTab({ rentals }) {
       toDate: toDateInput,
       ...overrides,
     });
+    setHasSearched(true);
   }
 
   function resetFilters() {
@@ -2424,6 +2426,7 @@ function SalesStatusTab({ rentals }) {
     setToDateInput(monthEnd);
     setDealType("");
     setApplied(defaultFilters);
+    setHasSearched(false);
   }
 
   function setQuickRange(kind) {
@@ -2571,66 +2574,76 @@ function SalesStatusTab({ rentals }) {
         </div>
       </div>
 
-      <div style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
-        <StatCell label="건수" value={`${groups.length}건`} />
-        <StatCell label="공급가액 합계" value={fmtWonShort(totalSupply)} />
-        <StatCell label="부가세 합계" value={fmtWonShort(totalVat)} />
-        <StatCell label="합계(VAT포함)" value={fmtWonShort(totalWithVat)} color={C.green} last />
-      </div>
-
-      {byManager.length > 0 && (
-        <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginBottom: 16 }}>
-          <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>담당자별 집계</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-            {byManager.map((m) => (
-              <div
-                key={m.manager}
-                style={{ border: `1px solid ${C.lineSoft}`, padding: "8px 14px", minWidth: 160 }}
-              >
-                <div style={{ fontSize: 12.5, color: C.inkSoft }}>{m.manager}</div>
-                <div style={{ fontSize: 15, fontFamily: serif }}>{fmtWon(Math.round(m.amount * 1.1))}</div>
-                <div style={{ fontSize: 11.5, color: C.muted }}>{m.count}건</div>
-              </div>
-            ))}
-          </div>
+      {!hasSearched && (
+        <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 40, textAlign: "center", color: C.muted, fontSize: 13.5 }}>
+          "검색" 버튼을 누르면 결과가 나와요.
         </div>
       )}
 
-      <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
-        <div style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 900 }}>
-          <div>전표번호</div>
-          <div>거래처</div>
-          <div>담당자</div>
-          <div>구분</div>
-          <div>배송일자</div>
-          <div>품목수</div>
-          <div>공급가액</div>
-          <div>부가세</div>
-          <div>합계(VAT포함)</div>
-        </div>
+      {hasSearched && (
+        <>
+          <div style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
+            <StatCell label="건수" value={`${groups.length}건`} />
+            <StatCell label="공급가액 합계" value={fmtWon(totalSupply)} />
+            <StatCell label="부가세 합계" value={fmtWon(totalVat)} />
+            <StatCell label="합계(VAT포함)" value={fmtWon(totalWithVat)} color={C.green} last />
+          </div>
 
-        {groups.map((g) => {
-          const vat = Math.round(g.amount * 0.1);
-          return (
-            <div
-              key={g.key}
-              style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 900 }}
-            >
-              <div>{g.voucherNo || "(번호없음)"}</div>
-              <div>{g.head.customer || "-"}</div>
-              <div>{g.head.manager || "-"}</div>
-              <div style={{ fontSize: 12.5 }}>{g.head.transaction_type === "rental" ? "렌탈" : "구매"}</div>
-              <div style={{ fontSize: 12.5 }}>{g.head.out_date || "-"}</div>
-              <div style={{ fontSize: 12.5 }}>{g.rows.length}건</div>
-              <div style={{ fontSize: 12.5 }}>{fmtWon(g.amount)}</div>
-              <div style={{ fontSize: 12.5 }}>{fmtWon(vat)}</div>
-              <div style={{ fontSize: 12.5, fontFamily: serif }}>{fmtWon(g.amount + vat)}</div>
+          {byManager.length > 0 && (
+            <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginBottom: 16 }}>
+              <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>담당자별 집계</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                {byManager.map((m) => (
+                  <div
+                    key={m.manager}
+                    style={{ border: `1px solid ${C.lineSoft}`, padding: "8px 14px", minWidth: 160 }}
+                  >
+                    <div style={{ fontSize: 12.5, color: C.inkSoft }}>{m.manager}</div>
+                    <div style={{ fontSize: 15, fontFamily: serif }}>{fmtWon(Math.round(m.amount * 1.1))}</div>
+                    <div style={{ fontSize: 11.5, color: C.muted }}>{m.count}건</div>
+                  </div>
+                ))}
+              </div>
             </div>
-          );
-        })}
+          )}
 
-        {groups.length === 0 && <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>조건에 맞는 매출 데이터가 없어요.</div>}
-      </div>
+          <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
+            <div style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 900 }}>
+              <div>전표번호</div>
+              <div>거래처</div>
+              <div>담당자</div>
+              <div>구분</div>
+              <div>배송일자</div>
+              <div>품목수</div>
+              <div>공급가액</div>
+              <div>부가세</div>
+              <div>합계(VAT포함)</div>
+            </div>
+
+            {groups.map((g) => {
+              const vat = Math.round(g.amount * 0.1);
+              return (
+                <div
+                  key={g.key}
+                  style={{ display: "grid", gridTemplateColumns: salesListGrid, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 900 }}
+                >
+                  <div>{g.voucherNo || "(번호없음)"}</div>
+                  <div>{g.head.customer || "-"}</div>
+                  <div>{g.head.manager || "-"}</div>
+                  <div style={{ fontSize: 12.5 }}>{g.head.transaction_type === "rental" ? "렌탈" : "구매"}</div>
+                  <div style={{ fontSize: 12.5 }}>{g.head.out_date || "-"}</div>
+                  <div style={{ fontSize: 12.5 }}>{g.rows.length}건</div>
+                  <div style={{ fontSize: 12.5 }}>{fmtWon(g.amount)}</div>
+                  <div style={{ fontSize: 12.5 }}>{fmtWon(vat)}</div>
+                  <div style={{ fontSize: 12.5, fontFamily: serif }}>{fmtWon(g.amount + vat)}</div>
+                </div>
+              );
+            })}
+
+            {groups.length === 0 && <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>조건에 맞는 매출 데이터가 없어요.</div>}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -2734,9 +2747,9 @@ function CustomerDataTab({ rentals }) {
         <>
           <div style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
             <StatCell label="건수" value={`${groups.length}건`} />
-            <StatCell label="공급가액 합계" value={fmtWonShort(totalSupply)} />
-            <StatCell label="부가세 합계" value={fmtWonShort(totalVat)} />
-            <StatCell label="합계(VAT포함)" value={fmtWonShort(totalWithVat)} color={C.green} last />
+            <StatCell label="공급가액 합계" value={fmtWon(totalSupply)} />
+            <StatCell label="부가세 합계" value={fmtWon(totalVat)} />
+            <StatCell label="합계(VAT포함)" value={fmtWon(totalWithVat)} color={C.green} last />
           </div>
 
           <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: "20px 18px 8px", marginBottom: 16 }}>
