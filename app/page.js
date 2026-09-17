@@ -948,8 +948,16 @@ export default function Home() {
   return <Dashboard profile={profile} onLogout={() => supabase.auth.signOut()} />;
 }
 
+// 로그인 아이디에 "@"가 없으면(직원용 짧은 아이디, 예: re001) 내부적으로 가짜 도메인을 붙여
+// 이메일 형식으로 만들어 로그인한다. "@"가 포함돼 있으면(실제 이메일) 입력값을 그대로 쓴다.
+const STAFF_LOGIN_DOMAIN = "remarket-staff.local";
+function resolveLoginEmail(idOrEmail) {
+  const v = (idOrEmail || "").trim();
+  return v.includes("@") ? v : `${v}@${STAFF_LOGIN_DOMAIN}`;
+}
+
 function LoginScreen() {
-  const [email, setEmail] = useState("");
+  const [idOrEmail, setIdOrEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -958,9 +966,9 @@ function LoginScreen() {
     e.preventDefault();
     setBusy(true);
     setErr("");
-    const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
+    const { error } = await supabase.auth.signInWithPassword({ email: resolveLoginEmail(idOrEmail), password: pw });
     setBusy(false);
-    if (error) setErr("이메일 또는 비밀번호가 올바르지 않습니다.");
+    if (error) setErr("아이디 또는 비밀번호가 올바르지 않습니다.");
   };
 
   return (
@@ -973,8 +981,8 @@ function LoginScreen() {
           </div>
         </div>
         <form onSubmit={submit} style={{ background: C.panel, border: `1px solid ${C.line}`, padding: 28 }}>
-          <Field label="이메일">
-            <input value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} placeholder="admin@remarket.co.kr" autoFocus />
+          <Field label="아이디">
+            <input value={idOrEmail} onChange={(e) => setIdOrEmail(e.target.value)} style={inputStyle} placeholder="예: re001" autoFocus />
           </Field>
           <Field label="비밀번호">
             <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} style={inputStyle} placeholder="••••••••" />
@@ -1022,6 +1030,9 @@ function StatCell({ label, value, color, active, onClick, last }) {
 
 function Dashboard({ profile, onLogout }) {
   const isAdmin = profile.role === "admin";
+  const isSales = profile.role === "sales"; // 영업담당자 계정: 본인 담당자명과 일치하는 데이터만 보고 관리할 수 있음
+  const isStaff = isAdmin || isSales; // 내부 직원(관리자+영업담당자)은 같은 화면 구성을 쓰고, 실제 데이터 범위는 DB 권한(RLS)이 갈라준다.
+  const managerName = profile.manager_name || "";
   const [rentals, setRentals] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [shares, setShares] = useState([]);
@@ -1067,6 +1078,8 @@ function Dashboard({ profile, onLogout }) {
     try {
       const parsed = isPdf ? await parseQuotePdf(file) : await parseQuoteExcel(file);
       parsed.voucherNo = nextVoucherNo(rentals); // 전표번호는 오늘 날짜 기준 자동 일련번호로 강제 부여
+      // 영업담당자 계정은 견적서에 어떤 이름이 적혀 있든 항상 본인 이름으로 담당자를 고정한다(다른 사람 이름으로 잘못 등록되는 것을 방지).
+      if (!isAdmin) parsed.manager = managerName;
       setImportState(parsed);
       if (isPdf && parsed.items.length === 0) {
         alert("PDF에서 품목을 인식하지 못했어요. 표 형식이 다를 수 있으니 아래 내용을 직접 채워주시거나 엑셀 버전으로 올려주세요.");
@@ -1130,11 +1143,11 @@ function Dashboard({ profile, onLogout }) {
   }
 
   const menuItems = [
-    ...(isAdmin ? [{ key: "quote", label: "견적서 업로드" }] : []),
-    ...(isAdmin ? [{ key: "rentals", label: "렌탈내역" }] : []),
-    ...(isAdmin ? [{ key: "shares", label: "지분관리" }] : []),
-    ...(isAdmin ? [{ key: "sales", label: "판매현황" }] : []),
-    ...(isAdmin ? [{ key: "customerData", label: "업체별데이터" }] : []),
+    ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
+    ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
+    ...(isStaff ? [{ key: "shares", label: "지분관리" }] : []),
+    ...(isStaff ? [{ key: "sales", label: "판매현황" }] : []),
+    ...(isStaff ? [{ key: "customerData", label: "업체별데이터" }] : []),
   ];
 
   return (
@@ -1145,7 +1158,7 @@ function Dashboard({ profile, onLogout }) {
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <div style={{ fontSize: 13, color: C.inkSoft, textAlign: "right" }}>
               <div style={{ color: C.ink }}>{profile.name}</div>
-              <div style={{ fontSize: 11.5 }}>{isAdmin ? "관리자" : `${profile.company} 담당자`}</div>
+              <div style={{ fontSize: 11.5 }}>{isAdmin ? "관리자" : isSales ? `${managerName} 담당자` : `${profile.company} 담당자`}</div>
             </div>
             <button onClick={onLogout} style={ghostBtnStyle}>로그아웃</button>
           </div>
@@ -1184,7 +1197,7 @@ function Dashboard({ profile, onLogout }) {
         </aside>
 
         <div style={{ flex: 1, minWidth: 0 }}>
-        {activeTab === "quote" && isAdmin && (
+        {activeTab === "quote" && isStaff && (
           <QuoteUploadPanel
             importState={importState}
             onFile={processQuoteFile}
@@ -1192,26 +1205,27 @@ function Dashboard({ profile, onLogout }) {
             onConfirm={confirmImport}
             importing={importing}
             setImportState={setImportState}
+            isAdmin={isAdmin}
           />
         )}
 
-        {activeTab === "rentals" && isAdmin && (
-          <RentalListTab key={rentalsResetKey} rentals={rentals} onRefresh={fetchRentals} />
+        {activeTab === "rentals" && isStaff && (
+          <RentalListTab key={rentalsResetKey} rentals={rentals} onRefresh={fetchRentals} isAdmin={isAdmin} managerName={managerName} />
         )}
 
-        {activeTab === "shares" && isAdmin && (
+        {activeTab === "shares" && isStaff && (
           <EquityTab key={sharesResetKey} rentals={rentals} shares={shares} onRefresh={fetchShares} />
         )}
 
-        {activeTab === "sales" && isAdmin && (
-          <SalesStatusTab key={salesResetKey} rentals={rentals} onRefresh={fetchRentals} />
+        {activeTab === "sales" && isStaff && (
+          <SalesStatusTab key={salesResetKey} rentals={rentals} onRefresh={fetchRentals} isAdmin={isAdmin} managerName={managerName} />
         )}
 
-        {activeTab === "customerData" && isAdmin && (
+        {activeTab === "customerData" && isStaff && (
           <CustomerDataTab rentals={rentals} />
         )}
 
-        {!isAdmin && (
+        {!isStaff && (
           <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 40, textAlign: "center", color: C.muted, fontSize: 13.5 }}>
             현재 화면을 새로 만드는 중이에요. 곧 이용하실 수 있어요.
           </div>
@@ -1566,7 +1580,7 @@ function QuoteDropZone({ onFile, hasData }) {
   );
 }
 
-function QuoteHeaderForm({ state, update }) {
+function QuoteHeaderForm({ state, update, isAdmin = true }) {
   const isRental = state.transactionType === "rental";
   return (
     <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
@@ -1581,8 +1595,12 @@ function QuoteHeaderForm({ state, update }) {
         <Field label="전표번호 (오늘 날짜 기준 자동 부여, 일련번호라 수정 불필요)">
           <input style={{ ...inputStyle, background: C.mutedBg, color: C.inkSoft }} value={state.voucherNo || ""} readOnly />
         </Field>
-        <Field label="담당자">
-          <input style={inputStyle} value={state.manager || ""} onChange={(e) => update({ manager: e.target.value })} placeholder="예: 김영업" />
+        <Field label={isAdmin ? "담당자" : "담당자 (본인 계정으로 고정)"}>
+          {isAdmin ? (
+            <input style={inputStyle} value={state.manager || ""} onChange={(e) => update({ manager: e.target.value })} placeholder="예: 김영업" />
+          ) : (
+            <input style={{ ...inputStyle, background: C.mutedBg, color: C.inkSoft }} value={state.manager || ""} readOnly />
+          )}
         </Field>
         <Field label="거래처">
           <input style={inputStyle} value={state.customer || ""} onChange={(e) => update({ customer: e.target.value })} placeholder="예: 한우리건설" />
@@ -1671,7 +1689,7 @@ function QuoteHeaderForm({ state, update }) {
   );
 }
 
-function QuoteUploadPanel({ importState, setImportState, onFile, onCancel, onConfirm, importing }) {
+function QuoteUploadPanel({ importState, setImportState, onFile, onCancel, onConfirm, importing, isAdmin = true }) {
   const update = (patch) => setImportState({ ...importState, ...patch });
 
   return (
@@ -1685,7 +1703,7 @@ function QuoteUploadPanel({ importState, setImportState, onFile, onCancel, onCon
 
       {importState && (
         <>
-          <QuoteHeaderForm state={importState} update={update} />
+          <QuoteHeaderForm state={importState} update={update} isAdmin={isAdmin} />
           <ImportPreview state={importState} setState={setImportState} onCancel={onCancel} onConfirm={onConfirm} importing={importing} />
         </>
       )}
@@ -1871,7 +1889,7 @@ const emptyAdvSearch = {
   status: "",
 };
 
-function RentalListTab({ rentals, onRefresh }) {
+function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "" }) {
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState(null);
   const [checkedKeys, setCheckedKeys] = useState(new Set());
@@ -1970,6 +1988,8 @@ function RentalListTab({ rentals, onRefresh }) {
           onRefresh();
           setSelectedKey(null);
         }}
+        isAdmin={isAdmin}
+        managerName={managerName}
       />
     );
   }
@@ -2187,7 +2207,7 @@ function RentalListTab({ rentals, onRefresh }) {
   );
 }
 
-function RentalDetailPanel({ group, onClose, onSaved }) {
+function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerName = "" }) {
   const [header, setHeader] = useState(() => ({
     voucherNo: group.head.voucher_no || "",
     transactionType: group.head.transaction_type || "rental",
@@ -2342,8 +2362,12 @@ function RentalDetailPanel({ group, onClose, onSaved }) {
           <Field label="전표번호">
             <input style={inputStyle} value={header.voucherNo} onChange={(e) => update({ voucherNo: e.target.value })} />
           </Field>
-          <Field label="담당자">
-            <input style={inputStyle} value={header.manager} onChange={(e) => update({ manager: e.target.value })} />
+          <Field label={isAdmin ? "담당자" : "담당자 (본인 계정으로 고정)"}>
+            {isAdmin ? (
+              <input style={inputStyle} value={header.manager} onChange={(e) => update({ manager: e.target.value })} />
+            ) : (
+              <input style={{ ...inputStyle, background: C.mutedBg, color: C.inkSoft }} value={header.manager} readOnly />
+            )}
           </Field>
           <Field label="거래처">
             <input style={inputStyle} value={header.customer} onChange={(e) => update({ customer: e.target.value })} />
@@ -2868,7 +2892,7 @@ const salesListGrid = "120px 130px 90px 60px 100px 70px 120px 100px 120px";
 // 판매현황 목록에만 렌탈종료일자 칸이 하나 더 있다(업체별데이터 목록은 salesListGrid를 그대로 씀).
 const salesListGridWithDue = "120px 130px 90px 60px 100px 100px 70px 120px 100px 120px";
 
-function SalesStatusTab({ rentals, onRefresh }) {
+function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }) {
   const [selectedVoucherKey, setSelectedVoucherKey] = useState(null);
   const todayStr = todayISO();
   const now0 = new Date();
@@ -2998,6 +3022,8 @@ function SalesStatusTab({ rentals, onRefresh }) {
           onRefresh && onRefresh();
           setSelectedVoucherKey(null);
         }}
+        isAdmin={isAdmin}
+        managerName={managerName}
       />
     );
   }
