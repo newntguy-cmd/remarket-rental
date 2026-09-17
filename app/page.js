@@ -553,7 +553,9 @@ function pdfParseNum(str) {
 
 async function parseQuotePdf(file) {
   const pdfjsLib = await import("pdfjs-dist/build/pdf.mjs");
-  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+  // 워커 파일을 프로젝트 번들 안에 직접 넣으면 Vercel 빌드 압축 도구(Terser)가 이 파일의 최신 모듈 문법을
+  // 처리하지 못해 빌드가 실패한다. 그래서 번들에 포함시키지 않고 CDN 주소를 그대로 가리키게 한다.
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
   const buf = await file.arrayBuffer();
   const doc = await pdfjsLib.getDocument({ data: buf }).promise;
