@@ -2390,49 +2390,86 @@ const salesListGrid = "120px 130px 90px 60px 100px 70px 120px 100px 120px";
 function SalesStatusTab({ rentals }) {
   const todayStr = todayISO();
   const monthStart = todayStr.slice(0, 7) + "-01";
+  const defaultFilters = { manager: "", customer: "", dealType: "", fromDate: monthStart, toDate: todayStr };
 
-  const [manager, setManager] = useState("");
-  const [customer, setCustomer] = useState("");
-  const [dealType, setDealType] = useState(""); // "" | "rental" | "purchase"
-  const [fromDate, setFromDate] = useState(monthStart);
-  const [toDate, setToDate] = useState(todayStr);
+  // 입력창에 타이핑하는 값(초안)과 실제로 검색에 적용된 값을 분리해서, "검색" 버튼을 눌러야 목록에 반영되게 한다.
+  const [managerInput, setManagerInput] = useState("");
+  const [customerInput, setCustomerInput] = useState("");
+  const [fromDateInput, setFromDateInput] = useState(monthStart);
+  const [toDateInput, setToDateInput] = useState(todayStr);
+  const [dealType, setDealType] = useState(""); // "" | "rental" | "purchase" — 버튼이라 클릭 즉시 적용
+  const [applied, setApplied] = useState(defaultFilters);
+
+  function runSearch(overrides) {
+    setApplied({
+      manager: managerInput,
+      customer: customerInput,
+      dealType,
+      fromDate: fromDateInput,
+      toDate: toDateInput,
+      ...overrides,
+    });
+  }
+
+  function resetFilters() {
+    setManagerInput("");
+    setCustomerInput("");
+    setFromDateInput(monthStart);
+    setToDateInput(todayStr);
+    setDealType("");
+    setApplied(defaultFilters);
+  }
 
   function setQuickRange(kind) {
     const now = new Date();
+    let nextFrom = fromDateInput;
+    let nextTo = toDateInput;
     if (kind === "today") {
-      setFromDate(todayStr);
-      setToDate(todayStr);
+      nextFrom = todayStr;
+      nextTo = todayStr;
     } else if (kind === "week") {
       const day = now.getDay();
       const diffToMon = day === 0 ? 6 : day - 1;
-      setFromDate(addDays(todayStr, -diffToMon));
-      setToDate(todayStr);
+      nextFrom = addDays(todayStr, -diffToMon);
+      nextTo = todayStr;
     } else if (kind === "month") {
-      setFromDate(monthStart);
-      setToDate(todayStr);
+      nextFrom = monthStart;
+      nextTo = todayStr;
     } else if (kind === "lastMonth") {
       const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, "0");
       const lastDay = new Date(y, d.getMonth() + 1, 0).getDate();
-      setFromDate(`${y}-${m}-01`);
-      setToDate(`${y}-${m}-${String(lastDay).padStart(2, "0")}`);
+      nextFrom = `${y}-${m}-01`;
+      nextTo = `${y}-${m}-${String(lastDay).padStart(2, "0")}`;
     } else if (kind === "year") {
-      setFromDate(`${now.getFullYear()}-01-01`);
-      setToDate(todayStr);
+      nextFrom = `${now.getFullYear()}-01-01`;
+      nextTo = todayStr;
     }
+    setFromDateInput(nextFrom);
+    setToDateInput(nextTo);
+    runSearch({ fromDate: nextFrom, toDate: nextTo }); // 빠른선택 버튼은 클릭 즉시 검색까지 적용
   }
+
+  function setDealTypeAndSearch(key) {
+    setDealType(key);
+    runSearch({ dealType: key }); // 구분 버튼도 클릭 즉시 검색까지 적용
+  }
+
+  const handleSearchKeyDown = (e) => {
+    if (e.key === "Enter") runSearch();
+  };
 
   const filteredRows = useMemo(() => {
     return (rentals || []).filter((r) => {
-      if (fromDate && (!r.out_date || r.out_date < fromDate)) return false;
-      if (toDate && (!r.out_date || r.out_date > toDate)) return false;
-      if (manager.trim() && !(r.manager || "").toLowerCase().includes(manager.trim().toLowerCase())) return false;
-      if (customer.trim() && !(r.customer || "").toLowerCase().includes(customer.trim().toLowerCase())) return false;
-      if (dealType && r.transaction_type !== dealType) return false;
+      if (applied.fromDate && (!r.out_date || r.out_date < applied.fromDate)) return false;
+      if (applied.toDate && (!r.out_date || r.out_date > applied.toDate)) return false;
+      if (applied.manager.trim() && !(r.manager || "").toLowerCase().includes(applied.manager.trim().toLowerCase())) return false;
+      if (applied.customer.trim() && !(r.customer || "").toLowerCase().includes(applied.customer.trim().toLowerCase())) return false;
+      if (applied.dealType && r.transaction_type !== applied.dealType) return false;
       return true;
     });
-  }, [rentals, fromDate, toDate, manager, customer, dealType]);
+  }, [rentals, applied]);
 
   const groups = useMemo(() => {
     const g = groupRentalsByVoucher(filteredRows);
@@ -2466,19 +2503,31 @@ function SalesStatusTab({ rentals }) {
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
           <Field label="담당자">
-            <input style={inputStyle} value={manager} onChange={(e) => setManager(e.target.value)} placeholder="예: 김영업" />
+            <input
+              style={inputStyle}
+              value={managerInput}
+              onChange={(e) => setManagerInput(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder="예: 김영업"
+            />
           </Field>
           <Field label="거래처">
-            <input style={inputStyle} value={customer} onChange={(e) => setCustomer(e.target.value)} placeholder="예: 엔알비" />
+            <input
+              style={inputStyle}
+              value={customerInput}
+              onChange={(e) => setCustomerInput(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder="예: 엔알비"
+            />
           </Field>
           <Field label="기준일자(시작)">
-            <input type="date" style={inputStyle} value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+            <input type="date" style={inputStyle} value={fromDateInput} onChange={(e) => setFromDateInput(e.target.value)} />
           </Field>
           <Field label="기준일자(종료)">
-            <input type="date" style={inputStyle} value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            <input type="date" style={inputStyle} value={toDateInput} onChange={(e) => setToDateInput(e.target.value)} />
           </Field>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 14 }}>
           <div style={{ display: "flex", gap: 6 }}>
             {[
               { key: "", label: "전체" },
@@ -2487,7 +2536,7 @@ function SalesStatusTab({ rentals }) {
             ].map((opt) => (
               <button
                 key={opt.key}
-                onClick={() => setDealType(opt.key)}
+                onClick={() => setDealTypeAndSearch(opt.key)}
                 style={{
                   ...miniBtnStyle,
                   background: dealType === opt.key ? C.ink : "transparent",
@@ -2507,6 +2556,10 @@ function SalesStatusTab({ rentals }) {
             <button onClick={() => setQuickRange("lastMonth")} style={miniBtnStyle}>전월</button>
             <button onClick={() => setQuickRange("year")} style={miniBtnStyle}>금년(~오늘)</button>
           </div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => runSearch()} style={primaryBtnStyle2}>검색</button>
+          <button onClick={resetFilters} style={ghostBtnStyle}>초기화</button>
         </div>
       </div>
 
