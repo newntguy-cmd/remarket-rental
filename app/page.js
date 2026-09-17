@@ -2366,7 +2366,7 @@ function RentalDetailPanel({ group, onClose, onSaved }) {
 }
 
 // ---------- 지분사 관리 ----------
-const equityListGrid = "28px 140px 140px 130px 1fr 130px";
+const equityListGrid = "28px 140px 140px 130px 1fr 130px 170px";
 
 function EquityTab({ rentals, shares, onRefresh }) {
   const [query, setQuery] = useState("");
@@ -2491,6 +2491,7 @@ function EquityTab({ rentals, shares, onRefresh }) {
           <div>총금액(VAT포함)</div>
           <div>지분사</div>
           <div>지분사 몫</div>
+          <div>세금계산서 · 입금</div>
         </div>
 
         {filtered.map((g) => {
@@ -2498,6 +2499,8 @@ function EquityTab({ rentals, shares, onRefresh }) {
           const totalPercent = rows.reduce((s, r) => s + (Number(r.share_percent) || 0), 0);
           const amountVat = Math.round(g.amount * 1.1);
           const partnerAmount = Math.round(amountVat * (totalPercent / 100));
+          const issuedCount = rows.filter((r) => r.tax_invoice_issued).length;
+          const paidCount = rows.filter((r) => r.paid).length;
           return (
             <div
               key={g.key}
@@ -2518,6 +2521,17 @@ function EquityTab({ rentals, shares, onRefresh }) {
                 {rows.length === 0 ? <span style={{ color: C.muted }}>{g.head.customer || "거래처"} 100%</span> : rows.map((r) => `${r.partner_name} ${r.share_percent}%`).join(", ")}
               </div>
               <div style={{ fontSize: 12.5 }}>{rows.length === 0 ? "-" : fmtWon(partnerAmount)}</div>
+              <div style={{ fontSize: 12.5 }}>
+                {rows.length === 0 ? (
+                  <span style={{ color: C.muted }}>-</span>
+                ) : (
+                  <>
+                    <span style={{ color: issuedCount === rows.length ? C.green : C.brick }}>{issuedCount}/{rows.length}</span>
+                    {" · "}
+                    <span style={{ color: paidCount === rows.length ? C.green : C.brick }}>{paidCount}/{rows.length}</span>
+                  </>
+                )}
+              </div>
             </div>
           );
         })}
@@ -2529,7 +2543,16 @@ function EquityTab({ rentals, shares, onRefresh }) {
 }
 
 function EquityDetailPanel({ group, shares, onClose, onSaved }) {
-  const [rows, setRows] = useState(() => shares.map((s) => ({ id: s.id, partnerName: s.partner_name, sharePercent: s.share_percent, note: s.note || "" })));
+  const [rows, setRows] = useState(() =>
+    shares.map((s) => ({
+      id: s.id,
+      partnerName: s.partner_name,
+      sharePercent: s.share_percent,
+      note: s.note || "",
+      taxInvoiceIssued: !!s.tax_invoice_issued,
+      paid: !!s.paid,
+    }))
+  );
   const [saving, setSaving] = useState(false);
   const totalAmount = group.amount;
   const totalAmountVat = Math.round(totalAmount * 1.1);
@@ -2553,7 +2576,8 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
     next[idx] = { ...next[idx], ...patch };
     setRows(next);
   };
-  const addRow = () => setRows([...rows, { id: null, partnerName: rows.length === 0 ? "주관사" : "", sharePercent: "", note: "" }]);
+  const addRow = () =>
+    setRows([...rows, { id: null, partnerName: rows.length === 0 ? "주관사" : "", sharePercent: "", note: "", taxInvoiceIssued: false, paid: false }]);
   const removeRow = (idx) => setRows(rows.filter((_, i) => i !== idx));
 
   const totalPercent = rows.reduce((s, r) => s + (Number(r.sharePercent) || 0), 0);
@@ -2584,7 +2608,13 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
     for (const r of rows.filter((x) => x.id)) {
       await supabase
         .from("voucher_shares")
-        .update({ partner_name: r.partnerName, share_percent: r.sharePercent === "" ? 0 : Number(r.sharePercent), note: r.note })
+        .update({
+          partner_name: r.partnerName,
+          share_percent: r.sharePercent === "" ? 0 : Number(r.sharePercent),
+          note: r.note,
+          tax_invoice_issued: r.taxInvoiceIssued,
+          paid: r.paid,
+        })
         .eq("id", r.id);
     }
 
@@ -2595,6 +2625,8 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
         partner_name: r.partnerName,
         share_percent: r.sharePercent === "" ? 0 : Number(r.sharePercent),
         note: r.note,
+        tax_invoice_issued: r.taxInvoiceIssued,
+        paid: r.paid,
       }));
       const { error } = await supabase.from("voucher_shares").insert(insertRows);
       if (error) {
@@ -2643,12 +2675,14 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
         )}
 
         {rows.length > 0 && (
-          <div style={{ border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 130px 1fr 32px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
+          <div style={{ border: `1px solid ${C.lineSoft}`, marginBottom: 12, overflowX: "auto" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 130px 1fr 80px 70px 32px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}`, minWidth: 720 }}>
               <div>지분사명</div>
               <div>지분율(%)</div>
               <div>지분금액</div>
               <div>비고</div>
+              <div>세금계산서</div>
+              <div>입금</div>
               <div></div>
             </div>
             {rows.map((r, idx) => {
@@ -2656,7 +2690,7 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
               return (
                 <div
                   key={r.id ?? `new-${idx}`}
-                  style={{ display: "grid", gridTemplateColumns: "1fr 90px 130px 1fr 32px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}
+                  style={{ display: "grid", gridTemplateColumns: "1fr 90px 130px 1fr 80px 70px 32px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 720 }}
                 >
                   <input style={smallInputStyle} value={r.partnerName} onChange={(e) => updateRow(idx, { partnerName: e.target.value })} placeholder="예: OO투자" />
                   <input
@@ -2670,6 +2704,12 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
                   />
                   <div style={{ fontSize: 12.5 }}>{fmtWon(amount)}</div>
                   <input style={smallInputStyle} value={r.note || ""} onChange={(e) => updateRow(idx, { note: e.target.value })} placeholder="선택 입력" />
+                  <div style={{ textAlign: "center" }}>
+                    <input type="checkbox" checked={r.taxInvoiceIssued} onChange={(e) => updateRow(idx, { taxInvoiceIssued: e.target.checked })} />
+                  </div>
+                  <div style={{ textAlign: "center" }}>
+                    <input type="checkbox" checked={r.paid} onChange={(e) => updateRow(idx, { paid: e.target.checked })} />
+                  </div>
                   <button onClick={() => removeRow(idx)} style={{ background: "none", border: "none", color: C.brick, cursor: "pointer", fontSize: 13 }}>✕</button>
                 </div>
               );
