@@ -909,6 +909,9 @@ function Dashboard({ profile, onLogout }) {
   const [customers, setCustomers] = useState([]);
   const [shares, setShares] = useState([]);
   const [activeTab, setActiveTab] = useState("quote"); // 지금은 "quote" 하나뿐. 메뉴는 하나씩 다시 추가할 예정
+  // 지분관리 화면은 목록/상세 중 어디에 있었는지를 자체적으로 기억하고 있어서, 메뉴의 "지분관리"를
+  // 다시 눌러도(이미 그 탭이어도) 항상 목록 화면으로 되돌아가도록 이 값을 바꿔서 강제로 새로 마운트시킨다.
+  const [sharesResetKey, setSharesResetKey] = useState(0);
   const [loadingData, setLoadingData] = useState(true);
   const [importState, setImportState] = useState(null); // parsed preview
   const [importing, setImporting] = useState(false);
@@ -1033,7 +1036,10 @@ function Dashboard({ profile, onLogout }) {
           {menuItems.map((m) => (
             <button
               key={m.key}
-              onClick={() => setActiveTab(m.key)}
+              onClick={() => {
+                setActiveTab(m.key);
+                if (m.key === "shares") setSharesResetKey((k) => k + 1); // 지분관리는 눌릴 때마다 목록 화면으로 리셋
+              }}
               style={{
                 display: "block",
                 width: "100%",
@@ -1070,7 +1076,7 @@ function Dashboard({ profile, onLogout }) {
         )}
 
         {activeTab === "shares" && isAdmin && (
-          <EquityTab rentals={rentals} shares={shares} onRefresh={fetchShares} />
+          <EquityTab key={sharesResetKey} rentals={rentals} shares={shares} onRefresh={fetchShares} />
         )}
 
         {activeTab === "sales" && isAdmin && (
@@ -2638,6 +2644,7 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
 
     setSaving(false);
     onSaved();
+    onClose(); // 저장이 끝나면 목록 화면으로 돌아간다
   }
 
   return (
