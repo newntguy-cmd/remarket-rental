@@ -488,6 +488,308 @@ async function parseQuoteExcel(file) {
   };
 }
 
+// ---------- PDF 견적서 파싱 ----------
+// 엑셀은 셀 단위라 라벨:값을 깔끔히 구분할 수 있지만, PDF는 글자의 x/y 좌표만 알 수 있어
+// (1) 좌표가 비슷한 글자들을 같은 "행"으로 묶고, (2) 같은 행 안에서도 좌/우 2단 구성(예: "발행일 : ..."
+// 옆에 "담당자 : ..."가 나란히 붙어있는 경우)을 x 간격이 크게 벌어지는 지점마다 조각으로 나눠 각 조각을
+// 엑셀과 동일한 정규식으로 검사하고, (3) 품목 표는 "품목/규격/수량/단가/금액" 머리글 글자의 x 중심 좌표를
+// 기준 삼아 그 아래 각 글자를 가장 가까운 열로 분류하는 방식으로 재구성한다.
+function pdfGroupRows(items) {
+  const sorted = [...items].sort((a, b) => b.y - a.y);
+  const rows = [];
+  for (const it of sorted) {
+    let row = rows.find((r) => Math.abs(r.y - it.y) < 2.5);
+    if (!row) {
+      row = { y: it.y, items: [] };
+      rows.push(row);
+    }
+    row.items.push(it);
+  }
+  for (const r of rows) r.items.sort((a, b) => a.x - b.x);
+  return rows;
+}
+
+function pdfMergeWords(rowItems, gapThreshold) {
+  const words = [];
+  let lastX = null;
+  for (const it of rowItems) {
+    const last = words[words.length - 1];
+    if (last && lastX !== null && it.x - lastX < gapThreshold) {
+      last.str += it.str;
+      last.endX = it.x + (it.w || 0);
+    } else {
+      words.push({ str: it.str, x: it.x, endX: it.x + (it.w || 0) });
+    }
+    lastX = it.x;
+  }
+  return words.map((w) => ({ ...w, centerX: (w.x + w.endX) / 2 }));
+}
+
+// 한 행에 라벨:값 쌍이 여러 개(좌/우 2단 구성) 있을 수 있어, x 간격이 크게 벌어지는 지점마다 조각을 나눈다.
+function pdfSplitRowSegments(rowItems, gapThreshold = 35) {
+  const sorted = [...rowItems].sort((a, b) => a.x - b.x);
+  const segments = [];
+  let cur = [];
+  let lastEnd = null;
+  for (const it of sorted) {
+    if (lastEnd != null && it.x - lastEnd > gapThreshold) {
+      if (cur.length) segments.push(cur);
+      cur = [];
+    }
+    cur.push(it);
+    lastEnd = it.x + (it.w || it.str.length * 6);
+  }
+  if (cur.length) segments.push(cur);
+  return segments.map((seg) => seg.map((i) => i.str).join("").trim()).filter(Boolean);
+}
+
+function pdfParseNum(str) {
+  if (str == null) return null;
+  const cleaned = String(str).replace(/[,\s]/g, "");
+  if (cleaned === "" || cleaned === "-") return null;
+  const n = Number(cleaned);
+  return isNaN(n) ? null : n;
+}
+
+async function parseQuotePdf(file) {
+  const pdfjsLib = await import("pdfjs-dist/build/pdf.mjs");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  const allPagesItems = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p);
+    const content = await page.getTextContent();
+    const items = content.items
+      .map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width }))
+      .filter((it) => it.str !== "");
+    allPagesItems.push(items);
+  }
+
+  let customer = "";
+  let site = "";
+  let manager = "";
+  let issueDate = todayISO();
+  let transactionType = "purchase";
+  let outDate = issueDate;
+  let dueDate = null;
+  let periodDays = null;
+  let periodMonths = null;
+  let refContact = "";
+  let email = "";
+  let phone = "";
+  let recipient = "";
+  let deliveryDate = "";
+  let siteName = "";
+
+  // 1) 첫 페이지 위쪽 정보 영역에서 라벨:값 스캔 (엑셀 버전과 동일한 정규식을 그대로 사용)
+  const firstPageRows = pdfGroupRows(allPagesItems[0] || []);
+  for (const row of firstPageRows) {
+    const segs = pdfSplitRowSegments(row.items);
+    for (const cell of segs) {
+      let m = cell.match(/수\s*신\s*[:：]\s*([^\n]+)/);
+      if (m) {
+        const raw = m[1].trim();
+        if (raw.includes(" - ")) {
+          const [c, s] = raw.split(" - ");
+          customer = c.trim();
+          siteName = s.trim();
+        } else {
+          customer = raw;
+        }
+      }
+
+      m = cell.match(/배송지\s*[:：]\s*([^\n]+)/);
+      if (m) site = m[1].trim();
+
+      m = cell.match(/참\s*조\s*[:：]\s*([^\/\n]+)/);
+      if (m) refContact = m[1].trim();
+
+      m = cell.match(/전\s*화\s*[:：]\s*([\d\-]+)/);
+      if (m) phone = m[1].trim();
+
+      m = cell.match(/팩\s*스\s*[:：]\s*([^\s]+@[^\s]+)/);
+      if (m) email = m[1].trim();
+      if (!email) {
+        m = cell.match(/([\w.+-]+@[\w-]+\.[\w.-]+)/);
+        if (m) email = m[1].trim();
+      }
+
+      m = cell.match(/수령자\s*\/?\s*연락처\s*[:：]\s*([^\n]+)/);
+      if (m) recipient = m[1].trim();
+
+      m = cell.match(/배송일자\s*[:：]\s*(\d{4})[.\-\/년]\s*(\d{1,2})[.\-\/월]\s*(\d{1,2})/);
+      if (m) deliveryDate = `${m[1]}-${String(m[2]).padStart(2, "0")}-${String(m[3]).padStart(2, "0")}`;
+
+      m = cell.match(/발행일\s*[:：]\s*(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일/);
+      if (m) {
+        issueDate = `${m[1]}-${String(m[2]).padStart(2, "0")}-${String(m[3]).padStart(2, "0")}`;
+        outDate = issueDate;
+      }
+
+      m = cell.match(/담당자\s*[:：]\s*([^\/\n]+)/);
+      if (m) manager = m[1].trim();
+
+      m = cell.match(/렌탈\s*(\d+)\s*개월/);
+      if (m) {
+        transactionType = "rental";
+        periodMonths = Number(m[1]);
+        periodDays = Number(m[1]) * 30;
+      }
+      m = cell.match(/\((\d{4})-(\d{2})~(\d{4})-(\d{2})\)/);
+      if (m && !periodMonths) {
+        transactionType = "rental";
+        outDate = `${m[1]}-${m[2]}-01`;
+        const endYear = Number(m[3]);
+        const endMonth = Number(m[4]);
+        const lastDay = new Date(endYear, endMonth, 0).getDate();
+        dueDate = `${m[3]}-${m[4]}-${String(lastDay).padStart(2, "0")}`;
+      }
+    }
+  }
+  if (deliveryDate) outDate = deliveryDate;
+  else deliveryDate = outDate;
+  if (periodMonths) dueDate = addMonthsMinusDay(outDate, periodMonths);
+
+  // 2) 품목 표 파싱 (여러 페이지에 걸쳐 있을 수 있음)
+  let colCenters = null;
+  const items = [];
+  let currentItem = "";
+  let currentSite = site;
+  let stopped = false;
+
+  for (const pageItems of allPagesItems) {
+    if (stopped) break;
+    const rows = pdfGroupRows(pageItems);
+
+    let headerRow = null;
+    let headerCols = null;
+    for (const row of rows) {
+      const words = pdfMergeWords(row.items, 30);
+      const norm = words.map((w) => w.str.replace(/\s/g, ""));
+      const find = (pred) => words[norm.findIndex(pred)];
+      const item = find((s) => s.includes("품") && s.includes("목"));
+      const spec = find((s) => s.includes("규격"));
+      const qty = find((s) => s.includes("수량"));
+      const price = find((s) => s.includes("단가"));
+      const amount = find((s) => s.includes("금액"));
+      const note = find((s) => s.includes("비고"));
+      if (item && spec && qty && price && amount) {
+        headerRow = row;
+        headerCols = { item, spec, qty, price, amount, note };
+        break;
+      }
+    }
+    if (headerCols) {
+      colCenters = {
+        item: headerCols.item.centerX,
+        spec: headerCols.spec.centerX,
+        qty: headerCols.qty.centerX,
+        price: headerCols.price.centerX,
+        amount: headerCols.amount.centerX,
+        note: headerCols.note ? headerCols.note.centerX : headerCols.amount.centerX + 60,
+      };
+    }
+    if (!colCenters) continue; // 이 페이지엔 아직 품목 표 머리글이 없음(정보 영역만 있는 페이지 등)
+
+    const classify = (x) => {
+      let best = null;
+      let bestDist = Infinity;
+      for (const [k, cx] of Object.entries(colCenters)) {
+        const d = Math.abs(x - cx);
+        if (d < bestDist) {
+          bestDist = d;
+          best = k;
+        }
+      }
+      return best;
+    };
+
+    const dataRows = headerRow ? rows.filter((r) => r.y < headerRow.y - 3) : rows;
+
+    for (const row of dataRows) {
+      const bucket = { item: [], spec: [], qty: [], price: [], amount: [], note: [] };
+      for (const it of row.items) bucket[classify(it.x)].push(it.str);
+      const itemStr = bucket.item.join("").trim();
+      const specStr = bucket.spec.join(" ").trim();
+      const qtyStr = bucket.qty.join("").trim();
+      const priceStr = bucket.price.join("").trim();
+      const amountStr = bucket.amount.join("").trim();
+      const noteStr = bucket.note.join(" ").trim();
+
+      if (!itemStr && !specStr && !qtyStr && !priceStr && !amountStr && !noteStr) continue;
+      // "(Product)/(Description)/..." 같은 영문 보조헤더 줄은 실제 데이터가 아니므로 통째로 건너뜀
+      if (itemStr.startsWith("(") || specStr.startsWith("(")) continue;
+
+      const lowerItem = itemStr.toLowerCase();
+      const lowerSpec = specStr.toLowerCase();
+      if (STOP_NAMES.includes(lowerItem) || STOP_NAMES.includes(lowerSpec)) {
+        stopped = true;
+        break;
+      }
+
+      const qtyNum = pdfParseNum(qtyStr);
+      const priceNum = pdfParseNum(priceStr);
+      const amountNum = pdfParseNum(amountStr);
+      const hasData = qtyNum != null || priceNum != null || amountNum != null;
+      // "ㅡ 사무집기 ㅡ" 같은 구획 제목: 이 양식 특유의 필러 문자(ㅡ) 포함 여부로 판단
+      const isDivider = itemStr.includes("ㅡ") || /^[-–—=_]{2,}.*[-–—=_]{2,}$/.test(itemStr.replace(/\s/g, ""));
+
+      if (itemStr && !hasData && !specStr) {
+        if (isDivider) {
+          currentSite = site ? `${site} · ${itemStr}` : itemStr;
+          continue;
+        }
+        // 병합된 셀 라벨(예: "사무책상")은 세로로 두 데이터 행 사이 중앙에 찍혀 나오는 경우가 있어,
+        // 앞으로의 행뿐 아니라 이미 등록된 마지막 행에도 소급 적용한다.
+        currentItem = itemStr;
+        const last = items[items.length - 1];
+        if (last && !last.item) last.item = itemStr;
+        continue;
+      }
+
+      if (itemStr && !isDivider) currentItem = itemStr;
+      if (itemStr.startsWith("*") || itemStr.startsWith("※")) continue;
+      if (!hasData) continue;
+
+      items.push({
+        item: currentItem,
+        spec: specStr,
+        qty: qtyNum ?? 1,
+        unit_price: priceNum,
+        amount: amountNum ?? (priceNum != null ? priceNum * (qtyNum ?? 1) : null),
+        note: noteStr,
+        site: currentSite,
+      });
+    }
+  }
+
+  return {
+    customer,
+    site,
+    manager,
+    voucherNo: "",
+    transactionType,
+    outDate,
+    dueDate,
+    periodDays,
+    periodMonths,
+    refContact,
+    email,
+    phone,
+    recipient,
+    siteName,
+    warehouse: transactionType === "rental" ? "00008" : "",
+    dealType: "소매매출",
+    currency: "내자",
+    project: "",
+    headerNote: "",
+    taxInvoice: "",
+    items,
+  };
+}
+
 // ---------- 메인 ----------
 export default function Home() {
   const [loading, setLoading] = useState(true);
@@ -634,12 +936,16 @@ function Dashboard({ profile, onLogout }) {
 
   async function processQuoteFile(file) {
     if (!file) return;
+    const isPdf = file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf";
     try {
-      const parsed = await parseQuoteExcel(file);
+      const parsed = isPdf ? await parseQuotePdf(file) : await parseQuoteExcel(file);
       parsed.voucherNo = nextVoucherNo(rentals); // 전표번호는 오늘 날짜 기준 자동 일련번호로 강제 부여
       setImportState(parsed);
+      if (isPdf && parsed.items.length === 0) {
+        alert("PDF에서 품목을 인식하지 못했어요. 표 형식이 다를 수 있으니 아래 내용을 직접 채워주시거나 엑셀 버전으로 올려주세요.");
+      }
     } catch (err) {
-      alert("엑셀 파일을 읽는 중 문제가 발생했어요. 형식을 확인해주세요.");
+      alert(isPdf ? "PDF 파일을 읽는 중 문제가 발생했어요. 형식을 확인하시거나 엑셀 버전으로 올려주세요." : "엑셀 파일을 읽는 중 문제가 발생했어요. 형식을 확인해주세요.");
       console.error(err);
     }
   }
@@ -1107,7 +1413,7 @@ function QuoteDropZone({ onFile, hasData }) {
     >
       <input
         type="file"
-        accept=".xlsx,.xls"
+        accept=".xlsx,.xls,.pdf"
         ref={inputRef}
         onChange={(e) => {
           const file = e.target.files?.[0];
@@ -1120,8 +1426,8 @@ function QuoteDropZone({ onFile, hasData }) {
         <div style={{ fontSize: 12.5, color: C.inkSoft }}>다른 견적서로 다시 채우려면 여기로 새 파일을 드래그하거나 클릭하세요</div>
       ) : (
         <>
-          <div style={{ fontSize: 15, color: C.ink, marginBottom: 6 }}>여기로 렌탈·구매 견적서 엑셀 파일을 끌어다 놓으세요</div>
-          <div style={{ fontSize: 12.5, color: C.muted }}>또는 클릭해서 파일 선택 (.xlsx, .xls)</div>
+          <div style={{ fontSize: 15, color: C.ink, marginBottom: 6 }}>여기로 렌탈·구매 견적서 파일을 끌어다 놓으세요</div>
+          <div style={{ fontSize: 12.5, color: C.muted }}>또는 클릭해서 파일 선택 (.xlsx, .xls, .pdf)</div>
         </>
       )}
     </div>
@@ -1240,7 +1546,7 @@ function QuoteUploadPanel({ importState, setImportState, onFile, onCancel, onCon
     <div>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>견적서 업로드</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
-        엑셀 견적서를 올리면 아래 전표 정보와 품목이 자동으로 채워져요. 내용을 확인·수정한 뒤 등록해주세요.
+        엑셀 또는 PDF 견적서를 올리면 아래 전표 정보와 품목이 자동으로 채워져요. (PDF는 표 형식에 따라 인식률이 다를 수 있으니) 등록 전에 내용을 꼭 확인·수정해주세요.
       </div>
 
       <QuoteDropZone onFile={onFile} hasData={!!importState} />
