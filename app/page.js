@@ -2187,6 +2187,129 @@ function withComputedTons(items, customOverrides) {
   });
 }
 
+// 주소 문자열을 공백만 정리해서 비교/저장 키로 쓴다 (톤수의 normalizeTonText와 같은 방식).
+function normalizeAddressText(s) {
+  return (s || "").replace(/\s+/g, " ").trim();
+}
+
+// 배송지 주소 옆에 다는 "배송지 정보" 버튼.
+// 엘리베이터 유무·5톤/1톤 차량 진입 가능 여부·층고 같은 정보는 공개된 데이터로 자동 조회할 방법이 없어서,
+// 지도/로드뷰 링크를 바로 열어 직접 확인할 수 있게 하고, 한 번 확인한 내용은 주소별로 저장해서
+// 다음에 같은 배송지가 나오면 자동으로 보여주는 방식(직원들이 같이 채워가는 공용 메모)으로 만들었다.
+function DeliverySiteInfoButton({ address }) {
+  const [open, setOpen] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedNote, setSavedNote] = useState("");
+  const [draft, setDraft] = useState("");
+  const na = normalizeAddressText(address);
+
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !loaded && na) {
+      setLoading(true);
+      const { data, error } = await supabase.from("delivery_site_notes").select("note").eq("address", na).maybeSingle();
+      if (!error) {
+        setSavedNote(data?.note || "");
+        setDraft(data?.note || "");
+        setLoaded(true);
+      }
+      setLoading(false);
+    }
+  };
+
+  const save = async () => {
+    if (!na) return;
+    setSaving(true);
+    const { error } = await supabase
+      .from("delivery_site_notes")
+      .upsert({ address: na, note: draft, updated_at: new Date().toISOString() }, { onConflict: "address" });
+    setSaving(false);
+    if (error) {
+      alert("저장하지 못했어요: " + error.message + " (Supabase에 delivery_site_notes 테이블이 아직 없다면 관리자에게 설정을 요청해주세요.)");
+      return;
+    }
+    setSavedNote(draft);
+    alert("저장했어요. 다음에 같은 배송지가 나오면 자동으로 보여요.");
+  };
+
+  if (!address || !na) return null;
+
+  const kakaoUrl = `https://map.kakao.com/link/search/${encodeURIComponent(na)}`;
+  const naverUrl = `https://map.naver.com/p/search/${encodeURIComponent(na)}`;
+
+  return (
+    <span style={{ position: "relative", display: "inline-block", marginLeft: 10 }}>
+      <button type="button" onClick={toggle} style={{ ...miniBtnStyle, background: savedNote ? "#EAF3EC" : "none" }}>
+        📍 배송지 정보{savedNote ? " (메모 있음)" : ""}
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            zIndex: 40,
+            top: "calc(100% + 6px)",
+            left: 0,
+            width: 360,
+            background: "#fff",
+            border: `1px solid ${C.line}`,
+            boxShadow: "0 8px 20px rgba(0,0,0,0.14)",
+            padding: 16,
+            fontFamily: sans,
+          }}
+        >
+          <div style={{ fontSize: 12.5, color: C.ink, marginBottom: 10, wordBreak: "break-all" }}>{na}</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <a href={kakaoUrl} target="_blank" rel="noreferrer" style={{ ...miniBtnStyle, textDecoration: "none", textAlign: "center", flex: 1 }}>
+              카카오맵·로드뷰
+            </a>
+            <a href={naverUrl} target="_blank" rel="noreferrer" style={{ ...miniBtnStyle, textDecoration: "none", textAlign: "center", flex: 1 }}>
+              네이버지도
+            </a>
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, lineHeight: 1.5 }}>
+            엘리베이터 유무·5톤 차량 진입 가능 여부·지하주차장 제한·층고 등은 공개된 데이터로 자동 조회가 안 돼서(그런
+            정보를 제공하는 곳이 없어요), 위 지도/로드뷰로 직접 확인해 아래에 적어두시면 다음에 같은 배송지가 나올 때
+            자동으로 떠요.
+          </div>
+          {loading ? (
+            <div style={{ fontSize: 12.5, color: C.muted }}>불러오는 중…</div>
+          ) : (
+            <>
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder="예: E/V 있음, 5톤 진입 가능, 지하주차장은 1톤만 가능, 층고 2.3m, 주변 도로 협소"
+                rows={4}
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: 8,
+                  fontSize: 12.5,
+                  border: `1px solid ${C.line}`,
+                  fontFamily: sans,
+                  marginBottom: 8,
+                  resize: "vertical",
+                }}
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" onClick={save} disabled={saving} style={miniBtnStylePrimary}>
+                  {saving ? "저장 중…" : "메모 저장"}
+                </button>
+                <button type="button" onClick={() => setOpen(false)} style={miniBtnStyle}>
+                  닫기
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
 function QuoteUploadPanel({ importState, setImportState, onFile, onCancel, onConfirm, importing, isAdmin = true, tonOverrides, onTonOverrideSaved }) {
   const update = (patch) => setImportState({ ...importState, ...patch });
 
@@ -2319,11 +2442,14 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOve
         ))}
       </div>
 
-      <div style={{ fontSize: 13, color: C.inkSoft, marginBottom: 14 }}>
-        합계 {fmtWon(totalAmount)} · 총 톤수 {totalTon.toFixed(3)}톤
-        {missingTonCount > 0 && (
-          <span style={{ color: "#B45309" }}> (기준표에 없어 톤수 미확인 {missingTonCount}건 — 노란 칸을 직접 채워주세요)</span>
-        )}
+      <div style={{ fontSize: 13, color: C.inkSoft, marginBottom: 14, display: "flex", alignItems: "center", flexWrap: "wrap" }}>
+        <span>
+          합계 {fmtWon(totalAmount)} · 총 톤수 {totalTon.toFixed(3)}톤
+          {missingTonCount > 0 && (
+            <span style={{ color: "#B45309" }}> (기준표에 없어 톤수 미확인 {missingTonCount}건 — 노란 칸을 직접 채워주세요)</span>
+          )}
+        </span>
+        <DeliverySiteInfoButton address={state.site} />
       </div>
 
       <div style={{ display: "flex", gap: 8 }}>
