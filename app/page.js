@@ -526,11 +526,7 @@ async function parseQuoteExcel(file) {
       if (m) manager = m[1].trim();
 
       // 렌탈/구매 구분은 "렌탈기간" 항목이 있는지 여부로 체크한다(값 형식이 무엇이든 라벨만 있으면 렌탈로 판단).
-      if (cell.replace(/\s/g, "").includes("렌탈기간")) {
-        transactionType = "rental";
-        // "렌탈기간" 칸 자체에 "2026.09.20~2027.12.19"처럼 일 단위 시작~종료 날짜가 적혀 있으면 그걸 최우선으로 쓴다.
-        if (!rentalPeriodRange) rentalPeriodRange = parseRentalPeriodDateRange(cell);
-      }
+      if (cell.replace(/\s/g, "").includes("렌탈기간")) transactionType = "rental";
 
       // "렌탈 10개월"뿐 아니라 "10개월 렌탈기준"처럼 순서가 반대인 표기도 인식한다.
       m = cell.match(/(\d+)\s*개월/);
@@ -538,6 +534,12 @@ async function parseQuoteExcel(file) {
         transactionType = "rental";
         periodMonths = Number(m[1]);
         periodDays = Number(m[1]) * 30;
+      }
+      // "렌탈기간" 라벨과 실제 날짜가 같은 칸에 있든("렌탈기간: 2026.09.20~2027.12.19"),
+      // 라벨은 옆 칸에 따로 있고 값 칸에 "렌탈 15개월 기준 (2026-09-15~2027-12-14)"처럼 적혀 있든,
+      // "렌탈"이 들어간 칸에서 일 단위 시작~종료 날짜를 찾으면 그걸 렌탈개시일의 최우선 근거로 쓴다.
+      if (!rentalPeriodRange && cell.includes("렌탈")) {
+        rentalPeriodRange = parseRentalPeriodDateRange(cell);
       }
       // "(YYYY-MM~YYYY-MM)" 요약 표기는 월 단위라 정확도가 떨어지므로,
       // "렌탈 N개월" 값도, 일 단위 날짜 범위도 못 찾았을 때만 보조적으로 사용한다. 구분자가 "."인 표기도 인식한다.
@@ -798,11 +800,7 @@ async function parseQuotePdf(file) {
       if (m) manager = m[1].trim();
 
       // 렌탈/구매 구분은 "렌탈기간" 항목이 있는지 여부로 체크한다(값 형식이 무엇이든 라벨만 있으면 렌탈로 판단).
-      if (cell.replace(/\s/g, "").includes("렌탈기간")) {
-        transactionType = "rental";
-        // "렌탈기간" 칸 자체에 "2026.09.20~2027.12.19"처럼 일 단위 시작~종료 날짜가 적혀 있으면 그걸 최우선으로 쓴다.
-        if (!rentalPeriodRange) rentalPeriodRange = parseRentalPeriodDateRange(cell);
-      }
+      if (cell.replace(/\s/g, "").includes("렌탈기간")) transactionType = "rental";
 
       // "렌탈 10개월"뿐 아니라 "10개월 렌탈기준"처럼 순서가 반대인 표기도 인식한다.
       m = cell.match(/(\d+)\s*개월/);
@@ -810,6 +808,12 @@ async function parseQuotePdf(file) {
         transactionType = "rental";
         periodMonths = Number(m[1]);
         periodDays = Number(m[1]) * 30;
+      }
+      // "렌탈기간" 라벨과 실제 날짜가 같은 칸에 있든("렌탈기간: 2026.09.20~2027.12.19"),
+      // 라벨은 옆 칸에 따로 있고 값 칸에 "렌탈 15개월 기준 (2026-09-15~2027-12-14)"처럼 적혀 있든,
+      // "렌탈"이 들어간 칸에서 일 단위 시작~종료 날짜를 찾으면 그걸 렌탈개시일의 최우선 근거로 쓴다.
+      if (!rentalPeriodRange && cell.includes("렌탈")) {
+        rentalPeriodRange = parseRentalPeriodDateRange(cell);
       }
       // 구분자가 "."인 표기("(YYYY.MM~YYYY.MM)")도 인식한다. "렌탈 N개월" 값도, 일 단위 날짜 범위도 못 찾았을 때만 보조적으로 사용.
       m = cell.match(/\((\d{4})[.\-](\d{2})~(\d{4})[.\-](\d{2})\)/);
