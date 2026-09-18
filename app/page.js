@@ -861,10 +861,11 @@ async function parseQuotePdf(file) {
           continue;
         }
         // 병합된 셀 라벨(예: "사무책상")은 세로로 두 데이터 행 사이 중앙에 찍혀 나오는 경우가 있어,
-        // 앞으로의 행뿐 아니라 이미 등록된 마지막 행에도 소급 적용한다.
+        // 그 라벨이 실제로는 "바로 위 데이터 행"의 품목명인데 그 행에는 직접 붙어있지 않고 지금 이 줄로 따로 찍힌 것이다.
+        // 바로 위 행이 자기 줄에 직접 품목명을 갖고 있지 않았다면(=이전 품목명을 그냥 이어받은 것뿐이라면) 지금 읽은 진짜 이름으로 소급 정정한다.
         currentItem = itemStr;
         const last = items[items.length - 1];
-        if (last && !last.item) last.item = itemStr;
+        if (last && !last._explicitItem) last.item = itemStr;
         continue;
       }
 
@@ -880,6 +881,7 @@ async function parseQuotePdf(file) {
         amount: amountNum ?? (priceNum != null ? priceNum * (qtyNum ?? 1) : null),
         note: noteStr,
         site: currentSite,
+        _explicitItem: !!(itemStr && !isDivider), // 이 줄 자체에 품목명이 직접 찍혀 있었는지(파싱 내부용, DB에는 저장 안 함)
       });
     }
   }
@@ -3302,6 +3304,19 @@ function CustomerDataTab({ rentals }) {
   const itemStatsTotalQty = itemStats.reduce((s, r) => s + r.qty, 0);
   const itemStatsTotalAmount = itemStats.reduce((s, r) => s + r.amount, 0);
 
+  // 인쇄/PDF 저장 시 브라우저 상단에 뜨는 문서 제목("리마켓 렌탈장부")을 잠깐 "품목별 수량통계"로 바꿔서,
+  // 인쇄 머리글과 "PDF로 저장" 시 기본 파일명이 모두 "품목별 수량통계"가 되게 한다. 인쇄가 끝나면 원래 제목으로 되돌린다.
+  function handlePrintItemStats() {
+    const prevTitle = document.title;
+    document.title = "품목별 수량통계";
+    const restoreTitle = () => {
+      document.title = prevTitle;
+    };
+    window.addEventListener("afterprint", restoreTitle, { once: true });
+    window.print();
+    setTimeout(restoreTitle, 2000); // afterprint가 못 붙는 브라우저를 위한 안전장치
+  }
+
   return (
     <div>
       <style>{`
@@ -3492,13 +3507,12 @@ function CustomerDataTab({ rentals }) {
             <>
               <div className="itemstats-no-print" style={{ display: "flex", gap: 8, marginBottom: 12 }}>
                 <button onClick={() => setSelectedItemVoucherKey(null)} style={ghostBtnStyle}>← 전표 목록으로</button>
-                <button onClick={() => window.print()} style={primaryBtnStyle2}>인쇄 / PDF로 저장</button>
+                <button onClick={handlePrintItemStats} style={primaryBtnStyle2}>인쇄 / PDF로 저장</button>
               </div>
 
               <div className="itemstats-no-print" style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
                 <StatCell label="품목 종류" value={`${itemStats.length}종`} />
-                <StatCell label="총 수량" value={`${itemStatsTotalQty.toLocaleString("ko-KR")}개`} />
-                <StatCell label="금액 합계" value={fmtWon(itemStatsTotalAmount)} color={C.green} last />
+                <StatCell label="총 수량" value={`${itemStatsTotalQty.toLocaleString("ko-KR")}개`} last />
               </div>
 
               <div id="itemstats-print-area" style={{ border: `1px solid ${C.line}`, background: "#fff", padding: 24 }}>
@@ -3507,18 +3521,20 @@ function CustomerDataTab({ rentals }) {
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 16 }}>
                   <div>
-                    <div>거래처: {selectedItemGroup.head.customer || "-"}</div>
+                    <div>
+                      거래처: {selectedItemGroup.head.customer || "-"}
+                      {selectedItemGroup.head.site_name ? ` · 현장명: ${selectedItemGroup.head.site_name}` : ""}
+                    </div>
                     <div>담당자: {selectedItemGroup.head.manager || "-"}</div>
                   </div>
                   <div style={{ textAlign: "right" }}>
                     <div>전표번호: {selectedItemGroup.voucherNo || "(번호없음)"}</div>
-                    <div>배송일자: {selectedItemGroup.head.out_date || "-"}</div>
                   </div>
                 </div>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                   <thead>
                     <tr>
-                      {["품목", "규격", "총수량", "건수", "금액합계"].map((h) => (
+                      {["품목", "규격", "총수량"].map((h) => (
                         <th
                           key={h}
                           style={{
@@ -3539,8 +3555,6 @@ function CustomerDataTab({ rentals }) {
                         <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.item}</td>
                         <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.spec || "-"}</td>
                         <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</td>
-                        <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{r.count}건</td>
-                        <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{fmtWon(r.amount)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -3552,8 +3566,6 @@ function CustomerDataTab({ rentals }) {
                       <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
                         {itemStatsTotalQty.toLocaleString("ko-KR")}
                       </td>
-                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}></td>
-                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>{fmtWon(itemStatsTotalAmount)}</td>
                     </tr>
                   </tfoot>
                 </table>
