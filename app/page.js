@@ -505,15 +505,19 @@ async function parseQuoteExcel(file) {
       m = cell.match(/담당자\s*[:：]\s*([^\/\n]+)/);
       if (m) manager = m[1].trim();
 
-      m = cell.match(/렌탈\s*(\d+)\s*개월/);
-      if (m) {
+      // 렌탈/구매 구분은 "렌탈기간" 항목이 있는지 여부로 체크한다(값 형식이 무엇이든 라벨만 있으면 렌탈로 판단).
+      if (cell.replace(/\s/g, "").includes("렌탈기간")) transactionType = "rental";
+
+      // "렌탈 10개월"뿐 아니라 "10개월 렌탈기준"처럼 순서가 반대인 표기도 인식한다.
+      m = cell.match(/(\d+)\s*개월/);
+      if (m && cell.includes("렌탈")) {
         transactionType = "rental";
         periodMonths = Number(m[1]);
         periodDays = Number(m[1]) * 30;
       }
       // "(YYYY-MM~YYYY-MM)" 요약 표기는 월 단위라 정확도가 떨어지므로,
-      // "렌탈 N개월" 값을 못 찾았을 때만 보조적으로 사용한다.
-      m = cell.match(/\((\d{4})-(\d{2})~(\d{4})-(\d{2})\)/);
+      // "렌탈 N개월" 값을 못 찾았을 때만 보조적으로 사용한다. 구분자가 "."인 표기("(YYYY.MM~YYYY.MM)")도 인식한다.
+      m = cell.match(/\((\d{4})[.\-](\d{2})~(\d{4})[.\-](\d{2})\)/);
       if (m && !periodMonths) {
         transactionType = "rental";
         outDate = `${m[1]}-${m[2]}-01`;
@@ -758,13 +762,18 @@ async function parseQuotePdf(file) {
       m = cell.match(/담당자\s*[:：]\s*([^\/\n]+)/);
       if (m) manager = m[1].trim();
 
-      m = cell.match(/렌탈\s*(\d+)\s*개월/);
-      if (m) {
+      // 렌탈/구매 구분은 "렌탈기간" 항목이 있는지 여부로 체크한다(값 형식이 무엇이든 라벨만 있으면 렌탈로 판단).
+      if (cell.replace(/\s/g, "").includes("렌탈기간")) transactionType = "rental";
+
+      // "렌탈 10개월"뿐 아니라 "10개월 렌탈기준"처럼 순서가 반대인 표기도 인식한다.
+      m = cell.match(/(\d+)\s*개월/);
+      if (m && cell.includes("렌탈")) {
         transactionType = "rental";
         periodMonths = Number(m[1]);
         periodDays = Number(m[1]) * 30;
       }
-      m = cell.match(/\((\d{4})-(\d{2})~(\d{4})-(\d{2})\)/);
+      // 구분자가 "."인 표기("(YYYY.MM~YYYY.MM)")도 인식한다.
+      m = cell.match(/\((\d{4})[.\-](\d{2})~(\d{4})[.\-](\d{2})\)/);
       if (m && !periodMonths) {
         transactionType = "rental";
         outDate = `${m[1]}-${m[2]}-01`;
