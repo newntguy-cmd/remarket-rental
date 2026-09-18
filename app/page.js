@@ -2389,6 +2389,20 @@ function parsePastedItems(text) {
   return items;
 }
 
+// 붙여넣은 견적서 텍스트에서 "배송지: ..." 값을 찾아온다(견적서 업로드 파싱과 같은 정규식).
+// 품목표뿐 아니라 상단 정보(수신/참조/발행일 등)까지 통째로 붙여넣는 경우를 위한 것이라, 표 파싱과
+// 별개로 붙여넣은 텍스트 전체(모든 셀)를 훑는다.
+function extractPastedSiteAddress(text) {
+  const rows = parsePastedTable(text);
+  for (const row of rows) {
+    for (const cell of row) {
+      const m = cellText(cell).match(/배송지\s*[:：]\s*([^\n]+)/);
+      if (m) return m[1].trim();
+    }
+  }
+  return "";
+}
+
 // 주소 문자열을 공백만 정리해서 비교/저장 키로 쓴다 (톤수의 normalizeTonText와 같은 방식).
 function normalizeAddressText(s) {
   return (s || "").replace(/\s+/g, " ").trim();
@@ -2640,6 +2654,93 @@ function findZoneIndex(zones, address) {
   return idx >= 0 ? idx : null;
 }
 
+// ---------- 카카오맵으로 "용인시 기흥구 공세동(모든 용차 출발지 기준) ↔ 배송지" 실거리를 계산하는 기능 ----------
+// 서울/수도권 용차 구간표(10km 이하 ~ 90km 미만)는 지역명이 아니라 "거리"로 나뉘어 있어서 주소 키워드 매칭으로는
+// 자동 선택이 안 된다. 그래서 주소를 좌표로 변환(지오코딩)해서 실제 거리를 계산해 구간을 맞춘다.
+// Vercel에 NEXT_PUBLIC_KAKAO_JS_KEY 환경변수(카카오 개발자센터에서 발급받은 JavaScript 키)가 설정돼 있어야
+// 동작하고, 없으면 조용히 건너뛰어서(에러 없이) 지금처럼 직접 구간을 선택하면 된다.
+const KAKAO_ORIGIN_ADDRESS = "경기도 용인시 기흥구 공세동";
+let kakaoSdkPromise = null;
+function loadKakaoMapsSdk() {
+  if (typeof window === "undefined") return Promise.resolve(null);
+  const key = process.env.NEXT_PUBLIC_KAKAO_JS_KEY;
+  if (!key) return Promise.resolve(null);
+  if (window.kakao && window.kakao.maps && window.kakao.maps.services) return Promise.resolve(window.kakao);
+  if (kakaoSdkPromise) return kakaoSdkPromise;
+  kakaoSdkPromise = new Promise((resolve) => {
+    const onReady = () => window.kakao.maps.load(() => resolve(window.kakao));
+    const existing = document.getElementById("kakao-maps-sdk");
+    if (existing) {
+      if (window.kakao && window.kakao.maps) onReady();
+      else existing.addEventListener("load", onReady);
+      return;
+    }
+    const script = document.createElement("script");
+    script.id = "kakao-maps-sdk";
+    script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${key}&libraries=services&autoload=false`;
+    script.onload = onReady;
+    script.onerror = () => resolve(null);
+    document.head.appendChild(script);
+  });
+  return kakaoSdkPromise;
+}
+
+// 주소 문자열을 위도/경도로 변환한다. API 키가 없거나, 주소를 못 찾거나, 네트워크 오류가 나면 null(자동 실패 시
+// 조용히 넘어가고 직접 선택하도록 둔다).
+async function geocodeAddress(address) {
+  const kakao = await loadKakaoMapsSdk();
+  if (!kakao || !address) return null;
+  return new Promise((resolve) => {
+    try {
+      const geocoder = new kakao.maps.services.Geocoder();
+      geocoder.addressSearch(address, (result, status) => {
+        if (status === kakao.maps.services.Status.OK && result[0]) {
+          resolve({ lat: Number(result[0].y), lng: Number(result[0].x) });
+        } else {
+          resolve(null);
+        }
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+// 출발지(용인시 기흥구 공세동)는 항상 같은 곳이라, 좌표를 한 번만 조회해서 세션 안에서 재사용한다.
+let originCoordsPromise = null;
+function getOriginCoords() {
+  if (!originCoordsPromise) originCoordsPromise = geocodeAddress(KAKAO_ORIGIN_ADDRESS);
+  return originCoordsPromise;
+}
+
+// 두 좌표 사이의 직선거리(km, 하버사인 공식).
+function haversineKm(a, b) {
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const s1 = Math.sin(dLat / 2);
+  const s2 = Math.sin(dLng / 2);
+  const h = s1 * s1 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * s2 * s2;
+  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+// 직선거리는 실제 도로 주행거리보다 짧기 마련이라, 수도권 도로망 기준 대략적인 배율로 보정한다.
+// 어디까지나 자동 추정치라 화면에서 항상 직접 구간으로 바꿔 선택할 수 있게 해둔다.
+const ROAD_DISTANCE_FACTOR = 1.3;
+
+// 보정된 거리(km)로 서울/수도권 용차 구간(10km 이하 ~ 90km 미만) 중 맞는 행을 찾는다.
+function findTruckRowByDistanceKm(km) {
+  const seoul = CHARTERED_TRUCK_GROUPS.find((g) => g.region === "서울/수도권");
+  if (!seoul || km == null) return null;
+  const thresholds = [10, 20, 30, 50, 70, 90]; // rows 순서(10km 이하/20km 미만/.../90km 미만)와 1:1 대응
+  let idx = thresholds.findIndex((t) => km <= t);
+  if (idx === -1) idx = thresholds.length - 1; // 90km 넘으면 가장 먼 구간으로 잡아두되, 실제로는 직접 확인 필요
+  const row = seoul.rows[idx];
+  if (!row) return null;
+  return CHARTERED_TRUCK_ROWS.findIndex((r) => r.region === "서울/수도권" && r.label === row.label);
+}
+
 // 총 톤수 옆에 다는 "배송비" 버튼. 기본배송비(거래유형+배송지+톤수 기준 자동 계산)에
 // 용차(추가 트럭)를 체크해서 더할 수 있는 계산기를 펼쳐서 보여준다.
 function DeliveryFeeButton({ address, transactionType, totalTon }) {
@@ -2667,8 +2768,35 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
     const idx = CHARTERED_TRUCK_ROWS.findIndex((r) => (r.keywords || []).some((k) => a.includes(k)));
     return idx >= 0 ? idx : null;
   }, [address]);
+  // 강원/충북/충남/전북/전남/경북/경남처럼 지역명으로 못 찾으면(=대부분 서울/수도권 주소), 카카오맵으로
+  // 용인시 기흥구 공세동↔배송지 실거리를 계산해서 거리 구간(10km 이하~90km 미만)을 자동으로 맞춘다.
+  const [geoTruckRowIdx, setGeoTruckRowIdx] = useState(null);
+  const [geoLoading, setGeoLoading] = useState(false);
+  const [geoFailed, setGeoFailed] = useState(false);
+  useEffect(() => {
+    setGeoTruckRowIdx(null);
+    setGeoFailed(false);
+    if (!address || autoTruckRowIdx != null) return;
+    let cancelled = false;
+    setGeoLoading(true);
+    (async () => {
+      const [origin, dest] = await Promise.all([getOriginCoords(), geocodeAddress(address)]);
+      if (cancelled) return;
+      setGeoLoading(false);
+      if (!origin || !dest) {
+        setGeoFailed(true);
+        return;
+      }
+      const km = haversineKm(origin, dest) * ROAD_DISTANCE_FACTOR;
+      setGeoTruckRowIdx(findTruckRowByDistanceKm(km));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [address, autoTruckRowIdx]);
+
   const [truckRowIdx, setTruckRowIdx] = useState(null);
-  const effectiveTruckRowIdx = truckRowIdx != null ? truckRowIdx : autoTruckRowIdx;
+  const effectiveTruckRowIdx = truckRowIdx != null ? truckRowIdx : autoTruckRowIdx != null ? autoTruckRowIdx : geoTruckRowIdx;
   const truckRow = effectiveTruckRowIdx != null ? CHARTERED_TRUCK_ROWS[effectiveTruckRowIdx] : null;
 
   const [checked, setChecked] = useState({});
@@ -2760,7 +2888,14 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
             onChange={(e) => setTruckRowIdx(e.target.value === "" ? null : Number(e.target.value))}
           >
             <option value="">
-              용차 지역을 선택하세요{autoTruckRowIdx != null ? " (자동감지: " + CHARTERED_TRUCK_ROWS[autoTruckRowIdx].label + ")" : ""}
+              용차 지역을 선택하세요
+              {autoTruckRowIdx != null
+                ? " (자동감지: " + CHARTERED_TRUCK_ROWS[autoTruckRowIdx].label + ")"
+                : geoTruckRowIdx != null
+                ? " (거리 계산으로 자동감지: " + CHARTERED_TRUCK_ROWS[geoTruckRowIdx].label + ")"
+                : geoLoading
+                ? " (거리 계산 중…)"
+                : ""}
             </option>
             {CHARTERED_TRUCK_GROUPS.map((g, gi) => (
               <optgroup key={gi} label={g.region}>
@@ -2775,6 +2910,11 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
               </optgroup>
             ))}
           </select>
+          {geoFailed && autoTruckRowIdx == null && (
+            <div style={{ fontSize: 11, color: "#B45309", marginBottom: 6 }}>
+              거리를 자동으로 계산하지 못했어요(지도 API 설정이 안 됐거나 주소를 못 찾았어요). 구간을 직접 선택해주세요.
+            </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginBottom: 12 }}>
             {CHARTERED_TRUCK_OPTIONS.map((opt) => {
               const rate = truckRow ? truckRow[opt.col] : null;
@@ -2834,6 +2974,13 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
   const [address, setAddress] = useState("");
   const [tonEdits, setTonEdits] = useState({});
   const [savingIdx, setSavingIdx] = useState(null);
+
+  // 견적서를 통째로 붙여넣으면 그 안의 "배송지: ..." 값을 자동으로 배송지 주소 칸에 채워준다(직접 입력한 값도
+  // 그대로 수정 가능 — 이후 붙여넣는 텍스트가 바뀌면 새로 찾은 주소로 다시 갱신된다).
+  const extractedAddress = useMemo(() => extractPastedSiteAddress(text), [text]);
+  useEffect(() => {
+    if (extractedAddress) setAddress(extractedAddress);
+  }, [extractedAddress]);
 
   const rawItems = useMemo(() => parsePastedItems(text), [text]);
   const items = useMemo(
