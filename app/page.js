@@ -220,7 +220,9 @@ function addRecentValue(storageKey, value) {
 }
 
 // 오른쪽 화살표(▾)를 누르면 이 필드에 최근 입력·검색했던 값 목록이 드롭다운으로 뜨고, 클릭하면 바로 채워진다.
-function RecentValueInput({ storageKey, value, onChange, onKeyDown, onBlur, placeholder, style }) {
+// extraOptions를 넘기면(예: 실제 등록된 업체명 전체 목록) 최근 입력 내역이 없어도 타이핑 중인 글자가
+// 이름 "중간"에 포함되기만 해도(부분일치) 후보로 함께 떠서 바로 골라 채울 수 있다.
+function RecentValueInput({ storageKey, value, onChange, onKeyDown, onBlur, placeholder, style, extraOptions }) {
   const [open, setOpen] = useState(false);
   const [recent, setRecent] = useState([]);
   const wrapRef = useRef(null);
@@ -237,7 +239,10 @@ function RecentValueInput({ storageKey, value, onChange, onKeyDown, onBlur, plac
     return () => document.removeEventListener("mousedown", handleOutside);
   }, []);
 
-  const filtered = recent.filter((v) => !value.trim() || v.toLowerCase().includes(value.trim().toLowerCase()));
+  const q = value.trim().toLowerCase();
+  const matchedRecent = recent.filter((v) => !q || v.toLowerCase().includes(q));
+  const matchedExtra = (extraOptions || []).filter((v) => v && (!q || v.toLowerCase().includes(q)) && !matchedRecent.includes(v)).slice(0, 12);
+  const filtered = [...matchedRecent, ...matchedExtra];
 
   return (
     <div ref={wrapRef} style={{ position: "relative" }}>
@@ -3066,6 +3071,16 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
   const [applied, setApplied] = useState(defaultFilters);
   const [hasSearched, setHasSearched] = useState(false); // 검색을 눌러야 결과가 나오게(false면 목록을 아예 안 보여줌)
 
+  // 실제 등록된 전표들에 있는 업체명 전체 목록(중복 제거) — 이름 중간 글자만 쳐도 자동완성 후보로 바로 뜨게 한다.
+  const customerOptions = useMemo(() => {
+    const set = new Set();
+    for (const r of rentals || []) {
+      const c = (r.customer || "").trim();
+      if (c) set.add(c);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "ko"));
+  }, [rentals]);
+
   function runSearch(overrides) {
     addRecentValue("remarket_recent_manager", managerInput);
     addRecentValue("remarket_recent_customer", customerInput);
@@ -3206,6 +3221,7 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
               onChange={setCustomerInput}
               onKeyDown={handleSearchKeyDown}
               placeholder="예: 엔알비"
+              extraOptions={customerOptions}
             />
           </Field>
           <Field label="기준일자(시작)">
@@ -3377,6 +3393,17 @@ function CustomerDataTab({ rentals, onRefresh }) {
   const handleSearchKeyDown = (e) => {
     if (e.key === "Enter") runSearch();
   };
+
+  // 실제 등록된 전표들에 있는 업체명 전체 목록(중복 제거) — "산업"처럼 이름 중간 글자만 쳐도
+  // 최근 검색 이력이 없는 업체(예: KR산업)까지 자동완성 후보로 바로 뜨게 한다.
+  const customerOptions = useMemo(() => {
+    const set = new Set();
+    for (const r of rentals || []) {
+      const c = (r.customer || "").trim();
+      if (c) set.add(c);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "ko"));
+  }, [rentals]);
 
   // 조회 기간(일 단위)이 걸쳐있는 월들의 "YYYY-MM" 목록 — 그래프 X축·월별 집계에만 쓰고, 실제 데이터 필터링은 일 단위(fromDate~toDate)로 한다.
   const monthKeys = useMemo(() => {
@@ -3550,6 +3577,7 @@ function CustomerDataTab({ rentals, onRefresh }) {
               onChange={setCustomerInput}
               onKeyDown={handleSearchKeyDown}
               placeholder="예: 무영씨엠"
+              extraOptions={customerOptions}
             />
           </Field>
           <Field label="기간(시작일)">
