@@ -3285,6 +3285,18 @@ function CustomerDataTab({ rentals }) {
   // 품목별 수량 데이터는 전표 하나를 선택해야 나온다(여러 전표를 합치지 않음).
   const selectedItemGroup = selectedItemVoucherKey ? groups.find((g) => g.key === selectedItemVoucherKey) : null;
 
+  // 품목/규격/총수량 머리글을 눌러 정렬 기준·방향을 바꿀 수 있게 한다(기본은 총수량 많은순).
+  const [itemSortKey, setItemSortKey] = useState("qty"); // "item" | "spec" | "qty"
+  const [itemSortDir, setItemSortDir] = useState("desc"); // "asc" | "desc"
+  function toggleItemSort(key) {
+    if (itemSortKey === key) {
+      setItemSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setItemSortKey(key);
+      setItemSortDir("asc");
+    }
+  }
+
   // 선택한 전표 "안에서" 같은 품목명+규격끼리 수량/건수/금액을 합산한다(전표 하나 기준 집계).
   const itemStats = useMemo(() => {
     const rows = selectedItemGroup ? selectedItemGroup.rows : [];
@@ -3299,8 +3311,16 @@ function CustomerDataTab({ rentals }) {
       e.count += 1;
       e.amount += Number(r.amount) || 0;
     }
-    return Array.from(map.values()).sort((a, b) => b.qty - a.qty);
-  }, [selectedItemGroup]);
+    const arr = Array.from(map.values());
+    const dir = itemSortDir === "asc" ? 1 : -1;
+    arr.sort((a, b) => {
+      if (itemSortKey === "qty") return (a.qty - b.qty) * dir;
+      const av = itemSortKey === "item" ? a.item : a.spec;
+      const bv = itemSortKey === "item" ? b.item : b.spec;
+      return (av || "").localeCompare(bv || "", "ko") * dir;
+    });
+    return arr;
+  }, [selectedItemGroup, itemSortKey, itemSortDir]);
   const itemStatsTotalQty = itemStats.reduce((s, r) => s + r.qty, 0);
   const itemStatsTotalAmount = itemStats.reduce((s, r) => s + r.amount, 0);
 
@@ -3534,17 +3554,26 @@ function CustomerDataTab({ rentals }) {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                   <thead>
                     <tr>
-                      {["품목", "규격", "총수량"].map((h) => (
+                      {[
+                        { label: "품목", key: "item" },
+                        { label: "규격", key: "spec" },
+                        { label: "총수량", key: "qty" },
+                      ].map((h) => (
                         <th
-                          key={h}
+                          key={h.key}
+                          onClick={() => toggleItemSort(h.key)}
                           style={{
                             border: `1px solid ${C.line}`,
                             padding: "8px 10px",
                             background: C.bg,
-                            textAlign: h === "품목" || h === "규격" ? "left" : "right",
+                            textAlign: h.key === "qty" ? "right" : "left",
+                            cursor: "pointer",
+                            userSelect: "none",
+                            whiteSpace: "nowrap",
                           }}
                         >
-                          {h}
+                          {h.label}
+                          {itemSortKey === h.key ? (itemSortDir === "asc" ? " ▲" : " ▼") : ""}
                         </th>
                       ))}
                     </tr>
