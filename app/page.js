@@ -579,7 +579,9 @@ async function parseQuoteExcel(file) {
 
   const items = [];
   let currentItem = "";
-  let currentSite = site;
+  // 품목별 "현장/구역"은 배송지 주소와는 별개의 정보라, 엑셀 표 안의 소제목 줄(예: "— 사무집기 —")
+  // 텍스트만 그대로 쓴다. 배송지 주소를 섞어 넣지 않는다(주소는 상단 "배송지 주소"에 별도로 있음).
+  let currentSite = "";
 
   for (let i = headerRowIdx + 1; i < rows.length; i++) {
     const row = rows[i] || [];
@@ -599,7 +601,7 @@ async function parseQuoteExcel(file) {
 
     const hasData = qtyRaw != null || priceRaw != null || amountRaw != null;
     if (itemCell && !hasData && !specCell) {
-      currentSite = site ? `${site} · ${itemCell}` : itemCell;
+      currentSite = itemCell;
       continue;
     }
 
@@ -844,7 +846,8 @@ async function parseQuotePdf(file) {
   let colCenters = null;
   const items = [];
   let currentItem = "";
-  let currentSite = site;
+  // 품목별 "현장/구역"은 배송지 주소와는 별개의 정보라, PDF 표 안의 구획 제목 텍스트만 그대로 쓴다.
+  let currentSite = "";
   let stopped = false;
 
   for (const pageItems of allPagesItems) {
@@ -929,7 +932,8 @@ async function parseQuotePdf(file) {
 
       if (itemStr && !hasData && !specStr) {
         if (isDivider) {
-          currentSite = site ? `${site} · ${itemStr}` : itemStr;
+          // 품목별 "현장/구역"은 배송지 주소와 별개라, 배송지 주소를 섞지 않고 구획 제목 텍스트만 그대로 쓴다.
+          currentSite = itemStr;
           continue;
         }
         // 병합된 셀 라벨(예: "사무책상")은 세로로 두 데이터 행 사이 중앙에 찍혀 나오는 경우가 있어,
@@ -1335,7 +1339,7 @@ function Dashboard({ profile, onLogout }) {
         )}
 
         {activeTab === "rentals" && isStaff && (
-          <RentalListTab key={rentalsResetKey} rentals={rentals} onRefresh={fetchRentals} isAdmin={isAdmin} managerName={managerName} />
+          <RentalListTab key={rentalsResetKey} rentals={rentals} onRefresh={fetchRentals} isAdmin={isAdmin} managerName={managerName} tonOverrides={tonOverrides} />
         )}
 
         {activeTab === "shares" && isStaff && (
@@ -2390,8 +2394,10 @@ function QuoteUploadPanel({ importState, setImportState, onFile, onCancel, onCon
   );
 }
 
-const importPreviewCols = ["현장/구역", "품목", "규격", "수량", "단가", "금액", "톤수", "비고"];
-const importPreviewInitialWidths = [110, 170, 190, 55, 100, 100, 95, 180];
+// "현장/구역"은 업로드 미리보기 화면에서는 굳이 보여줄 필요가 없어서 뺐다(품목 데이터에는 계속 남아있고,
+// 등록 후 렌탈내역/전표 상세 화면에서는 그대로 보인다).
+const importPreviewCols = ["품목", "규격", "수량", "단가", "금액", "톤수", "비고"];
+const importPreviewInitialWidths = [170, 190, 55, 100, 100, 95, 180];
 
 function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOverrides, onTonOverrideSaved }) {
   const updateItem = (idx, patch) => {
@@ -2462,7 +2468,6 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOve
         </div>
         {state.items.map((it, idx) => (
           <div key={idx} style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content" }}>
-            <input style={smallInputStyle} value={it.site || ""} onChange={(e) => updateItem(idx, { site: e.target.value })} />
             <input style={smallInputStyle} value={it.item || ""} onChange={(e) => updateItem(idx, { item: e.target.value })} />
             <input style={smallInputStyle} value={it.spec || ""} onChange={(e) => updateItem(idx, { spec: e.target.value })} />
             <input type="number" style={smallInputStyle} value={it.qty ?? ""} onChange={(e) => updateItem(idx, { qty: Number(e.target.value) })} />
@@ -2636,7 +2641,7 @@ const emptyAdvSearch = {
   status: "",
 };
 
-function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "" }) {
+function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", tonOverrides }) {
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState(null);
   const [checkedKeys, setCheckedKeys] = useState(new Set());
@@ -2738,6 +2743,7 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "" })
         }}
         isAdmin={isAdmin}
         managerName={managerName}
+        tonOverrides={tonOverrides}
       />
     );
   }
@@ -2987,7 +2993,7 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "" })
   );
 }
 
-function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerName = "" }) {
+function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerName = "", tonOverrides }) {
   const [header, setHeader] = useState(() => ({
     voucherNo: group.head.voucher_no || "",
     transactionType: group.head.transaction_type || "rental",
@@ -3044,6 +3050,12 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
 
   const totalAmount = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
   const isRental = header.transactionType === "rental";
+
+  // 화물차 적재 톤수(기준표 + 저장된 커스텀 값 기준)와 미확인 품목 수. 상단에 바로 보이게 계산해둔다.
+  const itemsWithTon = useMemo(() => withComputedTons(items, tonOverrides), [items, tonOverrides]);
+  const tonKnownItems = itemsWithTon.filter((it) => it.ton != null);
+  const totalTon = tonKnownItems.reduce((s, it) => s + Number(it.ton), 0);
+  const missingTonCount = itemsWithTon.length - tonKnownItems.length;
 
   async function handleSave() {
     if (!header.customer) {
@@ -3177,6 +3189,28 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
           )}
           <button onClick={onClose} style={ghostBtnStyle}>← 목록으로</button>
         </div>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 14,
+          border: `1px solid ${C.line}`,
+          background: "#F7F4EC",
+          padding: "14px 18px",
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ fontSize: 14, color: C.ink }}>
+          🚚 총 톤수 <strong>{totalTon.toFixed(3)}톤</strong>
+          {missingTonCount > 0 && (
+            <span style={{ color: "#B45309", fontSize: 12.5 }}> (톤수 미확인 {missingTonCount}건)</span>
+          )}
+        </div>
+        {header.siteAddress && <div style={{ width: 1, alignSelf: "stretch", background: C.line }} />}
+        <DeliverySiteInfoButton address={header.siteAddress} />
       </div>
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
