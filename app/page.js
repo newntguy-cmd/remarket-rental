@@ -1082,6 +1082,7 @@ function Dashboard({ profile, onLogout }) {
       parsed.voucherNo = nextVoucherNo(rentals); // 전표번호는 오늘 날짜 기준 자동 일련번호로 강제 부여
       // 영업담당자 계정은 견적서에 어떤 이름이 적혀 있든 항상 본인 이름으로 담당자를 고정한다(다른 사람 이름으로 잘못 등록되는 것을 방지).
       if (!isAdmin) parsed.manager = managerName;
+      parsed._sourceFile = file; // 원본 파일 자체(등록 확정 시 Storage에 업로드해서 나중에 다시 다운로드할 수 있게 함)
       setImportState(parsed);
       if (isPdf && parsed.items.length === 0) {
         alert("PDF에서 품목을 인식하지 못했어요. 표 형식이 다를 수 있으니 아래 내용을 직접 채워주시거나 엑셀 버전으로 올려주세요.");
@@ -1134,11 +1135,30 @@ function Dashboard({ profile, onLogout }) {
       tax_invoice: importState.taxInvoice || null,
     }));
     const { error } = await supabase.from("rentals").insert(rows);
-    setImporting(false);
     if (error) {
+      setImporting(false);
       alert("등록 중 오류가 발생했어요: " + error.message);
       return;
     }
+
+    // 원본 견적서 파일(엑셀/PDF)을 Storage에 올려서 나중에 전표 상세화면에서 그대로 다시 다운로드할 수 있게 한다.
+    // rentals 행이 이미 등록된 뒤에 업로드해야, 업로드 권한 검사(RLS)가 "이 전표번호가 내 담당 데이터인지"를 확인할 수 있다.
+    const sourceFile = importState._sourceFile;
+    if (sourceFile && importState.voucherNo) {
+      const path = `quotes/${importState.voucherNo}/${Date.now()}_${sourceFile.name}`;
+      const { error: uploadError } = await supabase.storage.from("quote-files").upload(path, sourceFile, { upsert: false });
+      if (uploadError) {
+        console.error("원본 파일 업로드 실패:", uploadError);
+        alert("데이터는 정상 등록됐지만, 원본 파일 저장에는 실패했어요: " + uploadError.message);
+      } else {
+        await supabase
+          .from("rentals")
+          .update({ source_file_path: path, source_file_name: sourceFile.name })
+          .eq("voucher_no", importState.voucherNo);
+      }
+    }
+
+    setImporting(false);
     setImportState(null);
     fetchCustomers();
     fetchRentals();
@@ -2346,11 +2366,39 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
     onSaved();
   }
 
+  const [downloadingSource, setDownloadingSource] = useState(false);
+  async function handleDownloadSourceFile() {
+    const path = group.head.source_file_path;
+    if (!path) return;
+    setDownloadingSource(true);
+    const { data, error } = await supabase.storage.from("quote-files").download(path);
+    setDownloadingSource(false);
+    if (error || !data) {
+      alert("원본 파일을 불러오지 못했어요: " + (error?.message || "알 수 없는 오류"));
+      return;
+    }
+    const url = URL.createObjectURL(data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = group.head.source_file_name || "원본파일";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <div style={{ fontFamily: serif, fontSize: 16 }}>전표 상세 — {header.voucherNo || "(번호없음)"}</div>
-        <button onClick={onClose} style={ghostBtnStyle}>← 목록으로</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          {group.head.source_file_path && (
+            <button onClick={handleDownloadSourceFile} disabled={downloadingSource} style={ghostBtnStyle}>
+              {downloadingSource ? "불러오는 중…" : `원본 파일 다운로드${group.head.source_file_name ? ` (${group.head.source_file_name})` : ""}`}
+            </button>
+          )}
+          <button onClick={onClose} style={ghostBtnStyle}>← 목록으로</button>
+        </div>
       </div>
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
