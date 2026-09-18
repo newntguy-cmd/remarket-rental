@@ -2694,13 +2694,24 @@ function loadKakaoMapsSdk() {
 
 // 주소 문자열을 위도/경도로 변환한다. API 키가 없거나, 주소를 못 찾거나, 네트워크 오류가 나면 null(자동 실패 시
 // 조용히 넘어가고 직접 선택하도록 둔다).
+// 카카오 주소검색은 "N층", "OOO동 OOO호"처럼 도로명/지번 주소 뒤에 붙는 상세정보가 있으면
+// 못 찾는 경우가 많다(ZERO_RESULT). 예: "서울시 강남구 테헤란로 410, 19~21층"은 실패하지만
+// "서울시 강남구 테헤란로 410"은 성공한다. 그래서 검색 전에 상세정보를 잘라낸다.
+function stripAddressDetail(address) {
+  let s = (address || "").split(",")[0].trim(); // 콤마 뒤(대부분 층/호 상세정보)는 버림
+  s = s.replace(/\s*(지하)?\s*\d+(~\d+)?\s*층\s*$/, "").trim(); // "...410 19~21층" 처럼 콤마 없이 붙은 경우
+  s = s.replace(/\s*\d+동\s*\d*호?\s*$/, "").trim(); // "...101동 202호"
+  return s || (address || "").trim();
+}
+
 async function geocodeAddress(address) {
   const kakao = await loadKakaoMapsSdk();
   if (!kakao || !address) return null;
+  const clean = stripAddressDetail(address);
   return new Promise((resolve) => {
     try {
       const geocoder = new kakao.maps.services.Geocoder();
-      geocoder.addressSearch(address, (result, status) => {
+      geocoder.addressSearch(clean, (result, status) => {
         if (status === kakao.maps.services.Status.OK && result[0]) {
           resolve({ lat: Number(result[0].y), lng: Number(result[0].x) });
         } else {
