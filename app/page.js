@@ -422,7 +422,15 @@ async function parseQuoteExcel(file) {
   const XLSX = await import("xlsx");
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array" });
-  const sheet = wb.Sheets[wb.SheetNames[0]];
+  // 엑셀 하단에 시트 탭이 여러 개 있어도(예: "최초 견적서" 탭에 수정 요청이 들어올 때마다 "수정된견적서" 탭이
+  // 옆에 추가되는 경우) 항상 가장 왼쪽(첫 번째) 탭 하나만 읽는다. 숨겨진 시트가 맨 앞에 끼어 있으면 그건 건너뛰고
+  // 화면에 실제로 보이는 첫 탭을 고른다.
+  const visibleSheetNames = wb.SheetNames.filter((name) => {
+    const meta = (wb.Workbook?.Sheets || []).find((s) => s.name === name);
+    return !meta || !meta.Hidden; // Hidden: 0(또는 없음)=보임, 1=숨김, 2=매우숨김
+  });
+  const firstSheetName = visibleSheetNames[0] || wb.SheetNames[0];
+  const sheet = wb.Sheets[firstSheetName];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
 
   let customer = "";
@@ -1084,7 +1092,9 @@ function Dashboard({ profile, onLogout }) {
     const isPdf = file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf";
     try {
       const parsed = isPdf ? await parseQuotePdf(file) : await parseQuoteExcel(file);
-      parsed.voucherNo = nextVoucherNo(rentals); // 전표번호는 오늘 날짜 기준 자동 일련번호로 강제 부여
+      parsed.isPdf = isPdf;
+      // PDF든 엑셀이든 전표번호는 자동으로 채우지 않고 항상 비워둬서 직접 입력하게 한다.
+      parsed.voucherNo = "";
       // 영업담당자 계정은 견적서에 어떤 이름이 적혀 있든 항상 본인 이름으로 담당자를 고정한다(다른 사람 이름으로 잘못 등록되는 것을 방지).
       if (!isAdmin) parsed.manager = managerName;
       parsed._sourceFile = file; // 원본 파일 자체(등록 확정 시 Storage에 업로드해서 나중에 다시 다운로드할 수 있게 함)
@@ -1100,6 +1110,10 @@ function Dashboard({ profile, onLogout }) {
 
   async function confirmImport() {
     if (!importState) return;
+    if (!(importState.voucherNo || "").trim()) {
+      alert("전표번호를 입력해주세요.");
+      return;
+    }
     setImporting(true);
 
     // 거래처 담당자/연락처/메일이 파악됐으면 customers 테이블에도 반영 (기존 정보는 덮어쓰지 않고 채워진 값만 upsert)
@@ -1625,8 +1639,8 @@ function QuoteHeaderForm({ state, update, isAdmin = true }) {
             <option value="purchase">구매</option>
           </select>
         </Field>
-        <Field label="전표번호 (오늘 날짜 기준 자동 부여, 일련번호라 수정 불필요)">
-          <input style={{ ...inputStyle, background: C.mutedBg, color: C.inkSoft }} value={state.voucherNo || ""} readOnly />
+        <Field label="전표번호 (직접 입력해주세요)">
+          <input style={inputStyle} value={state.voucherNo || ""} onChange={(e) => update({ voucherNo: e.target.value })} placeholder="예: 26031401" />
         </Field>
         <Field label={isAdmin ? "담당자" : "담당자 (본인 계정으로 고정)"}>
           {isAdmin ? (
