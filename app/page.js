@@ -1917,6 +1917,7 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "" })
   const [checkedKeys, setCheckedKeys] = useState(new Set());
   const [merging, setMerging] = useState(false);
   const [deletingSelected, setDeletingSelected] = useState(false);
+  const [downloadingFiles, setDownloadingFiles] = useState(false);
   const [showAdvSearch, setShowAdvSearch] = useState(false);
   const [advSearch, setAdvSearch] = useState(emptyAdvSearch);
   const [appliedAdv, setAppliedAdv] = useState(emptyAdvSearch);
@@ -2050,6 +2051,35 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "" })
     onRefresh();
   }
 
+  async function handleDownloadSelectedFiles() {
+    const chosen = groups.filter((g) => checkedKeys.has(g.key));
+    if (chosen.length === 0) return;
+    const withFiles = chosen.filter((g) => g.head.source_file_path);
+    const noFileCount = chosen.length - withFiles.length;
+    if (withFiles.length === 0) {
+      alert("선택한 전표 중 원본 파일이 저장된 건이 없어요. (견적서 업로드로 새로 등록한 전표부터 원본 파일이 저장돼요)");
+      return;
+    }
+    setDownloadingFiles(true);
+    for (const g of withFiles) {
+      const { data, error } = await supabase.storage.from("quote-files").download(g.head.source_file_path);
+      if (error || !data) continue;
+      const url = URL.createObjectURL(data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = g.head.source_file_name || `원본파일_${g.voucherNo || ""}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    setDownloadingFiles(false);
+    if (noFileCount > 0) {
+      alert(`${noFileCount}건은 원본 파일이 없어 다운로드에서 제외됐어요. (견적서 업로드로 새로 등록한 전표부터 원본 파일이 저장돼요)`);
+    }
+  }
+
   const totalAmount = filtered.reduce((s, g) => s + g.amount, 0);
 
   return (
@@ -2133,6 +2163,9 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "" })
           {checkedKeys.size < 2 && <div style={{ color: C.muted }}>(2건 이상 선택하면 하나로 묶을 수 있어요)</div>}
           <button onClick={handleMerge} disabled={checkedKeys.size < 2 || merging} style={miniBtnStylePrimary}>
             {merging ? "합치는 중…" : "선택한 건 하나의 전표로 묶기"}
+          </button>
+          <button onClick={handleDownloadSelectedFiles} disabled={downloadingFiles} style={miniBtnStyle}>
+            {downloadingFiles ? "다운로드 중…" : "원본 파일 다운로드"}
           </button>
           <button onClick={handleDeleteSelected} disabled={deletingSelected} style={{ ...miniBtnStyle, borderColor: C.brick, color: C.brick }}>
             {deletingSelected ? "삭제 중…" : "선택 삭제"}
