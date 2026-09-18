@@ -1269,6 +1269,7 @@ function Dashboard({ profile, onLogout }) {
 
   const menuItems = [
     ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
+    ...(isStaff ? [{ key: "quickcalc", label: "빠른 톤수/배송비 계산" }] : []),
     ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
     ...(isStaff ? [{ key: "shares", label: "지분관리" }] : []),
     ...(isStaff ? [{ key: "sales", label: "판매현황" }] : []),
@@ -1336,6 +1337,10 @@ function Dashboard({ profile, onLogout }) {
             tonOverrides={tonOverrides}
             onTonOverrideSaved={fetchTonOverrides}
           />
+        )}
+
+        {activeTab === "quickcalc" && isStaff && (
+          <QuickTonCalcPanel tonOverrides={tonOverrides} onTonOverrideSaved={fetchTonOverrides} />
         )}
 
         {activeTab === "rentals" && isStaff && (
@@ -2256,6 +2261,88 @@ function withComputedTons(items, customOverrides) {
   });
 }
 
+// ---------- 견적서를 등록하지 않고 붙여넣기만으로 톤수/배송비를 미리 확인하는 기능 ----------
+// 엑셀에서 표 영역을 복사하면 셀 사이는 탭(\t), 행 사이는 줄바꿈으로 구분된 텍스트가 클립보드에 담긴다.
+// 이를 다시 표(2차원 배열) 형태로 되돌린다.
+function parsePastedTable(text) {
+  return (text || "")
+    .split(/\r\n|\r|\n/)
+    .map((line) => line.split("\t"))
+    .filter((row) => row.some((c) => cellText(c)));
+}
+
+// detectColumns와 같은 방식(헤더 글자로 열 위치 찾기)이지만, 붙여넣기는 톤수 계산이 목적이라
+// 단가/금액 칸이 없어도(품목+수량만 있어도) 헤더로 인정한다.
+function detectPasteColumns(rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const cols = {};
+    row.forEach((cell, idx) => {
+      const t = cellText(cell).replace(/\s/g, "");
+      if (!t) return;
+      if (t.includes("품") && t.includes("목")) cols.item = idx;
+      else if (t.includes("규격")) cols.spec = idx;
+      else if (t.includes("수량")) cols.qty = idx;
+      else if (t.includes("단가")) cols.price = idx;
+      else if (t.includes("금액")) cols.amount = idx;
+      else if (t.includes("비고")) cols.note = idx;
+    });
+    if (cols.item !== undefined && cols.qty !== undefined) {
+      return { headerRowIdx: i, cols };
+    }
+  }
+  return null;
+}
+
+// 붙여넣은 표에서 품목/규격/수량 목록을 뽑아낸다. "품목/규격/수량" 같은 헤더 글자를 못 찾으면
+// (담당자가 헤더 없이 데이터만 복사한 경우) 왼쪽부터 품목/규격/수량/단가/금액/비고 순으로 가정하고,
+// 첫 줄의 수량 칸이 숫자가 아니면(=사실 헤더 줄인데 글자를 못 알아챈 경우) 그 줄은 건너뛴다.
+function parsePastedItems(text) {
+  const rows = parsePastedTable(text);
+  if (rows.length === 0) return [];
+  const detected = detectPasteColumns(rows);
+  const cols = detected ? detected.cols : { item: 0, spec: 1, qty: 2, price: 3, amount: 4, note: 5 };
+  const specCol = cols.spec ?? cols.item + 1;
+  let startIdx = detected ? detected.headerRowIdx + 1 : 0;
+  if (!detected) {
+    const firstQty = cellText(rows[0][cols.qty]).replace(/,/g, "");
+    if (firstQty && isNaN(Number(firstQty))) startIdx = 1;
+  }
+
+  const items = [];
+  for (let i = startIdx; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const itemCell = cellText(row[cols.item]);
+    const specCell = cellText(row[specCol]);
+    const qtyRaw = row[cols.qty];
+    const priceRaw = cols.price != null ? row[cols.price] : null;
+    const amountRaw = cols.amount != null ? row[cols.amount] : null;
+    const noteCell = cols.note != null ? cellText(row[cols.note]) : "";
+
+    const lower = itemCell.toLowerCase();
+    if (STOP_NAMES.includes(lower)) break;
+    if (SKIP_NAMES.includes(lower)) continue;
+    if (itemCell.startsWith("*") || itemCell.startsWith("※")) continue;
+    if (!itemCell && !specCell) continue;
+
+    const hasQty = cellText(qtyRaw) !== "";
+    if (itemCell && !hasQty && !specCell) continue; // 구획 제목 줄(소제목)은 톤수 계산과 무관하므로 건너뜀
+
+    const toNum = (v) => {
+      const t = cellText(v).replace(/,/g, "");
+      if (t === "" || t === "-") return null;
+      const n = Number(t);
+      return isNaN(n) ? null : n;
+    };
+    const qty = toNum(qtyRaw) ?? 1;
+    const unitPrice = toNum(priceRaw);
+    const amount = toNum(amountRaw) ?? (unitPrice != null ? unitPrice * qty : null);
+
+    items.push({ item: itemCell, spec: specCell, qty: isNaN(qty) ? 1 : qty, unit_price: unitPrice, amount, note: noteCell });
+  }
+  return items;
+}
+
 // 주소 문자열을 공백만 정리해서 비교/저장 키로 쓴다 (톤수의 normalizeTonText와 같은 방식).
 function normalizeAddressText(s) {
   return (s || "").replace(/\s+/g, " ").trim();
@@ -2676,6 +2763,139 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
         </div>
       )}
     </span>
+  );
+}
+
+// 견적서를 아직 전표로 등록하기 전이라도, 엑셀에서 품목표를 그대로 복사해서 붙여넣기만 하면
+// 톤수와 배송비를 바로 확인할 수 있게 하는 화면. 업로드/등록 과정을 거치지 않는 순수 계산 용도라
+// DB에 아무것도 저장하지 않는다(단, 톤수를 직접 입력해 "저장"을 누르면 그 품목 기준표에는 반영된다).
+function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
+  const [text, setText] = useState("");
+  const [transactionType, setTransactionType] = useState("rental");
+  const [address, setAddress] = useState("");
+  const [tonEdits, setTonEdits] = useState({});
+  const [savingIdx, setSavingIdx] = useState(null);
+
+  const rawItems = useMemo(() => parsePastedItems(text), [text]);
+  const items = useMemo(
+    () => withComputedTons(rawItems, tonOverrides).map((it, idx) => (tonEdits[idx] !== undefined ? { ...it, ton: tonEdits[idx] === "" ? null : Number(tonEdits[idx]) } : it)),
+    [rawItems, tonOverrides, tonEdits]
+  );
+
+  const applicable = items.filter((it) => !it.tonExcluded);
+  const known = applicable.filter((it) => it.ton != null);
+  const totalTon = known.reduce((sum, it) => sum + Number(it.ton), 0);
+  const missingCount = applicable.length - known.length;
+
+  async function saveTonOverride(idx) {
+    const it = items[idx];
+    if (it.ton == null || !it.qty) {
+      alert("톤수와 수량을 먼저 입력해주세요.");
+      return;
+    }
+    if (!(it.item || "").trim() || !(it.spec || "").trim()) {
+      alert("품목명과 규격이 있어야 저장할 수 있어요.");
+      return;
+    }
+    setSavingIdx(idx);
+    const per = Math.round((Number(it.ton) / Number(it.qty)) * 1000000) / 1000000;
+    const { error } = await supabase.from("ton_overrides").upsert({ item: it.item.trim(), spec: it.spec.trim(), per }, { onConflict: "item,spec" });
+    setSavingIdx(null);
+    if (error) {
+      alert("저장하지 못했어요: " + error.message);
+      return;
+    }
+    setTonEdits((prev) => {
+      const next = { ...prev };
+      delete next[idx];
+      return next;
+    });
+    onTonOverrideSaved && onTonOverrideSaved();
+    alert("저장했어요. 다음부터 이 품목은 자동으로 채워져요.");
+  }
+
+  return (
+    <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20 }}>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>빠른 톤수/배송비 계산</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
+        견적서를 등록하지 않고도 톤수와 배송비를 먼저 확인할 수 있어요. 엑셀에서 품목표(품목/규격/수량 칸)를 그대로 복사해서 아래에 붙여넣어보세요.
+        헤더(품목/규격/수량 등)까지 같이 복사하면 더 정확하게 읽혀요. 여기서 계산한 내용은 등록되지 않고, 톤수를 직접 입력해서 저장한 값만 기준표에 남아요.
+      </div>
+
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="여기에 엑셀에서 복사한 품목표를 붙여넣으세요 (Ctrl+V)"
+        style={{ width: "100%", minHeight: 160, fontFamily: "monospace", fontSize: 12.5, padding: 10, border: `1px solid ${C.line}`, marginBottom: 14, boxSizing: "border-box" }}
+      />
+
+      {items.length > 0 && (
+        <>
+          <div style={{ border: `1px solid ${C.lineSoft}`, marginBottom: 14 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 130px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
+              <div>품목</div>
+              <div>규격</div>
+              <div>수량</div>
+              <div>톤수</div>
+            </div>
+            <div style={{ maxHeight: 320, overflow: "auto" }}>
+              {items.map((it, idx) => (
+                <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 130px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}>
+                  <div>{it.item}</div>
+                  <div>{it.spec}</div>
+                  <div>{it.qty}</div>
+                  {it.tonExcluded ? (
+                    <div style={{ fontSize: 11.5, color: C.muted }} title="DC·설치비·배송비 등은 톤수 계산에서 제외돼요">
+                      제외
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <input
+                        type="number"
+                        step="0.001"
+                        style={{ ...smallInputStyle, background: it.ton == null ? "#FFF6E5" : smallInputStyle.background }}
+                        value={tonEdits[idx] !== undefined ? tonEdits[idx] : it.ton ?? ""}
+                        placeholder="직접입력"
+                        onChange={(e) => setTonEdits((prev) => ({ ...prev, [idx]: e.target.value }))}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => saveTonOverride(idx)}
+                        disabled={savingIdx === idx}
+                        style={{ border: `1px solid ${C.line}`, background: "none", cursor: "pointer", fontSize: 11.5, padding: "4px 6px", color: C.inkSoft, flexShrink: 0 }}
+                      >
+                        {savingIdx === idx ? "…" : "저장"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ border: `1px solid ${C.line}`, background: "#F7F4EC", padding: "14px 18px", display: "flex", alignItems: "center", flexWrap: "wrap", gap: 14 }}>
+            <div style={{ fontSize: 13.5 }}>
+              🚚 총 톤수 <strong>{totalTon.toFixed(3)}톤</strong>
+              {missingCount > 0 && <span style={{ color: "#B45309", fontSize: 12.5 }}> (톤수 미확인 {missingCount}건 — 노란 칸을 직접 채워주세요)</span>}
+            </div>
+            <div style={{ width: 1, alignSelf: "stretch", background: C.line }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+              <select style={{ ...inputStyle, fontSize: 12.5, padding: "5px 8px", width: "auto" }} value={transactionType} onChange={(e) => setTransactionType(e.target.value)}>
+                <option value="rental">렌탈</option>
+                <option value="purchase">구매</option>
+              </select>
+              <input
+                style={{ ...inputStyle, fontSize: 12.5, padding: "5px 8px", width: 200 }}
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="배송지 주소"
+              />
+            </div>
+            <DeliveryFeeButton address={address} transactionType={transactionType} totalTon={totalTon} />
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
