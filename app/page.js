@@ -1173,7 +1173,13 @@ function Dashboard({ profile, onLogout }) {
     // rentals 행이 이미 등록된 뒤에 업로드해야, 업로드 권한 검사(RLS)가 "이 전표번호가 내 담당 데이터인지"를 확인할 수 있다.
     const sourceFile = importState._sourceFile;
     if (sourceFile && importState.voucherNo) {
-      const path = `quotes/${importState.voucherNo}/${Date.now()}_${sourceFile.name}`;
+      // Supabase Storage는 파일 키(경로)에 한글 등 비-ASCII 문자가 들어가면 "Invalid key" 오류를 낸다.
+      // 실제 파일명은 source_file_name 컬럼에 그대로 저장해 다운로드 시 보여주고,
+      // 저장 경로 자체는 전표번호/확장자 등 안전한 문자만 남겨서 만든다.
+      const safeVoucherNo = (importState.voucherNo || "").replace(/[^a-zA-Z0-9_-]/g, "") || "voucher";
+      const extMatch = sourceFile.name.match(/\.[a-zA-Z0-9]+$/);
+      const ext = extMatch ? extMatch[0] : "";
+      const path = `quotes/${safeVoucherNo}/${Date.now()}${ext}`;
       const { error: uploadError } = await supabase.storage.from("quote-files").upload(path, sourceFile, { upsert: false });
       if (uploadError) {
         console.error("원본 파일 업로드 실패:", uploadError);
