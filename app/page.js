@@ -2255,7 +2255,8 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [colWidths, startResize] = useResizableColumns([180, 140, 55, 90, 100, 80, 180, 100]);
-  const itemsGridTemplate = colWidths.map((w) => `${w}px`).join(" ") + " 32px";
+  const itemsGridTemplate = "28px " + colWidths.map((w) => `${w}px`).join(" ");
+  const [checkedItemIdxs, setCheckedItemIdxs] = useState(new Set());
 
   const update = (patch) => setHeader((h) => ({ ...h, ...patch }));
   const updateItem = (idx, patch) => {
@@ -2264,7 +2265,23 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
     setItems(next);
   };
   const addItem = () => setItems([...items, { id: null, item: "", spec: "", qty: 1, unit_price: null, amount: null, note: "" }]);
-  const removeItem = (idx) => setItems(items.filter((_, i) => i !== idx));
+  const toggleItemChecked = (idx) => {
+    setCheckedItemIdxs((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
+  const toggleItemCheckedAll = () => {
+    setCheckedItemIdxs((prev) => (prev.size === items.length ? new Set() : new Set(items.map((_, i) => i))));
+  };
+  const handleDeleteSelectedItems = () => {
+    if (checkedItemIdxs.size === 0) return;
+    if (!confirm(`선택한 ${checkedItemIdxs.size}개 품목을 삭제할까요?`)) return;
+    setItems(items.filter((_, i) => !checkedItemIdxs.has(i)));
+    setCheckedItemIdxs(new Set());
+  };
 
   const totalAmount = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
   const isRental = header.transactionType === "rental";
@@ -2502,7 +2519,14 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ fontFamily: serif, fontSize: 16 }}>품목 내역</div>
-          <button onClick={addItem} style={miniBtnStyle}>+ 품목 추가</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            {checkedItemIdxs.size > 0 && (
+              <button onClick={handleDeleteSelectedItems} style={{ ...miniBtnStyle, borderColor: C.brick, color: C.brick }}>
+                선택삭제 ({checkedItemIdxs.size})
+              </button>
+            )}
+            <button onClick={addItem} style={miniBtnStyle}>+ 품목 추가</button>
+          </div>
         </div>
         <div style={{ maxHeight: 360, overflow: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
           <div
@@ -2520,13 +2544,19 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
               minWidth: "max-content",
             }}
           >
+            <div>
+              <input
+                type="checkbox"
+                checked={items.length > 0 && checkedItemIdxs.size === items.length}
+                onChange={toggleItemCheckedAll}
+              />
+            </div>
             {["품목명", "규격", "수량", "단가", "공급가액", "부가세", "적요", "합계"].map((label, i) => (
               <div key={label} style={{ position: "relative" }}>
                 {label}
                 <ColResizeHandle onMouseDown={startResize(i)} />
               </div>
             ))}
-            <div></div>
           </div>
           {items.map((it, idx) => {
             const vat = Math.round((Number(it.amount) || 0) * 0.1);
@@ -2536,6 +2566,7 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
                 key={it.id ?? `new-${idx}`}
                 style={{ display: "grid", gridTemplateColumns: itemsGridTemplate, gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content" }}
               >
+                <input type="checkbox" checked={checkedItemIdxs.has(idx)} onChange={() => toggleItemChecked(idx)} />
                 <input style={smallInputStyle} value={it.item || ""} onChange={(e) => updateItem(idx, { item: e.target.value })} />
                 <input style={smallInputStyle} value={it.spec || ""} onChange={(e) => updateItem(idx, { spec: e.target.value })} />
                 <input type="number" style={smallInputStyle} value={it.qty ?? ""} onChange={(e) => updateItem(idx, { qty: Number(e.target.value) })} />
@@ -2544,7 +2575,6 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
                 <div style={{ fontSize: 12.5, textAlign: "right", color: C.inkSoft }}>{fmtWon(vat)}</div>
                 <input style={smallInputStyle} value={it.note || ""} onChange={(e) => updateItem(idx, { note: e.target.value })} />
                 <div style={{ fontSize: 12.5, textAlign: "right" }}>{fmtWon(lineTotal)}</div>
-                <button onClick={() => removeItem(idx)} style={{ background: "none", border: "none", color: C.brick, cursor: "pointer", fontSize: 13 }}>✕</button>
               </div>
             );
           })}
