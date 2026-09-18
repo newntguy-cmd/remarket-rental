@@ -1200,6 +1200,9 @@ function Dashboard({ profile, onLogout }) {
       transaction_type: importState.transactionType,
       customer: importState.customer,
       site: it.site,
+      // site(현장/구역)는 품목별 소제목(예: "1층", "사무집기")까지 섞여 들어갈 수 있는 값이라,
+      // 전표 상세 화면의 "배송지 주소"는 여기 오염되지 않도록 별도 칼럼에 원본 배송지 주소를 그대로 저장해둔다.
+      site_address: importState.site || null,
       item: it.item,
       spec: it.spec,
       qty: it.qty,
@@ -2999,7 +3002,8 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
     dueDate: group.head.due_date || "",
     currency: "내자",
     siteName: group.head.site_name || "",
-    site: group.head.site || "",
+    // site_address가 없는(이 기능 추가 전에 등록된) 옛 전표는 site(현장/구역) 값을 그대로 보여준다.
+    siteAddress: group.head.site_address || group.head.site || "",
     project: group.head.project || "",
     taxInvoice: group.head.tax_invoice || "",
     recipient: group.head.recipient || "",
@@ -3065,7 +3069,9 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
       period_days: header.periodMonths ? Number(header.periodMonths) * 30 : null,
       due_date: header.dueDate,
       site_name: header.siteName,
-      site: header.site,
+      // 품목별 "현장/구역"(site) 칼럼은 건드리지 않는다 — 예전엔 여기서 같이 덮어써서 저장할 때마다
+      // 전 품목의 현장/구역 값이 배송지 주소 하나로 통일돼버리는 문제가 있었다.
+      site_address: header.siteAddress,
       project: header.project,
       tax_invoice: header.taxInvoice,
       recipient: header.recipient,
@@ -3255,7 +3261,7 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
             <input style={inputStyle} value={header.siteName} onChange={(e) => update({ siteName: e.target.value })} />
           </Field>
           <Field label="배송지 주소">
-            <input style={inputStyle} value={header.site} onChange={(e) => update({ site: e.target.value })} />
+            <input style={inputStyle} value={header.siteAddress} onChange={(e) => update({ siteAddress: e.target.value })} />
           </Field>
           <Field label="프로젝트 (선택)">
             <input style={inputStyle} value={header.project} onChange={(e) => update({ project: e.target.value })} />
