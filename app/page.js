@@ -785,7 +785,10 @@ async function parseQuotePdf(file) {
     let headerRow = null;
     let headerCols = null;
     for (const row of rows) {
-      const words = pdfMergeWords(row.items, 30);
+      // 견적서 양식에 따라 "규격" 같은 헤더 글자 사이 간격이 유독 넓게 찍히는 경우가 있어(예: 규/격 사이 38px),
+      // 기존 30px 기준으로는 두 글자가 합쳐지지 않아 헤더를 못 찾고 그 페이지 전체를 건너뛰는 문제가 있었다.
+      // 헤더 줄은 어차피 몇 글자 안 되는 라벨만 있는 줄이라 기준을 넉넉히 늘려도 다른 오탐 위험은 거의 없다.
+      const words = pdfMergeWords(row.items, 45);
       const norm = words.map((w) => w.str.replace(/\s/g, ""));
       const find = (pred) => words[norm.findIndex(pred)];
       const item = find((s) => s.includes("품") && s.includes("목"));
