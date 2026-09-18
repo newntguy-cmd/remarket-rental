@@ -1224,7 +1224,7 @@ function Dashboard({ profile, onLogout }) {
         )}
 
         {activeTab === "customerData" && isStaff && (
-          <CustomerDataTab rentals={rentals} />
+          <CustomerDataTab rentals={rentals} onRefresh={fetchRentals} />
         )}
 
         {!isStaff && (
@@ -3181,7 +3181,7 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
   );
 }
 
-function CustomerDataTab({ rentals }) {
+function CustomerDataTab({ rentals, onRefresh }) {
   const todayStr = todayISO();
   const now0 = new Date();
   const monthStart = todayStr.slice(0, 7) + "-01";
@@ -3298,6 +3298,7 @@ function CustomerDataTab({ rentals }) {
   }
 
   // 선택한 전표 "안에서" 같은 품목명+규격끼리 수량/건수/금액을 합산한다(전표 하나 기준 집계).
+  // ids에는 이 그룹으로 합쳐진 원본 렌탈 행들의 id를 모아둬서, 선택삭제 시 실제로 지울 행을 알 수 있게 한다.
   const itemStats = useMemo(() => {
     const rows = selectedItemGroup ? selectedItemGroup.rows : [];
     const map = new Map();
@@ -3305,11 +3306,12 @@ function CustomerDataTab({ rentals }) {
       const itemName = (r.item || "").trim() || "(품목명 없음)";
       const specName = (r.spec || "").trim();
       const key = `${itemName}〓${specName}`;
-      if (!map.has(key)) map.set(key, { item: itemName, spec: specName, qty: 0, count: 0, amount: 0 });
+      if (!map.has(key)) map.set(key, { key, item: itemName, spec: specName, qty: 0, count: 0, amount: 0, ids: [] });
       const e = map.get(key);
       e.qty += Number(r.qty) || 0;
       e.count += 1;
       e.amount += Number(r.amount) || 0;
+      e.ids.push(r.id);
     }
     const arr = Array.from(map.values());
     const dir = itemSortDir === "asc" ? 1 : -1;
@@ -3323,6 +3325,42 @@ function CustomerDataTab({ rentals }) {
   }, [selectedItemGroup, itemSortKey, itemSortDir]);
   const itemStatsTotalQty = itemStats.reduce((s, r) => s + r.qty, 0);
   const itemStatsTotalAmount = itemStats.reduce((s, r) => s + r.amount, 0);
+
+  // 품목별 수량 통계 표의 체크박스 선택삭제 상태(전표를 바꾸면 초기화)
+  const [checkedStatKeys, setCheckedStatKeys] = useState(new Set());
+  const [deletingStats, setDeletingStats] = useState(false);
+  useEffect(() => {
+    setCheckedStatKeys(new Set());
+  }, [selectedItemVoucherKey]);
+
+  function toggleStatChecked(key) {
+    setCheckedStatKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function toggleStatCheckedAll() {
+    setCheckedStatKeys((prev) => (prev.size === itemStats.length ? new Set() : new Set(itemStats.map((r) => r.key))));
+  }
+
+  async function handleDeleteSelectedStats() {
+    const chosen = itemStats.filter((r) => checkedStatKeys.has(r.key));
+    if (chosen.length === 0) return;
+    const allIds = chosen.flatMap((r) => r.ids);
+    if (!confirm(`선택한 품목 ${chosen.length}종(행 ${allIds.length}개)을 이 전표에서 삭제할까요? 되돌릴 수 없어요.`)) return;
+    setDeletingStats(true);
+    const { error } = await supabase.from("rentals").delete().in("id", allIds);
+    setDeletingStats(false);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setCheckedStatKeys(new Set());
+    onRefresh && onRefresh();
+  }
 
   // 인쇄/PDF 저장 시 브라우저 상단에 뜨는 문서 제목("리마켓 렌탈장부")을 잠깐 "품목별 수량통계"로 바꿔서,
   // 인쇄 머리글과 "PDF로 저장" 시 기본 파일명이 모두 "품목별 수량통계"가 되게 한다. 인쇄가 끝나면 원래 제목으로 되돌린다.
@@ -3528,6 +3566,13 @@ function CustomerDataTab({ rentals }) {
               <div className="itemstats-no-print" style={{ display: "flex", gap: 8, marginBottom: 12 }}>
                 <button onClick={() => setSelectedItemVoucherKey(null)} style={ghostBtnStyle}>← 전표 목록으로</button>
                 <button onClick={handlePrintItemStats} style={primaryBtnStyle2}>인쇄 / PDF로 저장</button>
+                <button
+                  onClick={handleDeleteSelectedStats}
+                  disabled={checkedStatKeys.size === 0 || deletingStats}
+                  style={{ ...ghostBtnStyle, opacity: checkedStatKeys.size === 0 || deletingStats ? 0.5 : 1 }}
+                >
+                  {deletingStats ? "삭제 중..." : `선택삭제${checkedStatKeys.size > 0 ? ` (${checkedStatKeys.size})` : ""}`}
+                </button>
               </div>
 
               <div className="itemstats-no-print" style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
@@ -3554,6 +3599,13 @@ function CustomerDataTab({ rentals }) {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                   <thead>
                     <tr>
+                      <th className="itemstats-no-print" style={{ border: `1px solid ${C.line}`, padding: "8px 10px", background: C.bg, width: 32 }}>
+                        <input
+                          type="checkbox"
+                          checked={itemStats.length > 0 && checkedStatKeys.size === itemStats.length}
+                          onChange={toggleStatCheckedAll}
+                        />
+                      </th>
                       {[
                         { label: "품목", key: "item" },
                         { label: "규격", key: "spec" },
@@ -3580,7 +3632,10 @@ function CustomerDataTab({ rentals }) {
                   </thead>
                   <tbody>
                     {itemStats.map((r) => (
-                      <tr key={`${r.item}〓${r.spec}`}>
+                      <tr key={r.key}>
+                        <td className="itemstats-no-print" style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>
+                          <input type="checkbox" checked={checkedStatKeys.has(r.key)} onChange={() => toggleStatChecked(r.key)} />
+                        </td>
                         <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.item}</td>
                         <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.spec || "-"}</td>
                         <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</td>
@@ -3589,6 +3644,7 @@ function CustomerDataTab({ rentals }) {
                   </tbody>
                   <tfoot>
                     <tr>
+                      <td className="itemstats-no-print" style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}></td>
                       <td colSpan={2} style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
                         합계
                       </td>
