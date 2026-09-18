@@ -2674,6 +2674,7 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
   const [checked, setChecked] = useState({});
   const toggleTruck = (key) => setChecked((p) => ({ ...p, [key]: !p[key] }));
   const [result, setResult] = useState(null);
+  const [applied, setApplied] = useState(null); // "적용"을 눌러 확정한 최종 배송비. 확정되면 버튼 자체에 표시해서 팝업을 닫아도 계속 보인다.
 
   function calculate() {
     if (!zone) {
@@ -2707,7 +2708,7 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
   return (
     <span style={{ position: "relative", display: "inline-block" }}>
       <button type="button" onClick={() => setOpen((v) => !v)} style={miniBtnStyle}>
-        💰 배송비
+        💰 배송비{applied ? <> · <strong>{fmtWon(applied.total)}</strong></> : ""}
       </button>
       {open && (
         <div
@@ -2797,8 +2798,20 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
               {result.truckDetails.map((d, i) => (
                 <div key={i}>용차 · {d.label}: {fmtWon(d.cost)}</div>
               ))}
-              <div style={{ marginTop: 6, fontSize: 14 }}>
-                합계 <strong>{fmtWon(result.total)}</strong>
+              <div style={{ marginTop: 6, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span>
+                  합계 <strong>{fmtWon(result.total)}</strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setApplied(result);
+                    setOpen(false);
+                  }}
+                  style={{ ...miniBtnStylePrimary, padding: "5px 10px", fontSize: 12 }}
+                >
+                  적용
+                </button>
               </div>
             </div>
           )}
