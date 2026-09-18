@@ -1339,7 +1339,7 @@ function Dashboard({ profile, onLogout }) {
         )}
 
         {activeTab === "rentals" && isStaff && (
-          <RentalListTab key={rentalsResetKey} rentals={rentals} onRefresh={fetchRentals} isAdmin={isAdmin} managerName={managerName} tonOverrides={tonOverrides} />
+          <RentalListTab key={rentalsResetKey} rentals={rentals} onRefresh={fetchRentals} isAdmin={isAdmin} managerName={managerName} tonOverrides={tonOverrides} onTonOverrideSaved={fetchTonOverrides} />
         )}
 
         {activeTab === "shares" && isStaff && (
@@ -2666,7 +2666,7 @@ const emptyAdvSearch = {
   status: "",
 };
 
-function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", tonOverrides }) {
+function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", tonOverrides, onTonOverrideSaved }) {
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState(null);
   const [checkedKeys, setCheckedKeys] = useState(new Set());
@@ -2769,6 +2769,7 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
         isAdmin={isAdmin}
         managerName={managerName}
         tonOverrides={tonOverrides}
+        onTonOverrideSaved={onTonOverrideSaved}
       />
     );
   }
@@ -3018,7 +3019,7 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
   );
 }
 
-function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerName = "", tonOverrides }) {
+function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerName = "", tonOverrides, onTonOverrideSaved }) {
   const [header, setHeader] = useState(() => ({
     voucherNo: group.head.voucher_no || "",
     transactionType: group.head.transaction_type || "rental",
@@ -3077,11 +3078,52 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
   const isRental = header.transactionType === "rental";
 
   // 화물차 적재 톤수(기준표 + 저장된 커스텀 값 기준)와 미확인 품목 수. 상단에 바로 보이게 계산해둔다.
-  const itemsWithTon = useMemo(() => withComputedTons(items, tonOverrides), [items, tonOverrides]);
+  // localTonOverrides: 이 화면에서 방금 "저장"한 값을, 상위 화면의 tonOverrides가 다시 불러와지기 전까지
+  // 바로 반영해서 보여주기 위한 임시 값(ton_overrides 저장은 물론 별도로 함).
+  const [localTonOverrides, setLocalTonOverrides] = useState([]);
+  const effectiveTonOverrides = useMemo(() => [...(tonOverrides || []), ...localTonOverrides], [tonOverrides, localTonOverrides]);
+  const itemsWithTon = useMemo(() => withComputedTons(items, effectiveTonOverrides), [items, effectiveTonOverrides]);
   const tonApplicableItems = itemsWithTon.filter((it) => !it.tonExcluded);
   const tonKnownItems = tonApplicableItems.filter((it) => it.ton != null);
   const totalTon = tonKnownItems.reduce((s, it) => s + Number(it.ton), 0);
   const missingTonCount = tonApplicableItems.length - tonKnownItems.length;
+  const [tonDetailOpen, setTonDetailOpen] = useState(false);
+  const [tonEdits, setTonEdits] = useState({}); // idx -> 사용자가 직접 고친 톤수(저장 전 임시 편집값)
+  const [savingTonIdx, setSavingTonIdx] = useState(null);
+
+  // 이 품목(품목명+규격)의 톤수를 다음부터 자동으로 채워지도록 ton_overrides에 저장한다.
+  // 같은 품목+규격을 가진 다른 전표/품목에도 바로 반영된다(ImportPreview의 저장 기능과 동일한 원리).
+  async function saveTonOverride(idx) {
+    const it = itemsWithTon[idx];
+    const editedTon = tonEdits[idx];
+    const ton = editedTon !== undefined ? (editedTon === "" ? null : Number(editedTon)) : it.ton;
+    if (ton == null || !it.qty) {
+      alert("톤수와 수량을 먼저 입력해주세요.");
+      return;
+    }
+    if (!(it.item || "").trim() || !(it.spec || "").trim()) {
+      alert("품목명과 규격이 있어야 저장할 수 있어요.");
+      return;
+    }
+    setSavingTonIdx(idx);
+    const per = Math.round((Number(ton) / Number(it.qty)) * 1000000) / 1000000;
+    const { error } = await supabase
+      .from("ton_overrides")
+      .upsert({ item: it.item.trim(), spec: it.spec.trim(), per }, { onConflict: "item,spec" });
+    setSavingTonIdx(null);
+    if (error) {
+      alert("저장하지 못했어요: " + error.message);
+      return;
+    }
+    setLocalTonOverrides((prev) => [...prev.filter((r) => !(r.item === it.item.trim() && r.spec === it.spec.trim())), { item: it.item.trim(), spec: it.spec.trim(), per }]);
+    setTonEdits((prev) => {
+      const next = { ...prev };
+      delete next[idx];
+      return next;
+    });
+    onTonOverrideSaved && onTonOverrideSaved();
+    alert("저장했어요. 다음부터 이 품목은 자동으로 채워져요.");
+  }
 
   async function handleSave() {
     if (!header.customer) {
@@ -3217,26 +3259,67 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
         </div>
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: 14,
-          border: `1px solid ${C.line}`,
-          background: "#F7F4EC",
-          padding: "14px 18px",
-          marginBottom: 16,
-        }}
-      >
-        <div style={{ fontSize: 14, color: C.ink }}>
-          🚚 총 톤수 <strong>{totalTon.toFixed(3)}톤</strong>
-          {missingTonCount > 0 && (
-            <span style={{ color: "#B45309", fontSize: 12.5 }}> (톤수 미확인 {missingTonCount}건)</span>
-          )}
+      <div style={{ border: `1px solid ${C.line}`, background: "#F7F4EC", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 14, padding: "14px 18px" }}>
+          <button
+            type="button"
+            onClick={() => setTonDetailOpen((v) => !v)}
+            title="눌러서 품목별 톤수를 확인·수정해요"
+            style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 14, color: C.ink, fontFamily: sans }}
+          >
+            🚚 총 톤수 <strong>{totalTon.toFixed(3)}톤</strong>
+            {missingTonCount > 0 && (
+              <span style={{ color: "#B45309", fontSize: 12.5 }}> (톤수 미확인 {missingTonCount}건)</span>
+            )}
+            <span style={{ fontSize: 11, color: C.muted, marginLeft: 2 }}>{tonDetailOpen ? "▲ 접기" : "▼ 품목별 보기"}</span>
+          </button>
+          {header.siteAddress && <div style={{ width: 1, alignSelf: "stretch", background: C.line }} />}
+          <DeliverySiteInfoButton address={header.siteAddress} />
         </div>
-        {header.siteAddress && <div style={{ width: 1, alignSelf: "stretch", background: C.line }} />}
-        <DeliverySiteInfoButton address={header.siteAddress} />
+
+        {tonDetailOpen && (
+          <div style={{ borderTop: `1px solid ${C.line}`, padding: "12px 18px" }}>
+            <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 10 }}>
+              품목별 톤수예요. 잘못됐으면 직접 고치고 "저장"을 누르면, 같은 품목+규격은 앞으로 이 값으로 자동 채워져요.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 60px 130px", gap: 8, fontSize: 11.5, color: C.muted, padding: "4px 0", borderBottom: `1px solid ${C.line}` }}>
+              <div>품목</div>
+              <div>규격</div>
+              <div>수량</div>
+              <div>톤수</div>
+            </div>
+            {itemsWithTon.map((it, idx) => (
+              <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 60px 130px", gap: 8, alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.lineSoft}`, fontSize: 12.5 }}>
+                <div>{it.item || "-"}</div>
+                <div style={{ color: C.inkSoft }}>{it.spec || "-"}</div>
+                <div>{it.qty ?? "-"}</div>
+                {it.tonExcluded ? (
+                  <div style={{ fontSize: 11.5, color: C.muted }} title="DC·설치비·배송비 등은 톤수 계산에서 제외돼요">제외</div>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <input
+                      type="number"
+                      step="0.001"
+                      style={{ ...smallInputStyle, width: 70, background: it.ton == null ? "#FFF6E5" : smallInputStyle.background }}
+                      value={tonEdits[idx] !== undefined ? tonEdits[idx] : it.ton ?? ""}
+                      placeholder="직접입력"
+                      onChange={(e) => setTonEdits((prev) => ({ ...prev, [idx]: e.target.value }))}
+                    />
+                    <button
+                      type="button"
+                      title="이 품목의 톤수를 저장해서 다음부터 자동으로 채워지게 해요"
+                      onClick={() => saveTonOverride(idx)}
+                      disabled={savingTonIdx === idx}
+                      style={{ border: `1px solid ${C.line}`, background: "none", cursor: "pointer", fontSize: 12, padding: "5px 6px", color: C.inkSoft, flexShrink: 0 }}
+                    >
+                      {savingTonIdx === idx ? "…" : "저장"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
