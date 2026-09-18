@@ -2232,12 +2232,27 @@ function lookupTonPerUnit(item, spec, customOverrides) {
   return fuzzyTonMatch(item, spec, false);
 }
 
+// DC(할인), 기본설치비, 배송비처럼 실제로 트럭에 실리는 "물건"이 아니라 요금/비용 성격의 품목은
+// 애초에 톤수 계산 대상이 아니다. "DC"는 실제 제품명(예: "DC 인버터")에도 섞여 나올 수 있어 품목명이
+// 정확히 "DC"일 때만 제외하고, 나머지는 이 글자가 품목명에 들어있으면 제외한다.
+const TON_EXCLUDED_EXACT = ["dc"];
+const TON_EXCLUDED_KEYWORDS = ["설치비", "배송비", "운반비", "운송비", "상차비", "하차비", "수수료", "할인"];
+function isTonExcludedItem(item) {
+  const t = normalizeTonText(item).toLowerCase();
+  if (!t) return false;
+  if (TON_EXCLUDED_EXACT.includes(t)) return true;
+  return TON_EXCLUDED_KEYWORDS.some((kw) => t.includes(kw));
+}
+
 // 품목 리스트(items)를 받아 각 행에 톤수(수량 × 개당용적)를 채워서 반환한다. 정말 비슷한 품목조차 없을 때만 톤수를 null로 둔다.
+// DC/설치비/배송비 등 요금성 품목은 tonExcluded:true로 표시하고 애초에 톤수 조회 대상에서 뺀다
+// ("미확인"이 아니라 "해당 없음"이므로, 화면에서 노란 칸으로 직접 입력을 요구하지 않는다).
 function withComputedTons(items, customOverrides) {
   return (items || []).map((it) => {
+    if (isTonExcludedItem(it.item)) return { ...it, ton: null, tonExcluded: true };
     const per = lookupTonPerUnit(it.item, it.spec, customOverrides);
     const ton = per != null && it.qty ? Math.round(Number(it.qty) * per * 1000) / 1000 : null;
-    return { ...it, ton };
+    return { ...it, ton, tonExcluded: false };
   });
 }
 
@@ -2407,9 +2422,11 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOve
   };
   const totalAmount = state.items.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
   // 톤수를 못 찾아 비어있는(null) 품목이 있으면 "미확인 있음"으로 표시해서, 총 톤수만 보고 안심하지 않게 한다.
-  const tonItems = state.items.filter((it) => it.ton != null);
+  // 단, DC/설치비/배송비처럼 애초에 톤수 대상이 아닌 품목(tonExcluded)은 "미확인"에서 빼서 헷갈리지 않게 한다.
+  const tonApplicableItems = state.items.filter((it) => !it.tonExcluded);
+  const tonItems = tonApplicableItems.filter((it) => it.ton != null);
   const totalTon = tonItems.reduce((sum, it) => sum + Number(it.ton), 0);
-  const missingTonCount = state.items.length - tonItems.length;
+  const missingTonCount = tonApplicableItems.length - tonItems.length;
   const [savingTonIdx, setSavingTonIdx] = useState(null);
 
   // 이 품목(품목명+규격)의 톤수를 다음부터 자동으로 채워지도록 저장한다. 같은 품목+규격을 가진 다른 행에도 바로 반영한다.
@@ -2455,6 +2472,7 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOve
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         총 {state.items.length}개 품목이 인식됐어요. 등록 전에 내용을 확인·수정해주세요. (칸 경계를 드래그하면 너비를 늘이고 줄일 수 있어요)
         톤수는 기준표에서 자동으로 채워져요. 노란 칸은 비슷한 품목조차 없어 직접 입력이 필요한 경우인데, 입력 후 "저장"을 누르면 다음부터는 이 품목도 자동으로 채워져요.
+        DC·설치비·배송비 등 요금성 품목은 톤수 계산에서 자동으로 제외돼요.
       </div>
 
       <div style={{ maxHeight: 360, overflow: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
@@ -2473,25 +2491,32 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOve
             <input type="number" style={smallInputStyle} value={it.qty ?? ""} onChange={(e) => updateItem(idx, { qty: Number(e.target.value) })} />
             <NumberInput style={smallInputStyle} value={it.unit_price} onChange={(v) => updateItem(idx, { unit_price: v })} />
             <NumberInput style={smallInputStyle} value={it.amount} onChange={(v) => updateItem(idx, { amount: v })} />
-            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <input
-                type="number"
-                step="0.001"
-                style={{ ...smallInputStyle, background: it.ton == null ? "#FFF6E5" : smallInputStyle.background }}
-                value={it.ton ?? ""}
-                placeholder="직접입력"
-                onChange={(e) => updateItem(idx, { ton: e.target.value === "" ? null : Number(e.target.value) })}
-              />
-              <button
-                type="button"
-                title="이 품목의 톤수를 저장해서 다음부터 자동으로 채워지게 해요"
-                onClick={() => saveTonOverride(idx)}
-                disabled={savingTonIdx === idx}
-                style={{ border: `1px solid ${C.line}`, background: "none", cursor: "pointer", fontSize: 12, padding: "5px 6px", color: C.inkSoft, flexShrink: 0 }}
-              >
-                {savingTonIdx === idx ? "…" : "저장"}
-              </button>
-            </div>
+            {it.tonExcluded ? (
+              // DC/설치비/배송비 등 요금성 품목: 톤수 대상이 아니므로 직접 입력을 요구하지 않고 "제외"만 표시한다.
+              <div style={{ fontSize: 11.5, color: C.muted, textAlign: "center" }} title="DC·설치비·배송비 등은 톤수 계산에서 제외돼요">
+                제외
+              </div>
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <input
+                  type="number"
+                  step="0.001"
+                  style={{ ...smallInputStyle, background: it.ton == null ? "#FFF6E5" : smallInputStyle.background }}
+                  value={it.ton ?? ""}
+                  placeholder="직접입력"
+                  onChange={(e) => updateItem(idx, { ton: e.target.value === "" ? null : Number(e.target.value) })}
+                />
+                <button
+                  type="button"
+                  title="이 품목의 톤수를 저장해서 다음부터 자동으로 채워지게 해요"
+                  onClick={() => saveTonOverride(idx)}
+                  disabled={savingTonIdx === idx}
+                  style={{ border: `1px solid ${C.line}`, background: "none", cursor: "pointer", fontSize: 12, padding: "5px 6px", color: C.inkSoft, flexShrink: 0 }}
+                >
+                  {savingTonIdx === idx ? "…" : "저장"}
+                </button>
+              </div>
+            )}
             <input style={smallInputStyle} value={it.note || ""} onChange={(e) => updateItem(idx, { note: e.target.value })} />
           </div>
         ))}
@@ -3053,9 +3078,10 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
 
   // 화물차 적재 톤수(기준표 + 저장된 커스텀 값 기준)와 미확인 품목 수. 상단에 바로 보이게 계산해둔다.
   const itemsWithTon = useMemo(() => withComputedTons(items, tonOverrides), [items, tonOverrides]);
-  const tonKnownItems = itemsWithTon.filter((it) => it.ton != null);
+  const tonApplicableItems = itemsWithTon.filter((it) => !it.tonExcluded);
+  const tonKnownItems = tonApplicableItems.filter((it) => it.ton != null);
   const totalTon = tonKnownItems.reduce((s, it) => s + Number(it.ton), 0);
-  const missingTonCount = itemsWithTon.length - tonKnownItems.length;
+  const missingTonCount = tonApplicableItems.length - tonKnownItems.length;
 
   async function handleSave() {
     if (!header.customer) {
