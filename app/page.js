@@ -2263,12 +2263,51 @@ function withComputedTons(items, customOverrides) {
 
 // ---------- 견적서를 등록하지 않고 붙여넣기만으로 톤수/배송비를 미리 확인하는 기능 ----------
 // 엑셀에서 표 영역을 복사하면 셀 사이는 탭(\t), 행 사이는 줄바꿈으로 구분된 텍스트가 클립보드에 담긴다.
-// 이를 다시 표(2차원 배열) 형태로 되돌린다.
+// 다만 "품목\n(Product)"처럼 한 칸 안에 줄바꿈이 있는 셀(견적서 헤더에 흔함)은 엑셀이 그 칸 전체를
+// 큰따옴표로 감싸서 내보내므로, 단순히 줄바꿈마다 행을 나누면 그런 칸이 서로 다른 행으로 쪼개져버린다.
+// 그래서 따옴표 밖의 탭/줄바꿈만 열/행 구분자로 쓰고, 따옴표 안의 줄바꿈·탭은 셀 내용 그대로 살린다.
 function parsePastedTable(text) {
-  return (text || "")
-    .split(/\r\n|\r|\n/)
-    .map((line) => line.split("\t"))
-    .filter((row) => row.some((c) => cellText(c)));
+  const norm = (text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < norm.length; i++) {
+    const c = norm[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (norm[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += c;
+      }
+      continue;
+    }
+    if (c === '"' && field === "") {
+      inQuotes = true;
+      continue;
+    }
+    if (c === "\t") {
+      row.push(field);
+      field = "";
+      continue;
+    }
+    if (c === "\n") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+      continue;
+    }
+    field += c;
+  }
+  row.push(field);
+  rows.push(row);
+  return rows.filter((r) => r.some((c) => cellText(c)));
 }
 
 // detectColumns와 같은 방식(헤더 글자로 열 위치 찾기)이지만, 붙여넣기는 톤수 계산이 목적이라
@@ -2310,6 +2349,10 @@ function parsePastedItems(text) {
   }
 
   const items = [];
+  // 견적서 표는 같은 품목이 여러 규격으로 이어질 때 "품목" 칸을 첫 줄에만 적고 아래 줄은 비워두는 경우가
+  // 많다(예: "책장" 아래 "4단올문장", "2단올문장"이 품목 칸 없이 규격만 이어짐). 엑셀 파싱과 동일하게
+  // 마지막으로 나온 품목명을 이어받아 채운다.
+  let currentItem = "";
   for (let i = startIdx; i < rows.length; i++) {
     const row = rows[i] || [];
     const itemCell = cellText(row[cols.item]);
@@ -2325,8 +2368,11 @@ function parsePastedItems(text) {
     if (itemCell.startsWith("*") || itemCell.startsWith("※")) continue;
     if (!itemCell && !specCell) continue;
 
-    const hasQty = cellText(qtyRaw) !== "";
-    if (itemCell && !hasQty && !specCell) continue; // 구획 제목 줄(소제목)은 톤수 계산과 무관하므로 건너뜀
+    const hasData = cellText(qtyRaw) !== "" || cellText(priceRaw) !== "" || cellText(amountRaw) !== "";
+    if (itemCell && !hasData && !specCell) continue; // 구획 제목 줄(예: "ㅡ 소장실 ㅡ")은 톤수 계산과 무관하므로 건너뜀
+
+    if (itemCell) currentItem = itemCell;
+    if (!currentItem) continue;
 
     const toNum = (v) => {
       const t = cellText(v).replace(/,/g, "");
@@ -2338,7 +2384,7 @@ function parsePastedItems(text) {
     const unitPrice = toNum(priceRaw);
     const amount = toNum(amountRaw) ?? (unitPrice != null ? unitPrice * qty : null);
 
-    items.push({ item: itemCell, spec: specCell, qty: isNaN(qty) ? 1 : qty, unit_price: unitPrice, amount, note: noteCell });
+    items.push({ item: currentItem, spec: specCell, qty: isNaN(qty) ? 1 : qty, unit_price: unitPrice, amount, note: noteCell });
   }
   return items;
 }
