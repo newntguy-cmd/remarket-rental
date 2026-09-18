@@ -1050,6 +1050,8 @@ function Dashboard({ profile, onLogout }) {
   const [rentalsResetKey, setRentalsResetKey] = useState(0);
   // 판매현황도 전표번호를 눌러 상세화면으로 들어갈 수 있게 됐으니, 메뉴를 다시 눌렀을 때 항상 검색화면으로 되돌아가게 한다.
   const [salesResetKey, setSalesResetKey] = useState(0);
+  // 출고/회수 내역서도 대장 상세화면에 들어갈 수 있으니, 메뉴를 다시 눌렀을 때 항상 대장 목록으로 되돌아가게 한다.
+  const [ledgerResetKey, setLedgerResetKey] = useState(0);
   const [loadingData, setLoadingData] = useState(true);
   const [importState, setImportState] = useState(null); // parsed preview
   const [importing, setImporting] = useState(false);
@@ -1173,6 +1175,7 @@ function Dashboard({ profile, onLogout }) {
     ...(isStaff ? [{ key: "shares", label: "지분관리" }] : []),
     ...(isStaff ? [{ key: "sales", label: "판매현황" }] : []),
     ...(isStaff ? [{ key: "customerData", label: "업체별데이터" }] : []),
+    ...(isStaff ? [{ key: "ledger", label: "출고/회수 내역서" }] : []),
   ];
 
   return (
@@ -1201,6 +1204,7 @@ function Dashboard({ profile, onLogout }) {
                 if (m.key === "shares") setSharesResetKey((k) => k + 1); // 지분관리는 눌릴 때마다 목록 화면으로 리셋
                 if (m.key === "rentals") setRentalsResetKey((k) => k + 1); // 렌탈내역도 눌릴 때마다 목록 화면으로 리셋
                 if (m.key === "sales") setSalesResetKey((k) => k + 1); // 판매현황도 눌릴 때마다 검색 화면으로 리셋
+                if (m.key === "ledger") setLedgerResetKey((k) => k + 1); // 출고/회수 내역서도 눌릴 때마다 대장 목록으로 리셋
               }}
               style={{
                 display: "block",
@@ -1248,6 +1252,10 @@ function Dashboard({ profile, onLogout }) {
 
         {activeTab === "customerData" && isStaff && (
           <CustomerDataTab rentals={rentals} onRefresh={fetchRentals} />
+        )}
+
+        {activeTab === "ledger" && isStaff && (
+          <LedgerTab key={ledgerResetKey} rentals={rentals} isAdmin={isAdmin} managerName={managerName} />
         )}
 
         {!isStaff && (
@@ -3777,6 +3785,691 @@ function CustomerDataTab({ rentals, onRefresh }) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ---------- 출고/회수 내역서(대장) ----------
+const LEDGER_COLORS = ["연체리", "화이트", "월넛", "망비"];
+
+// "W1800*D900, 연체리" 처럼 규격 끝에 색상이 붙어있으면 규격/색상을 분리한다.
+// 마지막 콤마 구간이 정해진 색상 목록에 정확히 일치할 때만 분리하고, 그 외(예: "홀다리", "선반형" 같은 구조 설명)는
+// 색상으로 잘못 떼어내지 않고 그대로 규격에 그대로 남겨둔다.
+function splitLedgerSpecColor(rawSpec) {
+  const spec = (rawSpec || "").trim();
+  if (!spec) return { spec: "", color: "" };
+  const parts = spec.split(",").map((s) => s.trim()).filter(Boolean);
+  if (parts.length > 1 && LEDGER_COLORS.includes(parts[parts.length - 1])) {
+    return { spec: parts.slice(0, -1).join(", "), color: parts[parts.length - 1] };
+  }
+  return { spec, color: "" };
+}
+
+function sortLedgerItems(items) {
+  return [...items].sort(
+    (a, b) =>
+      (a.item || "").localeCompare(b.item || "", "ko") ||
+      (a.spec || "").localeCompare(b.spec || "", "ko") ||
+      (a.color || "").localeCompare(b.color || "", "ko")
+  );
+}
+
+// 정렬된 배열에서 같은 품목명이 연속으로 나오는 구간을 찾아, 표에서 품목 칸을 세로로 합쳐(rowSpan) 보여줄 수 있게 표시해둔다.
+function withLedgerRowSpans(sortedItems) {
+  const result = [];
+  let i = 0;
+  while (i < sortedItems.length) {
+    let j = i;
+    while (j < sortedItems.length && sortedItems[j].item === sortedItems[i].item) j++;
+    for (let k = i; k < j; k++) result.push({ ...sortedItems[k], _rowSpan: k === i ? j - i : 0 });
+    i = j;
+  }
+  return result;
+}
+
+const ledgerTh = { border: `1px solid ${C.line}`, padding: "6px 8px", background: C.bg, fontSize: 11.5, whiteSpace: "nowrap" };
+const ledgerTd = { border: `1px solid ${C.line}`, padding: "6px 8px", fontSize: 12.5 };
+
+function LedgerTab({ rentals, isAdmin, managerName }) {
+  const [books, setBooks] = useState([]);
+  const [loadingBooks, setLoadingBooks] = useState(true);
+  const [query, setQuery] = useState("");
+  const [selectedBookId, setSelectedBookId] = useState(null);
+  const [showNewBook, setShowNewBook] = useState(false);
+  const [newBookCustomer, setNewBookCustomer] = useState("");
+  const [newBookSite, setNewBookSite] = useState("");
+  const [creatingBook, setCreatingBook] = useState(false);
+
+  useEffect(() => {
+    fetchBooks();
+  }, []);
+
+  async function fetchBooks() {
+    setLoadingBooks(true);
+    const { data, error } = await supabase.from("ledger_books").select("*").order("created_at", { ascending: false });
+    if (!error) setBooks(data || []);
+    setLoadingBooks(false);
+  }
+
+  const filteredBooks = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return books;
+    return books.filter((b) => [b.customer, b.site_name, b.manager].filter(Boolean).join(" ").toLowerCase().includes(q));
+  }, [books, query]);
+
+  async function handleCreateBook() {
+    if (!newBookCustomer.trim()) {
+      alert("업체명을 입력해주세요.");
+      return;
+    }
+    setCreatingBook(true);
+    const { data, error } = await supabase
+      .from("ledger_books")
+      .insert({
+        customer: newBookCustomer.trim(),
+        site_name: newBookSite.trim() || null,
+        manager: isAdmin ? null : managerName,
+      })
+      .select()
+      .single();
+    setCreatingBook(false);
+    if (error) {
+      alert("대장을 만드는 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setNewBookCustomer("");
+    setNewBookSite("");
+    setShowNewBook(false);
+    await fetchBooks();
+    setSelectedBookId(data.id);
+  }
+
+  if (selectedBookId) {
+    return (
+      <LedgerBookDetail
+        bookId={selectedBookId}
+        rentals={rentals}
+        isAdmin={isAdmin}
+        managerName={managerName}
+        onClose={() => setSelectedBookId(null)}
+        onBookListChanged={fetchBooks}
+      />
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>출고/회수 내역서</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+        업체(현장)별로 대장을 만들어두면, 전표가 새로 생길 때마다 계속 추가해서 출고·회수·미회수 수량을 관리할 수 있어요.
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <input
+          placeholder="업체명, 현장명, 담당자 검색"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{ ...inputStyle, width: 320 }}
+        />
+        <button onClick={() => setShowNewBook((v) => !v)} style={primaryBtnStyle2}>+ 새 대장 만들기</button>
+      </div>
+
+      {showNewBook && (
+        <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <Field label="업체명">
+              <input style={inputStyle} value={newBookCustomer} onChange={(e) => setNewBookCustomer(e.target.value)} />
+            </Field>
+            <Field label="현장명 (선택)">
+              <input style={inputStyle} value={newBookSite} onChange={(e) => setNewBookSite(e.target.value)} />
+            </Field>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={handleCreateBook} disabled={creatingBook} style={primaryBtnStyle2}>
+              {creatingBook ? "만드는 중…" : "만들기"}
+            </button>
+            <button onClick={() => setShowNewBook(false)} style={ghostBtnStyle}>취소</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}` }}>
+          <div>업체명</div>
+          <div>현장명</div>
+          <div>담당자</div>
+          <div>만든 날짜</div>
+        </div>
+        {filteredBooks.map((b) => (
+          <div
+            key={b.id}
+            style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 8, padding: "12px 14px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center" }}
+          >
+            <div>
+              <button
+                onClick={() => setSelectedBookId(b.id)}
+                style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
+              >
+                {b.customer}
+              </button>
+            </div>
+            <div>{b.site_name || "-"}</div>
+            <div>{b.manager || "-"}</div>
+            <div style={{ fontSize: 12.5 }}>{(b.created_at || "").slice(0, 10)}</div>
+          </div>
+        ))}
+        {!loadingBooks && filteredBooks.length === 0 && (
+          <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>등록된 대장이 없어요. "+ 새 대장 만들기"로 시작해보세요.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBookListChanged }) {
+  const [book, setBook] = useState(null);
+  const [items, setItems] = useState([]);
+  const [vouchers, setVouchers] = useState([]);
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [subTab, setSubTab] = useState("out"); // "out" | "in"
+  const [showPicker, setShowPicker] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState("");
+  const [addingVoucherKey, setAddingVoucherKey] = useState(null);
+  const [showManualIn, setShowManualIn] = useState(false);
+  const [manualInDate, setManualInDate] = useState(todayISO());
+  const [manualInLabel, setManualInLabel] = useState("");
+  const [manualInQtys, setManualInQtys] = useState({});
+  const [savingManualIn, setSavingManualIn] = useState(false);
+  const [deletingVoucherId, setDeletingVoucherId] = useState(null);
+  const [deletingBook, setDeletingBook] = useState(false);
+
+  useEffect(() => {
+    fetchAll();
+  }, [bookId]);
+
+  async function fetchAll() {
+    setLoading(true);
+    const [{ data: b }, { data: it }, { data: vc }, { data: en }] = await Promise.all([
+      supabase.from("ledger_books").select("*").eq("id", bookId).single(),
+      supabase.from("ledger_items").select("*").eq("ledger_book_id", bookId),
+      supabase.from("ledger_vouchers").select("*").eq("ledger_book_id", bookId),
+      supabase.from("ledger_entries").select("*").eq("ledger_book_id", bookId),
+    ]);
+    setBook(b || null);
+    setItems(it || []);
+    setVouchers(vc || []);
+    setEntries(en || []);
+    setLoading(false);
+  }
+
+  const sortedItems = useMemo(() => withLedgerRowSpans(sortLedgerItems(items)), [items]);
+  const outVouchers = useMemo(() => vouchers.filter((v) => v.kind === "out").sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)), [vouchers]);
+  const inVouchers = useMemo(() => vouchers.filter((v) => v.kind === "in").sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)), [vouchers]);
+
+  const entryMap = useMemo(() => {
+    const m = new Map();
+    for (const e of entries) m.set(`${e.ledger_voucher_id}|${e.ledger_item_id}`, Number(e.qty) || 0);
+    return m;
+  }, [entries]);
+
+  const qtyFor = (voucherId, itemId) => entryMap.get(`${voucherId}|${itemId}`) || 0;
+
+  const outTotalByItem = useMemo(() => {
+    const m = new Map();
+    for (const it of items) m.set(it.id, outVouchers.reduce((s, v) => s + qtyFor(v.id, it.id), 0));
+    return m;
+  }, [items, outVouchers, entryMap]);
+
+  const inTotalByItem = useMemo(() => {
+    const m = new Map();
+    for (const it of items) m.set(it.id, inVouchers.reduce((s, v) => s + qtyFor(v.id, it.id), 0));
+    return m;
+  }, [items, inVouchers, entryMap]);
+
+  // 전표 검색 픽커: 이 대장의 업체명과 이름이 같은 렌탈 전표를 기본으로 보여주고, 검색어를 입력하면 전체에서 찾는다.
+  const rentalGroups = useMemo(() => {
+    const g = groupRentalsByVoucher(rentals);
+    g.sort((a, b) => (b.head.out_date || "").localeCompare(a.head.out_date || ""));
+    return g;
+  }, [rentals]);
+
+  const pickerResults = useMemo(() => {
+    const q = pickerQuery.trim().toLowerCase();
+    if (!q) {
+      const cust = (book?.customer || "").toLowerCase();
+      return rentalGroups.filter((g) => (g.head.customer || "").toLowerCase().includes(cust)).slice(0, 50);
+    }
+    return rentalGroups
+      .filter((g) => [g.voucherNo, g.head.customer, g.head.site_name].filter(Boolean).join(" ").toLowerCase().includes(q))
+      .slice(0, 50);
+  }, [rentalGroups, pickerQuery, book]);
+
+  async function handleAddOutVoucher(group) {
+    if (outVouchers.some((v) => v.rental_voucher_no === group.voucherNo)) {
+      alert("이미 이 대장에 추가된 전표예요.");
+      return;
+    }
+    setAddingVoucherKey(group.key);
+
+    const grouped = new Map();
+    for (const r of group.rows) {
+      const { spec, color } = splitLedgerSpecColor(r.spec);
+      const k = `${r.item || ""}〓${spec}〓${color}`;
+      if (!grouped.has(k)) grouped.set(k, { item: r.item || "", spec, color, qty: 0 });
+      grouped.get(k).qty += Number(r.qty) || 0;
+    }
+    const groupedList = Array.from(grouped.values());
+
+    const existingByKey = new Map(items.map((it) => [`${it.item}〓${it.spec || ""}〓${it.color || ""}`, it]));
+    const toCreate = groupedList.filter((g) => !existingByKey.has(`${g.item}〓${g.spec}〓${g.color}`));
+
+    let createdItems = [];
+    if (toCreate.length > 0) {
+      const rows = toCreate.map((g) => ({ ledger_book_id: bookId, item: g.item, spec: g.spec || null, color: g.color || null }));
+      const { data, error } = await supabase.from("ledger_items").insert(rows).select();
+      if (error) {
+        setAddingVoucherKey(null);
+        alert("품목을 추가하는 중 오류가 발생했어요: " + error.message);
+        return;
+      }
+      createdItems = data || [];
+    }
+    const allItemsNow = [...items, ...createdItems];
+    const keyToItemId = new Map(allItemsNow.map((it) => [`${it.item}〓${it.spec || ""}〓${it.color || ""}`, it.id]));
+
+    const nextSort = outVouchers.length > 0 ? Math.max(...outVouchers.map((v) => v.sort_order || 0)) + 1 : 0;
+    const { data: newVoucher, error: vErr } = await supabase
+      .from("ledger_vouchers")
+      .insert({
+        ledger_book_id: bookId,
+        kind: "out",
+        voucher_no: group.voucherNo || "(번호없음)",
+        voucher_date: group.head.out_date || null,
+        source: "rental_voucher",
+        rental_voucher_no: group.voucherNo || null,
+        sort_order: nextSort,
+      })
+      .select()
+      .single();
+    if (vErr) {
+      setAddingVoucherKey(null);
+      alert("전표를 추가하는 중 오류가 발생했어요: " + vErr.message);
+      return;
+    }
+
+    const entryRows = groupedList.map((g) => ({
+      ledger_book_id: bookId,
+      ledger_voucher_id: newVoucher.id,
+      ledger_item_id: keyToItemId.get(`${g.item}〓${g.spec}〓${g.color}`),
+      qty: g.qty,
+    }));
+    const { error: eErr } = await supabase.from("ledger_entries").insert(entryRows);
+    setAddingVoucherKey(null);
+    if (eErr) alert("수량을 채우는 중 오류가 발생했어요: " + eErr.message);
+    setShowPicker(false);
+    setPickerQuery("");
+    fetchAll();
+  }
+
+  async function handleDeleteVoucher(voucherId) {
+    if (!confirm("이 전표를 대장에서 삭제할까요? (원본 렌탈 전표는 그대로 남아있어요)")) return;
+    setDeletingVoucherId(voucherId);
+    const { error } = await supabase.from("ledger_vouchers").delete().eq("id", voucherId);
+    setDeletingVoucherId(null);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    fetchAll();
+  }
+
+  function openManualIn() {
+    if (items.length === 0) {
+      alert("먼저 출고 탭에서 전표를 추가해 품목을 등록해주세요.");
+      return;
+    }
+    setManualInDate(todayISO());
+    setManualInLabel("");
+    setManualInQtys({});
+    setShowManualIn(true);
+  }
+
+  async function handleSaveManualIn() {
+    const qtyEntries = Object.entries(manualInQtys).filter(([, v]) => Number(v) > 0);
+    if (qtyEntries.length === 0) {
+      alert("회수 수량을 하나 이상 입력해주세요.");
+      return;
+    }
+    setSavingManualIn(true);
+    const nextSort = inVouchers.length > 0 ? Math.max(...inVouchers.map((v) => v.sort_order || 0)) + 1 : 0;
+    const { data: newVoucher, error: vErr } = await supabase
+      .from("ledger_vouchers")
+      .insert({
+        ledger_book_id: bookId,
+        kind: "in",
+        voucher_no: manualInLabel.trim() || null,
+        voucher_date: manualInDate || null,
+        source: "manual",
+        sort_order: nextSort,
+      })
+      .select()
+      .single();
+    if (vErr) {
+      setSavingManualIn(false);
+      alert("회수 내역을 추가하는 중 오류가 발생했어요: " + vErr.message);
+      return;
+    }
+    const entryRows = qtyEntries.map(([itemId, v]) => ({
+      ledger_book_id: bookId,
+      ledger_voucher_id: newVoucher.id,
+      ledger_item_id: itemId,
+      qty: Number(v),
+    }));
+    const { error: eErr } = await supabase.from("ledger_entries").insert(entryRows);
+    setSavingManualIn(false);
+    if (eErr) {
+      alert("수량을 저장하는 중 오류가 발생했어요: " + eErr.message);
+      return;
+    }
+    setShowManualIn(false);
+    fetchAll();
+  }
+
+  async function handleSaveNote(itemId, text) {
+    const { error } = await supabase.from("ledger_items").update({ note: text }).eq("id", itemId);
+    if (!error) setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, note: text } : it)));
+  }
+
+  async function handleDeleteBook() {
+    if (!confirm(`"${book?.customer}" 대장을 통째로 삭제할까요? 안에 있는 출고·회수 내역이 모두 지워지고 되돌릴 수 없어요.`)) return;
+    setDeletingBook(true);
+    const { error } = await supabase.from("ledger_books").delete().eq("id", bookId);
+    setDeletingBook(false);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    onBookListChanged && onBookListChanged();
+    onClose();
+  }
+
+  // 인쇄/PDF 저장 시 브라우저 상단 문서 제목을 잠깐 바꿔서 인쇄 머리글·PDF 기본 파일명에 반영되게 한다.
+  function handlePrint() {
+    const prevTitle = document.title;
+    document.title = `${book?.customer || ""} 출고 및 회수 리스트`;
+    const restore = () => {
+      document.title = prevTitle;
+    };
+    window.addEventListener("afterprint", restore, { once: true });
+    window.print();
+    setTimeout(restore, 2000);
+  }
+
+  if (loading || !book) {
+    return <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>불러오는 중…</div>;
+  }
+
+  return (
+    <div>
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #ledger-print-area, #ledger-print-area * { visibility: visible; }
+          #ledger-print-area { position: absolute; top: 0; left: 0; width: 100%; padding: 24px; }
+          .ledger-no-print { display: none !important; }
+        }
+      `}</style>
+
+      <div className="ledger-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ fontFamily: serif, fontSize: 16 }}>
+          {book.customer}
+          {book.site_name ? ` · ${book.site_name}` : ""}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={handleDeleteBook} disabled={deletingBook} style={{ ...ghostBtnStyle, borderColor: C.brick, color: C.brick }}>
+            {deletingBook ? "삭제 중…" : "대장 삭제"}
+          </button>
+          <button onClick={onClose} style={ghostBtnStyle}>← 목록으로</button>
+        </div>
+      </div>
+
+      <div className="ledger-no-print" style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <button
+          onClick={() => setSubTab("out")}
+          style={{ ...miniBtnStyle, background: subTab === "out" ? C.ink : "transparent", color: subTab === "out" ? "#fff" : C.inkSoft, borderColor: subTab === "out" ? C.ink : C.line }}
+        >
+          출고
+        </button>
+        <button
+          onClick={() => setSubTab("in")}
+          style={{ ...miniBtnStyle, background: subTab === "in" ? C.ink : "transparent", color: subTab === "in" ? "#fff" : C.inkSoft, borderColor: subTab === "in" ? C.ink : C.line }}
+        >
+          회수 · 미회수
+        </button>
+      </div>
+
+      {subTab === "out" && (
+        <div className="ledger-no-print" style={{ marginBottom: 16 }}>
+          <button onClick={() => setShowPicker((v) => !v)} style={primaryBtnStyle2}>+ 전표 추가</button>
+          {showPicker && (
+            <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginTop: 10 }}>
+              <input
+                placeholder="전표번호, 거래처, 현장명 검색 (비워두면 이 업체 전표만 보여요)"
+                value={pickerQuery}
+                onChange={(e) => setPickerQuery(e.target.value)}
+                style={{ ...inputStyle, marginBottom: 10 }}
+              />
+              <div style={{ maxHeight: 320, overflowY: "auto", border: `1px solid ${C.lineSoft}` }}>
+                {pickerResults.map((g) => {
+                  const already = outVouchers.some((v) => v.rental_voucher_no === g.voucherNo);
+                  return (
+                    <div key={g.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: `1px solid ${C.lineSoft}`, fontSize: 13 }}>
+                      <div>
+                        <div>
+                          {g.voucherNo || "(번호없음)"} · {g.head.customer || "-"} {g.head.site_name ? `· ${g.head.site_name}` : ""}
+                        </div>
+                        <div style={{ fontSize: 11.5, color: C.muted }}>{g.head.out_date || "-"} · 품목 {g.rows.length}건</div>
+                      </div>
+                      <button
+                        onClick={() => handleAddOutVoucher(g)}
+                        disabled={already || addingVoucherKey === g.key}
+                        style={already ? { ...miniBtnStyle, opacity: 0.5 } : miniBtnStylePrimary}
+                      >
+                        {already ? "추가됨" : addingVoucherKey === g.key ? "추가 중…" : "이 전표 추가"}
+                      </button>
+                    </div>
+                  );
+                })}
+                {pickerResults.length === 0 && <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 13 }}>검색 결과가 없어요.</div>}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {subTab === "in" && (
+        <div className="ledger-no-print" style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <button onClick={openManualIn} style={primaryBtnStyle2}>+ 회수 추가</button>
+          <button onClick={handlePrint} style={ghostBtnStyle}>인쇄 / PDF로 저장</button>
+        </div>
+      )}
+
+      {subTab === "in" && showManualIn && (
+        <div className="ledger-no-print" style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 10 }}>
+            <Field label="회수일자">
+              <input type="date" style={inputStyle} value={manualInDate} onChange={(e) => setManualInDate(e.target.value)} />
+            </Field>
+            <Field label="회수전표번호/메모 (선택, 예: A/S장 20682)">
+              <input style={inputStyle} value={manualInLabel} onChange={(e) => setManualInLabel(e.target.value)} />
+            </Field>
+          </div>
+          <div style={{ maxHeight: 320, overflowY: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
+            {sortedItems.map((it) => (
+              <div
+                key={it.id}
+                style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 100px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}
+              >
+                <div>{it.item}</div>
+                <div>{it.spec || "-"}</div>
+                <div>{it.color || "-"}</div>
+                <input
+                  type="number"
+                  min={0}
+                  style={smallInputStyle}
+                  placeholder="0"
+                  value={manualInQtys[it.id] ?? ""}
+                  onChange={(e) => setManualInQtys((prev) => ({ ...prev, [it.id]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={handleSaveManualIn} disabled={savingManualIn} style={primaryBtnStyle2}>
+              {savingManualIn ? "저장 중…" : "저장"}
+            </button>
+            <button onClick={() => setShowManualIn(false)} style={ghostBtnStyle}>취소</button>
+          </div>
+        </div>
+      )}
+
+      <div id="ledger-print-area" style={{ border: `1px solid ${C.line}`, background: "#fff", padding: 24, overflowX: "auto" }}>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontFamily: serif, fontSize: 18 }}>렌탈품목 출고 및 회수 리스트</div>
+          <div style={{ fontSize: 12.5, color: C.inkSoft, marginTop: 4 }}>
+            거래처: {book.customer}
+            {book.site_name ? ` · 현장명: ${book.site_name}` : ""}
+          </div>
+        </div>
+
+        {subTab === "out" && (
+          <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 600 }}>
+            <thead>
+              <tr>
+                <th rowSpan={2} style={ledgerTh}>품목</th>
+                <th rowSpan={2} style={ledgerTh}>규격</th>
+                <th rowSpan={2} style={ledgerTh}>색상</th>
+                {outVouchers.length > 0 && (
+                  <th colSpan={outVouchers.length} style={{ ...ledgerTh, background: C.amberBg }}>출고내역</th>
+                )}
+                <th rowSpan={2} style={{ ...ledgerTh, background: C.amberBg }}>출고합계</th>
+              </tr>
+              <tr>
+                {outVouchers.map((v) => (
+                  <th key={v.id} style={{ ...ledgerTh, fontWeight: 400 }}>
+                    <div>{v.voucher_no || "-"}</div>
+                    <div style={{ fontSize: 10.5, color: C.muted }}>{v.voucher_date || "-"}</div>
+                    <button
+                      className="ledger-no-print"
+                      onClick={() => handleDeleteVoucher(v.id)}
+                      disabled={deletingVoucherId === v.id}
+                      style={{ background: "none", border: "none", color: C.brick, cursor: "pointer", fontSize: 11 }}
+                    >
+                      삭제
+                    </button>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sortedItems.map((it) => (
+                <tr key={it.id}>
+                  {it._rowSpan > 0 && (
+                    <td rowSpan={it._rowSpan} style={ledgerTd}>{it.item}</td>
+                  )}
+                  <td style={ledgerTd}>{it.spec || "-"}</td>
+                  <td style={ledgerTd}>{it.color || "-"}</td>
+                  {outVouchers.map((v) => {
+                    const q = qtyFor(v.id, it.id);
+                    return (
+                      <td key={v.id} style={{ ...ledgerTd, textAlign: "right" }}>{q > 0 ? q.toLocaleString("ko-KR") : "-"}</td>
+                    );
+                  })}
+                  <td style={{ ...ledgerTd, textAlign: "right", fontWeight: 600 }}>{(outTotalByItem.get(it.id) || 0).toLocaleString("ko-KR")}</td>
+                </tr>
+              ))}
+              {sortedItems.length === 0 && (
+                <tr>
+                  <td colSpan={4} style={{ ...ledgerTd, textAlign: "center", color: C.muted }}>+ 전표 추가로 출고 전표를 등록해주세요.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
+
+        {subTab === "in" && (
+          <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 600 }}>
+            <thead>
+              <tr>
+                <th rowSpan={2} style={ledgerTh}>품목</th>
+                <th rowSpan={2} style={ledgerTh}>규격</th>
+                <th rowSpan={2} style={ledgerTh}>색상</th>
+                <th rowSpan={2} style={{ ...ledgerTh, background: C.amberBg }}>출고합계</th>
+                {inVouchers.length > 0 && (
+                  <th colSpan={inVouchers.length} style={{ ...ledgerTh, background: C.greenBg }}>회수내역</th>
+                )}
+                <th rowSpan={2} style={{ ...ledgerTh, background: C.greenBg }}>회수합계</th>
+                <th rowSpan={2} style={{ ...ledgerTh, background: C.brickBg }}>미회수수량</th>
+                <th rowSpan={2} style={ledgerTh}>비고</th>
+              </tr>
+              <tr>
+                {inVouchers.map((v) => (
+                  <th key={v.id} style={{ ...ledgerTh, fontWeight: 400 }}>
+                    <div>{v.voucher_no || "-"}</div>
+                    <div style={{ fontSize: 10.5, color: C.muted }}>{v.voucher_date || "-"}</div>
+                    <button
+                      className="ledger-no-print"
+                      onClick={() => handleDeleteVoucher(v.id)}
+                      disabled={deletingVoucherId === v.id}
+                      style={{ background: "none", border: "none", color: C.brick, cursor: "pointer", fontSize: 11 }}
+                    >
+                      삭제
+                    </button>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sortedItems.map((it) => {
+                const outTotal = outTotalByItem.get(it.id) || 0;
+                const inTotal = inTotalByItem.get(it.id) || 0;
+                const remain = outTotal - inTotal;
+                return (
+                  <tr key={it.id}>
+                    {it._rowSpan > 0 && (
+                      <td rowSpan={it._rowSpan} style={ledgerTd}>{it.item}</td>
+                    )}
+                    <td style={ledgerTd}>{it.spec || "-"}</td>
+                    <td style={ledgerTd}>{it.color || "-"}</td>
+                    <td style={{ ...ledgerTd, textAlign: "right" }}>{outTotal.toLocaleString("ko-KR")}</td>
+                    {inVouchers.map((v) => {
+                      const q = qtyFor(v.id, it.id);
+                      return (
+                        <td key={v.id} style={{ ...ledgerTd, textAlign: "right" }}>{q > 0 ? q.toLocaleString("ko-KR") : "-"}</td>
+                      );
+                    })}
+                    <td style={{ ...ledgerTd, textAlign: "right", fontWeight: 600 }}>{inTotal.toLocaleString("ko-KR")}</td>
+                    <td style={{ ...ledgerTd, textAlign: "right", fontWeight: 700, color: remain > 0 ? C.brick : C.inkSoft }}>{remain.toLocaleString("ko-KR")}</td>
+                    <td style={{ ...ledgerTd, padding: 0 }}>
+                      <input
+                        defaultValue={it.note || ""}
+                        onBlur={(e) => handleSaveNote(it.id, e.target.value)}
+                        style={{ width: "100%", boxSizing: "border-box", border: "none", padding: "6px 8px", fontSize: 12.5, fontFamily: sans, background: "transparent" }}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+              {sortedItems.length === 0 && (
+                <tr>
+                  <td colSpan={7} style={{ ...ledgerTd, textAlign: "center", color: C.muted }}>먼저 출고 탭에서 전표를 추가해주세요.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
