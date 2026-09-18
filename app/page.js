@@ -2379,6 +2379,306 @@ function DeliverySiteInfoButton({ address }) {
   );
 }
 
+// ---------- 배송비 계산 ----------
+// 사진으로 받은 "배송료 기준(용인배송기준)" 표와 "무빙트럭 화물 운임표"를 최대한 그대로 옮긴 값이다.
+// 손으로 옮긴 표라 오탈자가 있을 수 있으니, 특히 아래 두 가지는 실제 표와 한 번 대조해서 확인해달라:
+// 1) 구매제품의 "톤당배송료"는 사진상 모든 구간에서 동일하게 보여서 "1톤당 1만원"으로 읽어 반영했다(불확실).
+// 2) 무빙트럭 표에서 다마스 요금이 없는 지역, 흐릿하게 찍힌 일부 라보 칸은 빈칸("-")으로 뒀다.
+
+// 렌탈제품 설치/회수비 - 지역별 소량/0.5톤/1톤 요금(원 단위)
+const RENTAL_DELIVERY_ZONES = [
+  { zone: "분당/용인/수원/화성/광주", keywords: ["분당", "용인", "수원", "화성", "광주"], small: 40000, half: 80000, one: 160000 },
+  { zone: "서울전역/하남/안양/광명/과천/구리", keywords: ["서울", "하남", "안양", "광명", "과천", "구리"], small: 60000, half: 120000, one: 240000 },
+  { zone: "기타 경기도, 인천 전지역", keywords: ["경기", "인천"], small: 80000, half: 160000, one: 320000 },
+  { zone: "충청남도, 충청북도, 강원도 일부", keywords: ["충청남도", "충남", "충청북도", "충북", "강원"], half: 240000, one: 420000 },
+  { zone: "전라북도, 경상북도, 강원도 일부", keywords: ["전라북도", "전북", "경상북도", "경북"], half: 360000, one: 540000 },
+  { zone: "경상남도, 전라남도, 부산시, 대구시", keywords: ["경상남도", "경남", "전라남도", "전남", "부산", "대구"], half: 480000, one: 660000 },
+];
+
+// 구매제품 배송료 - 지역별 고정 추가금(지역배송료)에 톤당배송료(1톤당 1만원)를 더한다.
+// 예: 인근지역(용인, 지역배송료 0원) 1톤 = 1만원 / 경기(원거리, 지역배송료 4만원) 1톤 = 4만원+1만원 = 5만원.
+const PURCHASE_PER_TON_RATE = 10000;
+const PURCHASE_DELIVERY_ZONES = [
+  { zone: "인근지역(분당,용인,동탄 등)", keywords: ["분당", "용인", "동탄", "포곡", "둔전", "전대리", "대리", "에버랜드", "팔달", "영통", "반월", "반정", "능동"], surcharge: 0 },
+  { zone: "서울/경기(인근)", keywords: ["서울", "오산", "광주", "수원", "양지", "모현", "천리", "송전", "원삼", "백암", "매송", "비봉", "정남"], surcharge: 20000 },
+  { zone: "경기(근거리)", keywords: ["광명", "과천", "시흥", "안양", "의왕", "안산", "부천", "하남", "평택", "군포", "화성"], surcharge: 30000 },
+  { zone: "경기(원거리)", keywords: ["구리", "남양주", "의정부", "양주", "인천", "일산", "파주", "김포", "고양"], surcharge: 40000 },
+  { zone: "경기(장거리)", keywords: ["양평", "여주", "이천", "안성", "가평", "포천", "동두천", "강화"], surcharge: 50000 },
+  { zone: "충청도, 강원도(내륙지방)", keywords: ["충청", "충남", "충북", "강원"], surcharge: 70000 },
+  { zone: "전라북도, 경상북도, 강원도(해안가)", keywords: ["전라북도", "전북", "경상북도", "경북"], surcharge: 150000 },
+  { zone: "경상남도, 전라남도, 울산시, 부산시, 강원도(산지)", keywords: ["경상남도", "경남", "전라남도", "전남", "울산", "부산"], surcharge: 250000 },
+  { zone: "제주도, 섬, 산간벽지", keywords: ["제주"], surcharge: null }, // 협의
+];
+
+// 무빙트럭(용차) 화물 운임표 - 단위 만원(계산 시 ×10,000). 도착지역별 1톤/2.5톤/5톤 요금.
+// 다마스/라보는 계산에서 제외 요청에 따라 데이터에서도 뺐다(원래 체크박스 옵션에도 없었음).
+// 거리 구간(10km 이하 ~ 90km 미만)은 출발지 용인시 기흥구 공세동 기준.
+const CHARTERED_TRUCK_GROUPS = [
+  {
+    region: "서울/수도권",
+    rows: [
+      { label: "10km 이하", keywords: [], ton1: 5, ton2_5: 8, ton5: 14 },
+      { label: "20km 미만", keywords: [], ton1: 6, ton2_5: 9, ton5: 15 },
+      { label: "30km 미만", keywords: [], ton1: 7, ton2_5: 10, ton5: 17 },
+      { label: "50km 미만", keywords: [], ton1: 8, ton2_5: 12, ton5: 19 },
+      { label: "70km 미만", keywords: [], ton1: 9, ton2_5: 13, ton5: 20 },
+      { label: "90km 미만", keywords: [], ton1: 10, ton2_5: 15, ton5: 21 },
+    ],
+  },
+  {
+    region: "강원",
+    rows: [
+      { label: "문막,철원,춘천", keywords: ["문막", "철원", "춘천"], ton1: 13, ton2_5: 18, ton5: 23 },
+      { label: "원주,화천,횡성", keywords: ["원주", "화천", "횡성"], ton1: 16, ton2_5: 19, ton5: 25 },
+      { label: "속초,양구,영월,인제,평창", keywords: ["속초", "양구", "영월", "인제", "평창"], ton1: 18, ton2_5: 28, ton5: 33 },
+      { label: "강릉,고성,동해,삼척,태백", keywords: ["강릉", "고성", "동해", "삼척", "태백"], ton1: 24, ton2_5: 33, ton5: 38 },
+    ],
+  },
+  {
+    region: "충북",
+    rows: [
+      { label: "진천,청주", keywords: ["진천", "청주"], ton1: 13, ton2_5: 20, ton5: 24 },
+      { label: "괴산,음성,제천,충주", keywords: ["괴산", "음성", "제천", "충주"], ton1: 14, ton2_5: 21, ton5: 26 },
+      { label: "단양,보은,영동,옥천", keywords: ["단양", "보은", "영동", "옥천"], ton1: 16, ton2_5: 22, ton5: 28 },
+    ],
+  },
+  {
+    region: "충남",
+    rows: [
+      { label: "당진,아산,천안", keywords: ["당진", "아산", "천안"], ton1: 12, ton2_5: 18, ton5: 22 },
+      { label: "공주,세종,예산,서산,청양,태안", keywords: ["공주", "세종", "예산", "서산", "청양", "태안"], ton1: 14, ton2_5: 20, ton5: 25 },
+      { label: "대전,계룡,논산,보령,부여,홍성", keywords: ["대전", "계룡", "논산", "보령", "부여", "홍성"], ton1: 15, ton2_5: 22, ton5: 26 },
+      { label: "안면도,금산,서천", keywords: ["안면도", "금산", "서천"], ton1: 16, ton2_5: 23, ton5: 28 },
+    ],
+  },
+  {
+    region: "전북",
+    rows: [
+      { label: "전주,군산,무주,익산,완주", keywords: ["전주", "군산", "무주", "익산", "완주"], ton1: 18, ton2_5: 25, ton5: 30 },
+      { label: "김제,부안,임실,진안", keywords: ["김제", "부안", "임실", "진안"], ton1: 19, ton2_5: 28, ton5: 34 },
+      { label: "고창,남원,장수,정읍", keywords: ["고창", "남원", "장수", "정읍"], ton1: 20, ton2_5: 30, ton5: 35 },
+    ],
+  },
+  {
+    region: "전남",
+    rows: [
+      { label: "광주,곡성,담양,영광,장성", keywords: ["곡성", "담양", "영광", "장성"], ton1: 22, ton2_5: 30, ton5: 40 },
+      { label: "구례,나주,무안,순천,함평,화순", keywords: ["구례", "나주", "무안", "순천", "함평", "화순"], ton1: 23, ton2_5: 31, ton5: 41 },
+      { label: "광양,목포,보성,여수,영암", keywords: ["광양", "목포", "보성", "여수", "영암"], ton1: 24, ton2_5: 34, ton5: 43 },
+      { label: "강진,고흥,완도,장흥,진도,해남", keywords: ["강진", "고흥", "완도", "장흥", "진도", "해남"], ton1: 28, ton2_5: 35, ton5: 46 },
+    ],
+  },
+  {
+    region: "경북",
+    rows: [
+      { label: "문경,영주,예천,상주", keywords: ["문경", "영주", "예천", "상주"], ton1: 19, ton2_5: 27, ton5: 34 },
+      { label: "안동,의성,봉화", keywords: ["안동", "의성", "봉화"], ton1: 21, ton2_5: 30, ton5: 35 },
+      { label: "대구,구미,군위,영천,성주", keywords: ["대구", "구미", "군위", "영천", "성주"], ton1: 22, ton2_5: 33, ton5: 37 },
+      { label: "고령,울진,청도,칠곡", keywords: ["고령", "울진", "청도", "칠곡"], ton1: 23, ton2_5: 34, ton5: 40 },
+      { label: "경주,영덕,영양,포항", keywords: ["경주", "영덕", "영양", "포항"], ton1: 24, ton2_5: 35, ton5: 42 },
+    ],
+  },
+  {
+    region: "경남",
+    rows: [
+      { label: "산청,함양", keywords: ["산청", "함양"], ton1: 23, ton2_5: 33, ton5: 40 },
+      { label: "거창,진주,창녕,합천", keywords: ["거창", "진주", "창녕", "합천"], ton1: 25, ton2_5: 34, ton5: 42 },
+      { label: "밀양,사천,하동,함안", keywords: ["밀양", "사천", "하동", "함안"], ton1: 26, ton2_5: 37, ton5: 45 },
+      { label: "김해,남해,울주,양산,창원", keywords: ["김해", "남해", "울주", "양산", "창원"], ton1: 27, ton2_5: 38, ton5: 50 },
+      { label: "부산,거제,울산,통영", keywords: ["부산", "거제", "울산", "통영"], ton1: 28, ton2_5: 39, ton5: 53 },
+    ],
+  },
+];
+// 체크박스에 보여줄 용차 옵션. "1톤(1.4톤+1)" 같은 표기는 "1톤 요금 + 1만원"으로 해석해 반영했다.
+// "5톤(길이+3~5)"는 폭이 있는 범위라 중간값 4만원을 기본으로 넣었다(확인 필요).
+const CHARTERED_TRUCK_OPTIONS = [
+  { key: "ton1", label: "1톤", col: "ton1", extra: 0 },
+  { key: "ton1_4", label: "1.4톤", col: "ton1", extra: 10000 },
+  { key: "ton2_5", label: "2.5톤", col: "ton2_5", extra: 0 },
+  { key: "ton3_5", label: "3.5톤", col: "ton2_5", extra: 20000 },
+  { key: "ton5", label: "5톤", col: "ton5", extra: 0 },
+  { key: "ton5_long", label: "5톤장축", col: "ton5", extra: 40000 },
+];
+const CHARTERED_TRUCK_ROWS = CHARTERED_TRUCK_GROUPS.flatMap((g) => g.rows.map((r) => ({ ...r, region: g.region })));
+
+function findZoneIndex(zones, address) {
+  const a = address || "";
+  const idx = zones.findIndex((z) => z.keywords.some((k) => a.includes(k)));
+  return idx >= 0 ? idx : null;
+}
+
+// 총 톤수 옆에 다는 "배송비" 버튼. 기본배송비(거래유형+배송지+톤수 기준 자동 계산)에
+// 용차(추가 트럭)를 체크해서 더할 수 있는 계산기를 펼쳐서 보여준다.
+function DeliveryFeeButton({ address, transactionType, totalTon }) {
+  const [open, setOpen] = useState(false);
+  const zones = transactionType === "purchase" ? PURCHASE_DELIVERY_ZONES : RENTAL_DELIVERY_ZONES;
+  const autoZoneIdx = useMemo(() => findZoneIndex(zones, address), [zones, address]);
+  const [zoneIdx, setZoneIdx] = useState(null); // null이면 자동감지 값을 그대로 쓴다
+  const effectiveZoneIdx = zoneIdx != null ? zoneIdx : autoZoneIdx;
+  const zone = effectiveZoneIdx != null ? zones[effectiveZoneIdx] : null;
+
+  const base = useMemo(() => {
+    if (!zone) return null;
+    if (transactionType === "rental") {
+      const bracket = (totalTon || 0) <= 0.5 ? "half" : "one"; // 0.5톤 이하는 0.5톤 요금, 초과는 1톤 요금(그 이상은 용차로 추가)
+      const amount = zone[bracket];
+      return amount != null ? { amount, label: bracket === "half" ? "0.5톤 기준" : "1톤 기준" } : null;
+    }
+    if (zone.surcharge == null) return { amount: null, negotiate: true };
+    const tons = Math.max(1, Math.ceil(totalTon || 1)); // 1톤 미만은 1톤으로 산정
+    return { amount: tons * PURCHASE_PER_TON_RATE + zone.surcharge, label: `${tons}톤 기준` };
+  }, [zone, transactionType, totalTon]);
+
+  const autoTruckRowIdx = useMemo(() => {
+    const a = address || "";
+    const idx = CHARTERED_TRUCK_ROWS.findIndex((r) => (r.keywords || []).some((k) => a.includes(k)));
+    return idx >= 0 ? idx : null;
+  }, [address]);
+  const [truckRowIdx, setTruckRowIdx] = useState(null);
+  const effectiveTruckRowIdx = truckRowIdx != null ? truckRowIdx : autoTruckRowIdx;
+  const truckRow = effectiveTruckRowIdx != null ? CHARTERED_TRUCK_ROWS[effectiveTruckRowIdx] : null;
+
+  const [checked, setChecked] = useState({});
+  const toggleTruck = (key) => setChecked((p) => ({ ...p, [key]: !p[key] }));
+  const [result, setResult] = useState(null);
+
+  function calculate() {
+    if (!zone) {
+      alert("배송 지역을 먼저 선택해주세요.");
+      return;
+    }
+    if (!base || base.amount == null) {
+      alert(base?.negotiate ? "이 지역은 협의 대상이라 자동 계산이 안 돼요. 직접 문의해주세요." : "이 지역의 기본배송비를 찾을 수 없어요.");
+      return;
+    }
+    let truckTotal = 0;
+    const truckDetails = [];
+    for (const opt of CHARTERED_TRUCK_OPTIONS) {
+      if (!checked[opt.key]) continue;
+      if (!truckRow) {
+        alert("용차를 추가하려면 용차 지역을 먼저 선택해주세요.");
+        return;
+      }
+      const rate = truckRow[opt.col];
+      if (rate == null) {
+        alert(`선택하신 지역(${truckRow.label})엔 ${opt.label} 요금이 없어요. 다른 지역을 선택해주세요.`);
+        return;
+      }
+      const cost = Math.round(rate * 10000) + opt.extra;
+      truckTotal += cost;
+      truckDetails.push({ label: opt.label, cost });
+    }
+    setResult({ base: base.amount, truckTotal, truckDetails, total: base.amount + truckTotal });
+  }
+
+  return (
+    <span style={{ position: "relative", display: "inline-block" }}>
+      <button type="button" onClick={() => setOpen((v) => !v)} style={miniBtnStyle}>
+        💰 배송비
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            zIndex: 40,
+            top: "calc(100% + 6px)",
+            left: 0,
+            width: 420,
+            background: "#fff",
+            border: `1px solid ${C.line}`,
+            boxShadow: "0 8px 20px rgba(0,0,0,0.14)",
+            padding: 16,
+            fontFamily: sans,
+          }}
+        >
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>기본배송비 ({transactionType === "purchase" ? "구매" : "렌탈"})</div>
+          <select
+            style={{ ...inputStyle, fontSize: 12.5, padding: "6px 8px", marginBottom: 6 }}
+            value={effectiveZoneIdx ?? ""}
+            onChange={(e) => setZoneIdx(e.target.value === "" ? null : Number(e.target.value))}
+          >
+            <option value="">지역을 선택하세요{autoZoneIdx != null ? " (자동감지: " + zones[autoZoneIdx].zone + ")" : ""}</option>
+            {zones.map((z, i) => (
+              <option key={i} value={i}>
+                {z.zone}
+              </option>
+            ))}
+          </select>
+          <div style={{ fontSize: 13, marginBottom: 14 }}>
+            {base ? (
+              base.negotiate ? (
+                <span style={{ color: "#B45309" }}>협의 대상 지역이에요</span>
+              ) : (
+                <>
+                  <strong>{fmtWon(base.amount)}</strong> <span style={{ color: C.muted, fontSize: 11.5 }}>({base.label}, 총 톤수 {(totalTon || 0).toFixed(3)}톤)</span>
+                </>
+              )
+            ) : (
+              <span style={{ color: C.muted }}>지역을 선택하면 기본배송비가 계산돼요</span>
+            )}
+          </div>
+
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 2 }}>용차 추가 (1톤을 넘거나 별도 차량이 필요할 때)</div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>출발지: 용인시 기흥구 공세동 기준</div>
+          <select
+            style={{ ...inputStyle, fontSize: 12.5, padding: "6px 8px", marginBottom: 8 }}
+            value={effectiveTruckRowIdx ?? ""}
+            onChange={(e) => setTruckRowIdx(e.target.value === "" ? null : Number(e.target.value))}
+          >
+            <option value="">
+              용차 지역을 선택하세요{autoTruckRowIdx != null ? " (자동감지: " + CHARTERED_TRUCK_ROWS[autoTruckRowIdx].label + ")" : ""}
+            </option>
+            {CHARTERED_TRUCK_GROUPS.map((g, gi) => (
+              <optgroup key={gi} label={g.region}>
+                {g.rows.map((r, ri) => {
+                  const flatIdx = CHARTERED_TRUCK_ROWS.findIndex((x) => x.region === g.region && x.label === r.label);
+                  return (
+                    <option key={ri} value={flatIdx}>
+                      {r.label}
+                    </option>
+                  );
+                })}
+              </optgroup>
+            ))}
+          </select>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginBottom: 12 }}>
+            {CHARTERED_TRUCK_OPTIONS.map((opt) => {
+              const rate = truckRow ? truckRow[opt.col] : null;
+              return (
+                <label key={opt.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: rate == null && truckRow ? C.muted : C.ink }}>
+                  <input type="checkbox" checked={!!checked[opt.key]} onChange={() => toggleTruck(opt.key)} />
+                  {opt.label}
+                  {truckRow && rate != null && <span style={{ color: C.muted, fontSize: 11 }}>({fmtWon(Math.round(rate * 10000) + opt.extra)})</span>}
+                </label>
+              );
+            })}
+          </div>
+
+          <button type="button" onClick={calculate} style={{ ...miniBtnStylePrimary, width: "100%", marginBottom: result ? 10 : 0 }}>
+            계산하기
+          </button>
+
+          {result && (
+            <div style={{ borderTop: `1px solid ${C.lineSoft}`, paddingTop: 10, fontSize: 12.5 }}>
+              <div>기본배송비: {fmtWon(result.base)}</div>
+              {result.truckDetails.map((d, i) => (
+                <div key={i}>용차 · {d.label}: {fmtWon(d.cost)}</div>
+              ))}
+              <div style={{ marginTop: 6, fontSize: 14 }}>
+                합계 <strong>{fmtWon(result.total)}</strong>
+              </div>
+            </div>
+          )}
+
+          <div style={{ fontSize: 10.5, color: C.muted, marginTop: 10, lineHeight: 1.4 }}>
+            참고용 계산이에요(VAT 별도). 사다리차·기사작업비 등 현장 조건에 따른 추가비용은 별도로 확인해주세요.
+          </div>
+        </div>
+      )}
+    </span>
+  );
+}
+
 function QuoteUploadPanel({ importState, setImportState, onFile, onCancel, onConfirm, importing, isAdmin = true, tonOverrides, onTonOverrideSaved }) {
   const update = (patch) => setImportState({ ...importState, ...patch });
 
@@ -3275,6 +3575,7 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
           </button>
           {header.siteAddress && <div style={{ width: 1, alignSelf: "stretch", background: C.line }} />}
           <DeliverySiteInfoButton address={header.siteAddress} />
+          <DeliveryFeeButton address={header.siteAddress} transactionType={header.transactionType} totalTon={totalTon} />
         </div>
 
         {tonDetailOpen && (
