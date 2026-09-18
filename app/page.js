@@ -2679,8 +2679,15 @@ function loadKakaoMapsSdk() {
     script.id = "kakao-maps-sdk";
     script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${key}&libraries=services&autoload=false`;
     script.onload = onReady;
-    script.onerror = () => resolve(null);
+    script.onerror = () => {
+      console.warn("[카카오맵] SDK 로드 실패(네트워크/키/도메인 설정 확인 필요)");
+      resolve(null);
+    };
     document.head.appendChild(script);
+  }).then((kakao) => {
+    // 실패한 결과는 캐시하지 않는다 — 다음 시도 때(예: 카카오 설정을 방금 고친 경우) 다시 로드를 시도하도록.
+    if (!kakao) kakaoSdkPromise = null;
+    return kakao;
   });
   return kakaoSdkPromise;
 }
@@ -2707,9 +2714,17 @@ async function geocodeAddress(address) {
 }
 
 // 출발지(용인시 기흥구 공세동)는 항상 같은 곳이라, 좌표를 한 번만 조회해서 세션 안에서 재사용한다.
+// 단, 실패한 결과는 캐시하지 않는다 — 카카오 설정(도메인/서비스 활성화 등)을 나중에 고친 뒤 재시도할 수 있어야 하므로.
 let originCoordsPromise = null;
 function getOriginCoords() {
-  if (!originCoordsPromise) originCoordsPromise = geocodeAddress(KAKAO_ORIGIN_ADDRESS);
+  if (originCoordsPromise) return originCoordsPromise;
+  originCoordsPromise = geocodeAddress(KAKAO_ORIGIN_ADDRESS).then((coords) => {
+    if (!coords) {
+      console.warn("[카카오맵] 출발지(용인시 기흥구 공세동) 좌표 조회 실패");
+      originCoordsPromise = null;
+    }
+    return coords;
+  });
   return originCoordsPromise;
 }
 
