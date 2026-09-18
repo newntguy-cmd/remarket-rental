@@ -1063,6 +1063,7 @@ function Dashboard({ profile, onLogout }) {
   const [rentals, setRentals] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [shares, setShares] = useState([]);
+  const [tonOverrides, setTonOverrides] = useState([]); // 기준표에 없어 직원이 직접 입력해 저장해둔 톤수(품목/규격별), 다음 견적서부터 자동으로 채워짐
   const [activeTab, setActiveTab] = useState("quote"); // 지금은 "quote" 하나뿐. 메뉴는 하나씩 다시 추가할 예정
   // 지분관리 화면은 목록/상세 중 어디에 있었는지를 자체적으로 기억하고 있어서, 메뉴의 "지분관리"를
   // 다시 눌러도(이미 그 탭이어도) 항상 목록 화면으로 되돌아가도록 이 값을 바꿔서 강제로 새로 마운트시킨다.
@@ -1082,6 +1083,7 @@ function Dashboard({ profile, onLogout }) {
     fetchRentals();
     fetchCustomers();
     fetchShares();
+    fetchTonOverrides();
   }, []);
 
   async function fetchRentals() {
@@ -1101,12 +1103,20 @@ function Dashboard({ profile, onLogout }) {
     if (!error) setShares(data || []);
   }
 
+  async function fetchTonOverrides() {
+    const { data, error } = await supabase.from("ton_overrides").select("*");
+    if (!error) setTonOverrides(data || []);
+    // 테이블이 아직 안 만들어져 있어도(마이그레이션 전) 에러를 조용히 무시하고 기준표만으로 계산한다.
+  }
+
   async function processQuoteFile(file) {
     if (!file) return;
     const isPdf = file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf";
     try {
       const parsed = isPdf ? await parseQuotePdf(file) : await parseQuoteExcel(file);
       parsed.isPdf = isPdf;
+      // 품목/규격 기준으로 기준표(+직원이 이전에 저장해둔 값)를 찾아 화물차 적재 톤수를 자동으로 채운다.
+      parsed.items = withComputedTons(parsed.items, tonOverrides);
       // PDF든 엑셀이든 전표번호는 자동으로 채우지 않고 항상 비워둬서 직접 입력하게 한다.
       parsed.voucherNo = "";
       // 영업담당자 계정은 견적서에 어떤 이름이 적혀 있든 항상 본인 이름으로 담당자를 고정한다(다른 사람 이름으로 잘못 등록되는 것을 방지).
@@ -1269,6 +1279,8 @@ function Dashboard({ profile, onLogout }) {
             importing={importing}
             setImportState={setImportState}
             isAdmin={isAdmin}
+            tonOverrides={tonOverrides}
+            onTonOverrideSaved={fetchTonOverrides}
           />
         )}
 
@@ -1756,7 +1768,426 @@ function QuoteHeaderForm({ state, update, isAdmin = true }) {
   );
 }
 
-function QuoteUploadPanel({ importState, setImportState, onFile, onCancel, onConfirm, importing, isAdmin = true }) {
+// ---------- 톤수(화물차 적재 기준) 계산 ----------
+// 회사에서 쓰는 "품목/규격별 1개당 용적(톤)" 기준표를 그대로 옮겨왔다(2026.02 기준표 엑셀).
+// 규칙: 품목+규격이 정확히 일치하는 행을 우선 찾고, 없으면 규격 텍스트만으로 기준표에서 먼저 나오는 행을 찾는다
+// (회사에서 기존에 쓰던 엑셀의 VLOOKUP(규격, 기준표, ...) 방식과 동일하게 동작).
+const TON_REFERENCE_TABLE = [
+  { item: "사무용책상", spec: "퍼즐, W1400*D1200, 연체리", per: 0.025 },
+  { item: "사무용책상", spec: "퍼즐, W1600*D1200, 연체리", per: 0.025 },
+  { item: "사무용책상", spec: "퍼즐, W1800*D1200, 연체리", per: 0.025 },
+  { item: "사무용책상", spec: "퍼즐, W1400*D1200, 망비", per: 0.025 },
+  { item: "사무용책상", spec: "퍼즐, W1600*D1200, 망비", per: 0.025 },
+  { item: "사무용책상", spec: "퍼즐, W1800*D1200, 망비", per: 0.025 },
+  { item: "사무용책상", spec: "퍼즐, W1400*D1200, 월넛", per: 0.025 },
+  { item: "사무용책상", spec: "퍼즐, W1600*D1200, 월넛", per: 0.025 },
+  { item: "사무용책상", spec: "퍼즐, W1800*D1200, 월넛", per: 0.025 },
+  { item: "사무용책상", spec: "탑책상, W1200*D800, 연체리", per: 0.016667 },
+  { item: "사무용책상", spec: "탑책상, W1400*D800, 연체리", per: 0.02 },
+  { item: "사무용책상", spec: "탑책상, W1600*D800, 연체리", per: 0.02 },
+  { item: "사무용책상", spec: "탑책상, W1800*D800, 연체리", per: 0.02 },
+  { item: "사무용책상", spec: "탑책상, W1200*D800, 망비", per: 0.016667 },
+  { item: "사무용책상", spec: "탑책상, W1400*D800, 망비", per: 0.02 },
+  { item: "사무용책상", spec: "탑책상, W1600*D800, 망비", per: 0.02 },
+  { item: "사무용책상", spec: "탑책상, W1800*D800, 망비", per: 0.02 },
+  { item: "사무용책상", spec: "탑책상, W1200*D800, 월넛", per: 0.016667 },
+  { item: "사무용책상", spec: "탑책상, W1400*D800, 월넛", per: 0.02 },
+  { item: "사무용책상", spec: "탑책상, W1600*D800, 월넛", per: 0.02 },
+  { item: "사무용책상", spec: "탑책상, W1800*D800, 월넛", per: 0.02 },
+  { item: "마스터책상", spec: "마스터, W1800*D800, 연체리", per: 0.02 },
+  { item: "마스터책상", spec: "마스터, W1800*D800, 망비", per: 0.02 },
+  { item: "마스터책상", spec: "마스터, W1800*D800, 월넛", per: 0.02 },
+  { item: "보조책상", spec: "U형테이블, W600*D1200, 연체리", per: 0.02 },
+  { item: "보조책상", spec: "U형테이블, W600*D1200, 망비", per: 0.02 },
+  { item: "보조책상", spec: "U형테이블, W600*D1200, 월넛", per: 0.02 },
+  { item: "보조책상", spec: "U형테이블(세발), 월넛", per: 0.02 },
+  { item: "이동서랍", spec: "3단, 연체리", per: 0.0125 },
+  { item: "이동서랍", spec: "3단, 망비", per: 0.0125 },
+  { item: "이동서랍", spec: "3단, 월넛", per: 0.0125 },
+  { item: "회의테이블", spec: "포밍, W1200*D900, 연체리", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1500*D900, 연체리", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1800*D900, 연체리", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1200*D900, 망비", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1500*D900, 망비", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1800*D900, 망비", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1200*D900, 월넛", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1500*D900, 월넛", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1800*D900, 월넛", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1200*D600, 연체리", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1500*D600, 연체리", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1800*D600, 연체리", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1200*D600, 월넛", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1500*D600, 월넛", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1800*D600, 월넛", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1200*D600, 망비", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1500*D600, 망비", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1800*D600, 망비", per: 0.02 },
+  { item: "회의테이블", spec: "VIP, W1500*D900, 연체리", per: 0.05 },
+  { item: "회의테이블", spec: "VIP, W1800*D900, 연체리", per: 0.05 },
+  { item: "회의테이블", spec: "VIP, W2400*D1200, 연체리", per: 0.1 },
+  { item: "회의테이블", spec: "VIP, W1500*D900, 망비", per: 0.05 },
+  { item: "회의테이블", spec: "VIP, W1800*D900, 망비", per: 0.05 },
+  { item: "회의테이블", spec: "VIP, W2400*D1200, 망비", per: 0.1 },
+  { item: "회의테이블", spec: "VIP, W1500*D900, 월넛", per: 0.05 },
+  { item: "회의테이블", spec: "VIP, W1800*D900, 월넛", per: 0.05 },
+  { item: "회의테이블", spec: "VIP, W2400*D1200, 월넛", per: 0.1 },
+  { item: "접이식테이블", spec: "접탁자, W1200*D600, 연체리", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1500*D600, 연체리", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1800*D600, 연체리", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1200*D600, 망비", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1500*D600, 망비", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1800*D600, 망비", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1200*D600, 월넛", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1500*D600, 월넛", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1800*D600, 월넛", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1200*D450, 연체리", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1500*D450, 연체리", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1800*D450, 연체리", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1200*D450, 망비", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1500*D450, 망비", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1800*D450, 망비", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1200*D450, 월넛", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1500*D450, 월넛", per: 0.02 },
+  { item: "접이식테이블", spec: "접탁자, W1800*D450, 월넛", per: 0.02 },
+  { item: "원형테이블", spec: "D900, 연체리", per: 0.02 },
+  { item: "원형테이블", spec: "D1050, 연체리", per: 0.02 },
+  { item: "원형테이블", spec: "D1200, 연체리", per: 0.02 },
+  { item: "원형테이블", spec: "D900, 망비", per: 0.02 },
+  { item: "원형테이블", spec: "D1050, 망비", per: 0.02 },
+  { item: "원형테이블", spec: "D1200, 망비", per: 0.02 },
+  { item: "원형테이블", spec: "D900, 월넛", per: 0.02 },
+  { item: "원형테이블", spec: "D1050, 월넛", per: 0.02 },
+  { item: "원형테이블", spec: "D1200, 월넛", per: 0.02 },
+  { item: "중역의자", spec: "뉴펄", per: 0.014286 },
+  { item: "사무용의자", spec: "닥스, 이중락킹, 메쉬블랙", per: 0.014286 },
+  { item: "회의의자", spec: "밀대, 바퀴", per: 0.0125 },
+  { item: "회의의자", spec: "밀대, 고정", per: 0.0125 },
+  { item: "회의의자", spec: "구멀티의자, 팔무", per: 0.0125 },
+  { item: "회의의자", spec: "신멀티의자, 팔유", per: 0.0125 },
+  { item: "접의자", spec: "접의자(밤색)", per: 0.01 },
+  { item: "책장", spec: "2단오픈장, 그레이", per: 0.033333 },
+  { item: "책장", spec: "2단올문장, 연체리", per: 0.033333 },
+  { item: "책장", spec: "3단오픈장, 그레이", per: 0.05 },
+  { item: "책장", spec: "3단반문장, 연체리", per: 0.05 },
+  { item: "책장", spec: "3단올문장, 연체리", per: 0.05 },
+  { item: "책장", spec: "5단오픈장, 그레이", per: 0.1 },
+  { item: "책장", spec: "5단반문장, 연체리", per: 0.1 },
+  { item: "책장", spec: "5단올문장, 연체리", per: 0.1 },
+  { item: "책장", spec: "5단반유리장, 연체리", per: 0.1 },
+  { item: "책장", spec: "2단올문장, 망비", per: 0.033333 },
+  { item: "책장", spec: "3단반문장, 망비", per: 0.05 },
+  { item: "책장", spec: "3단올문장, 망비", per: 0.05 },
+  { item: "책장", spec: "5단반문장, 망비", per: 0.1 },
+  { item: "책장", spec: "5단올문장, 망비", per: 0.1 },
+  { item: "책장", spec: "5단반유리장, 망비", per: 0.1 },
+  { item: "책장", spec: "2단올문장, 월넛", per: 0.033333 },
+  { item: "책장", spec: "3단반문장, 월넛", per: 0.05 },
+  { item: "책장", spec: "3단올문장, 월넛", per: 0.05 },
+  { item: "책장", spec: "5단반문장, 월넛", per: 0.1 },
+  { item: "책장", spec: "5단올문장, 월넛", per: 0.1 },
+  { item: "책장", spec: "5단반유리장, 월넛", per: 0.1 },
+  { item: "옷장", spec: "1인용, 연체리", per: 0.1 },
+  { item: "옷장", spec: "2인용, 연체리", per: 0.1 },
+  { item: "옷장", spec: "4인용, 연체리", per: 0.2 },
+  { item: "옷장", spec: "6인용, 연체리", per: 0.2 },
+  { item: "옷장", spec: "1인용, 망비", per: 0.1 },
+  { item: "옷장", spec: "2인용, 망비", per: 0.1 },
+  { item: "옷장", spec: "4인용, 망비", per: 0.2 },
+  { item: "옷장", spec: "6인용, 망비", per: 0.2 },
+  { item: "옷장", spec: "1인용, 월넛", per: 0.1 },
+  { item: "옷장", spec: "2인용, 월넛", per: 0.1 },
+  { item: "옷장", spec: "4인용, 월넛", per: 0.2 },
+  { item: "옷장", spec: "6인용, 월넛", per: 0.2 },
+  { item: "화일박스", spec: "2단, 연체리", per: 0.025 },
+  { item: "화일박스", spec: "3단, 연체리", per: 0.025 },
+  { item: "화일박스", spec: "4단, 연체리", per: 0.025 },
+  { item: "화일박스", spec: "2단, 망비", per: 0.025 },
+  { item: "화일박스", spec: "3단, 망비", per: 0.025 },
+  { item: "화일박스", spec: "4단, 망비", per: 0.025 },
+  { item: "화일박스", spec: "2단, 월넛", per: 0.025 },
+  { item: "화일박스", spec: "3단, 월넛", per: 0.025 },
+  { item: "화일박스", spec: "4단, 월넛", per: 0.025 },
+  { item: "캐비닛", spec: "철제, 5단올문", per: 0.1 },
+  { item: "사무용쇼파", spec: "1인용", per: 0.05 },
+  { item: "사무용쇼파", spec: "3인용", per: 0.1 },
+  { item: "사무용쇼파", spec: "1+1+3", per: 0.2 },
+  { item: "중역쇼파", spec: "1인용", per: 0.05 },
+  { item: "중역쇼파", spec: "3인용", per: 0.1 },
+  { item: "중역쇼파", spec: "1+1+3", per: 0.2 },
+  { item: "쇼파탁자", spec: "일반, W1200*D570", per: 0.033333 },
+  { item: "쇼파탁자", spec: "중역, W1500*D600", per: 0.033333 },
+  { item: "파티션", spec: "H1200*W600, PW505", per: 0.0125 },
+  { item: "파티션", spec: "H1200*W700, PW505", per: 0.0125 },
+  { item: "파티션", spec: "H1200*W800, PW505", per: 0.0125 },
+  { item: "파티션", spec: "H1200*W900, PW505", per: 0.0125 },
+  { item: "파티션", spec: "H1200*W1000, PW505", per: 0.0125 },
+  { item: "파티션", spec: "H1200*W1100, PW505", per: 0.0125 },
+  { item: "파티션", spec: "H1200*W1200, PW505", per: 0.0125 },
+  { item: "파티션", spec: "H1200*W1400, PW505", per: 0.014286 },
+  { item: "파티션", spec: "H1200*W1600, PW505", per: 0.014286 },
+  { item: "파티션", spec: "H1200*W1800, PW505", per: 0.02 },
+  { item: "파티션", spec: "H1500*W600, PW505", per: 0.014286 },
+  { item: "파티션", spec: "H1500*W700, PW505", per: 0.014286 },
+  { item: "파티션", spec: "H1500*W800, PW505", per: 0.014286 },
+  { item: "파티션", spec: "H1500*W900, PW505", per: 0.014286 },
+  { item: "파티션", spec: "H1500*W1000, PW505", per: 0.014286 },
+  { item: "파티션", spec: "H1500*W1100, PW505", per: 0.014286 },
+  { item: "파티션", spec: "H1500*W1200, PW505", per: 0.014286 },
+  { item: "파티션", spec: "H1800*W600, PW505", per: 0.02 },
+  { item: "파티션", spec: "H1800*W700, PW505", per: 0.02 },
+  { item: "파티션", spec: "H1800*W800, PW505", per: 0.02 },
+  { item: "파티션", spec: "H1800*W900, PW505", per: 0.02 },
+  { item: "파티션", spec: "H1800*W1000, PW505", per: 0.02 },
+  { item: "파티션", spec: "H1800*W1100, PW505", per: 0.02 },
+  { item: "파티션", spec: "H1800*W1200, PW505", per: 0.02 },
+  { item: "화이트보드", spec: "화이트보드, W900*H600", per: 0.01 },
+  { item: "화이트보드", spec: "화이트보드, W1200*H800", per: 0.01 },
+  { item: "화이트보드", spec: "화이트보드, W1500*H900", per: 0.014286 },
+  { item: "화이트보드", spec: "화이트보드, W1800*H900", per: 0.016667 },
+  { item: "화이트보드", spec: "화이트보드, W2400*H1200", per: 0.02 },
+  { item: "화이트보드", spec: "화이트보드 거치대", per: 0.05 },
+  { item: "월중행사표", spec: "월중행사표, W900*H600", per: 0.01 },
+  { item: "월중행사표", spec: "월중행사표, W1200*H800", per: 0.01 },
+  { item: "근무상황판", spec: "근무상황판, W900*H600", per: 0.01 },
+  { item: "근무상황판", spec: "근무상황판, W1200*H800", per: 0.01 },
+  { item: "신발장", spec: "5단오픈, 안전화 가능", per: 0.1 },
+  { item: "씽크대", spec: "W900, 1구", per: 0.1 },
+  { item: "씽크대", spec: "W1200, 2구", per: 0.1 },
+  { item: "옷걸이", spec: "스탠드", per: 0.02 },
+  { item: "행거", spec: "이동형, 행거", per: 0.033333 },
+  { item: "강연대", spec: "W400", per: 0.02 },
+  { item: "책꽂이", spec: "W600", per: 0.006667 },
+  { item: "냉장고", spec: "150리터급", per: 0.1 },
+  { item: "냉장고", spec: "200리터급", per: 0.1 },
+  { item: "냉장고", spec: "300리터급", per: 0.2 },
+  { item: "냉장고", spec: "500리터급", per: 0.2 },
+  { item: "세탁기", spec: "통돌이 12kg", per: 0.1 },
+  { item: "LED TV", spec: "32인치", per: 0.05 },
+  { item: "LED TV", spec: "42인치", per: 0.05 },
+  { item: "전자레인지", spec: "20리터급", per: 0.01 },
+  { item: "시계", spec: "벽걸이형", per: 0.005 },
+  { item: "청소기", spec: "가정용", per: 0.014286 },
+  { item: "청소기", spec: "산업용", per: 0.014286 },
+  { item: "공기청정기", spec: "10평형", per: 0.033333 },
+  { item: "공기청정기", spec: "20평형", per: 0.033333 },
+  { item: "냉난방기", spec: "벽걸이 7평", per: 0.05 },
+  { item: "냉난방기", spec: "벽걸이 9평", per: 0.05 },
+  { item: "냉난방기", spec: "벽걸이 11평", per: 0.05 },
+  { item: "냉난방기", spec: "벽걸이 13평", per: 0.05 },
+  { item: "냉난방기", spec: "스탠드 16평", per: 0.1 },
+  { item: "냉난방기", spec: "스탠드 18평", per: 0.1 },
+  { item: "냉난방기", spec: "스탠드 25평", per: 0.2 },
+  { item: "냉난방기", spec: "스탠드 30평", per: 0.2 },
+  { item: "냉난방기", spec: "스탠드 40평", per: 0.2 },
+  { item: "에어컨", spec: "벽걸이 6평", per: 0.05 },
+  { item: "에어컨", spec: "벽걸이 8평", per: 0.05 },
+  { item: "에어컨", spec: "벽걸이 10평", per: 0.05 },
+  { item: "에어컨", spec: "스탠드 15평", per: 0.1 },
+  { item: "에어컨", spec: "스탠드 18평", per: 0.1 },
+  { item: "에어컨", spec: "스탠드 23평", per: 0.2 },
+  { item: "선풍기", spec: "스탠드 14인치", per: 0.0125 },
+  { item: "라디에이터", spec: "7핀", per: 0.0125 },
+  { item: "라디에이터", spec: "11핀", per: 0.0125 },
+  { item: "파쇄기", spec: "A3, 대형", per: 0.05 },
+  { item: "파쇄기", spec: "A4, 중형", per: 0.05 },
+  { item: "복합기", spec: "A3, 대형", per: 0.1 },
+  { item: "침대", spec: "슈퍼싱글", per: 0.1 },
+  { item: "마감바", spec: "H1500", per: 0.002 },
+  { item: "안전각", spec: "철제", per: 0.003333 },
+  { item: "사무용의자", spec: "닥스, 이중럭킹, 메쉬블랙", per: 0.014286 },
+  { item: "화이트보드", spec: "월중행사표 W1200", per: 0.01 },
+  { item: "포스트", spec: "H1200", per: 0.002 },
+  { item: "마감바", spec: "H1200", per: 0.002 },
+  { item: "사무용의자", spec: "올메쉬 블랙", per: 0.014286 },
+  { item: "TV", spec: "40인치", per: 0.05 },
+  { item: "TV다이", spec: "W1200", per: 0.01 },
+  { item: "행거", spec: "이동형", per: 0.033333 },
+  { item: "중역책상", spec: "탑, 1800*800, 연체리", per: 0.02 },
+  { item: "사무용의자", spec: "닥스메쉬", per: 0.014286 },
+  { item: "사무의자", spec: "젠틀맨", per: 0.014286 },
+  { item: "보조책상", spec: "U형테이블(세발), W600*D1200, 연체리", per: 0.02 },
+  { item: "이동서랍", spec: "3단, (색상무관)", per: 0.0125 },
+  { item: "보조책상", spec: "U형테이블(세발), W600*D1200, (색상무관)", per: 0.02 },
+  { item: "접의자", spec: "접의자(색상무관)", per: 0.01 },
+  { item: "화일박스", spec: "4단, (색상무관)", per: 0.025 },
+  { item: "옷장", spec: "1인용, (색상무관)", per: 0.1 },
+  { item: "보드판", spec: "화이트보드, W1800", per: 0.016667 },
+  { item: "보드판", spec: "월중행사표, W900", per: 0.01 },
+  { item: "보드판", spec: "근무상황판, W900", per: 0.01 },
+  { item: "회의테이블", spec: "포밍, W1800*D900, 파스텔", per: 0.02 },
+  { item: "냉난방기", spec: "스탠드 18평/인버터 (YI-8956, 8957)", per: 0.1 },
+  { item: "냉난방기", spec: "벽걸이 13평/인버터", per: 0.05 },
+  { item: "냉장고", spec: "90리터급", per: 0.05 },
+  { item: "냉장고", spec: "3*3 철제 (W850*H890)", per: 0.1 },
+  { item: "냉장고", spec: "3*6 철제 (W850*H1790)", per: 0.1 },
+  { item: "냉장고", spec: "스탠드 18평 (40㎡)", per: 0.1 },
+  { item: "냉장고", spec: "스탠드 40평 (100㎡)", per: 0.2 },
+  { item: "냉장고", spec: "벽걸이 7평(14㎡)", per: 0.05 },
+  { item: "퍼즐책상", spec: "퍼즐(좌), W1600*D1200, 월넛", per: 0.025 },
+  { item: "퍼즐책상", spec: "VIP테이블, W2400*D1200, 월넛", per: 0.1 },
+  { item: "퍼즐책상", spec: "알파고 회의의자", per: 0.0125 },
+  { item: "퍼즐책상", spec: "중역용, W1500", per: 0.033333 },
+  { item: "퍼즐책상", spec: "퍼즐(좌), W1600*D1200, 연체리", per: 0.025 },
+  { item: "퍼즐책상", spec: "퍼즐(우), W1600*D1200, 연체리", per: 0.025 },
+  { item: "퍼즐책상", spec: "VIP테이블, W2400*D1200, 연체리", per: 0.1 },
+  { item: "사무용책상", spec: "퍼즐(좌), W1400*D1200, 연체리", per: 0.025 },
+  { item: "사무용책상", spec: "퍼즐(우), W1400*D1200, 연체리", per: 0.025 },
+  { item: "캐비닛", spec: "철제 5단올문", per: 0.1 },
+  { item: "냉장고", spec: "250리터급", per: 0.1 },
+  { item: "탑책상", spec: "W1600*D800*H720, 연체리", per: 0.033333 },
+  { item: "이동서랍", spec: "3단, 연체리", per: 0.033333 },
+  { item: "닥스의자", spec: "이중럭킹, 헤드유, 블랙, 매쉬", per: 0.033333 },
+  { item: "포밍테이블", spec: "W1800*D900, 연체리", per: 0.1 },
+  { item: "접의자", spec: "밤색, 고정", per: 0.0125 },
+  { item: "원형테이블", spec: "D1050", per: 0.1 },
+  { item: "옷걸이", spec: "스탠드형", per: 0.1 },
+  { item: "대형복합기", spec: "A3, 칼라, 팩스포함", per: 0.1 },
+  { item: "캐비닛", spec: "5단올문, 철제", per: 0.1 },
+  { item: "사무용쇼파", spec: "1+1+3+탁자", per: 0.2 },
+  { item: "사무용쇼파", spec: "마스터 W1800*D800, 월넛(보조책상 포함)", per: 0.02 },
+  { item: "사무용쇼파", spec: "3단오픈장, 월넛", per: 0.05 },
+  { item: "사무용쇼파", spec: "3단오픈장, 연체리", per: 0.05 },
+  { item: "사무용쇼파", spec: "4단오픈장, 연체리", per: 0.1 },
+  { item: "소장실책상", spec: "ㄱ자퍼즐책상, W1800*D1200, 월넛", per: 0.025 },
+  { item: "LED TV", spec: "43인치", per: 0.05 },
+  { item: "세탁기", spec: "10~12kg 통돌이", per: 0.1 },
+  { item: "세탁기", spec: "통돌이 10kg급", per: 0.1 },
+  { item: "보조책상", spec: "U형테이블, 선반형, 연체리", per: 0.02 },
+  { item: "회의테이블", spec: "VIP테이블, W1800*D900, 연체리", per: 0.05 },
+  { item: "회의의자", spec: "구멀티의자", per: 0.0125 },
+  { item: "보드판", spec: "월중행사표, W1200", per: 0.01 },
+  { item: "보드판", spec: "화이트보드, W1500", per: 0.01 },
+  { item: "거치대", spec: "화이트보드 W1500용 거치대", per: 0.01 },
+  { item: "행거", spec: "이동형 행거", per: 0.033333 },
+  { item: "책꽂이", spec: "W600, 연체리", per: 0.006667 },
+  { item: "냉장고", spec: "400리터급", per: 0.2 },
+  { item: "냉난방기", spec: "스탠드 40평 (YI-6501, 5387)", per: 0.2 },
+  { item: "냉난방기", spec: "스탠드 25평 (YI-7097)", per: 0.2 },
+  { item: "보조책상", spec: "U형테이블, 세발식, 연체리", per: 0.02 },
+  { item: "냉장고", spec: "205리터", per: 0.1 },
+  { item: "세탁기", spec: "10kg급 통돌이", per: 0.1 },
+  { item: "사회대", spec: "", per: 0.02 },
+  { item: "접의자", spec: "밤색", per: 0.01 },
+  { item: "소장용책상", spec: "마스터, W1800*D800, 보조포함, 월넛", per: 0.02 },
+  { item: "냉장고", spec: "262리터", per: 0.1 },
+  { item: "보조책상", spec: "U형테이블, W1200*D600, 월넛", per: 0.02 },
+  { item: "신발장", spec: "5단오픈, W800*D300*H1200", per: 0.1 },
+  { item: "보조책상", spec: "U형테이블, W1200*D600, 연체리", per: 0.02 },
+  { item: "원형테이블", spec: "원형 D900, 연체리", per: 0.02 },
+  { item: "청소기", spec: "업소용", per: 0.014286 },
+  { item: "냉난방기", spec: "스탠드 40평, 3상", per: 0.2 },
+  { item: "책장", spec: "4단오픈장, 그레이", per: 0.1 },
+  { item: "냉장고", spec: "루컴즈 205리터", per: 0.1 },
+  { item: "쇼파탁자", spec: "쇼파탁자, W1500", per: 0.033333 },
+  { item: "파티션", spec: "H1200*W1600, PW507", per: 0.014286 },
+  { item: "파티션", spec: "H1200*W800, PW507", per: 0.0125 },
+  { item: "파티션", spec: "2단 사무의자 확인!", per: 0.014286 },
+  { item: "파티션", spec: "2단, 연체리 / SV", per: 0.025 },
+  { item: "파티션", spec: "스탠드 25평 (단상/인버터/YI-4500)", per: 0.2 },
+  { item: "파티션", spec: "벽걸이 11평 (단상/인버터/YI-6445)", per: 0.05 },
+  { item: "이동서랍", spec: "3단, 화이트", per: 0.0125 },
+  { item: "책장", spec: "5단올문장 / 시건장치 / 화이트", per: 0.1 },
+  { item: "캐비닛", spec: "5단올문, 철제", per: 0.1 },
+  { item: "사무책상", spec: "라온, W1400*D800, 화이트", per: 0.02 },
+  { item: "사무책상", spec: "라온, W1200*D800, 화이트", per: 0.02 },
+  { item: "회의테이블", spec: "포밍, W1800*D900, 화이트", per: 0.02 },
+  { item: "일반 파티션\n45T", spec: "H1800*W1000, PW503", per: 0.02 },
+  { item: "일반 파티션\n45T", spec: "H1800*W600, PW503", per: 0.02 },
+  { item: "일반 파티션\n45T", spec: "H1800*W1000, PW503", per: 0.02 },
+  { item: "일반 파티션\n45T", spec: "H1800*W800, PW503", per: 0.02 },
+  { item: "일반 파티션\n45T", spec: "H1800*W1000, PW503", per: 0.02 },
+  { item: "일반 파티션\n45T", spec: "H1800*W700, PW503", per: 0.02 },
+  { item: "일반 파티션\n45T", spec: "H1800*W1000, PW503", per: 0.02 },
+  { item: "일반 파티션\n45T", spec: "H1800*W700, PW503", per: 0.02 },
+  { item: "냉난방기", spec: "벽걸이 11평 (YI-6445)", per: 0.05 },
+  { item: "냉난방기", spec: "근무현황판, W900", per: 0.01 },
+  { item: "냉난방기", spec: "스탠드 25평 (YI-3998)", per: 0.2 },
+  { item: "냉장고", spec: "150리터", per: 0.1 },
+  { item: "냉난방기", spec: "벽걸이 9평 (단상, 인버터)", per: 0.05 },
+  { item: "냉난방기", spec: "4단올문장, 연체리", per: 0.1 },
+  { item: "냉난방기", spec: "스탠드 30평 (3상, 인버터)", per: 0.2 },
+  { item: "냉난방기", spec: "벽걸이 13평 (단상, 인버터)", per: 0.05 },
+  { item: "냉난방기", spec: "스탠드 25평 (단상, 인버터)", per: 0.2 },
+  { item: "냉난방기", spec: "벽걸이 7평 (단상, 인버터)", per: 0.05 },
+
+  // 아래는 기준표 원본에 단위수량/용적이 비어있던(=실측이 없던) 품목들이다.
+  // 같은 품목군의 다른 규격이나 비슷한 크기/무게의 물건을 기준으로 추정해서 채워넣었다(실측치가 아니라 추정치).
+  { item: "사무의자", spec: "닥스, 이중럭킹, 메쉬블랙", per: 0.014286 }, // "이중락킹" 표기와 같은 제품(오타 차이)
+  { item: "회의의자", spec: "접의자, 이동형, 알파고D", per: 0.0125 }, // 알파고 회의의자와 동일 취급
+  { item: "빔프로젝터", spec: "4500안시", per: 0.02 }, // 추정: 소형 전자기기, 모니터급
+  { item: "빔스크린", spec: "100인치 유압식", per: 0.03 }, // 추정: 삼각대형 스크린, 화이트보드 거치대급
+  { item: "키박스", spec: "72P", per: 0.01 }, // 추정: 소형 벽부착함
+  { item: "플랫 파티션 30T", spec: "H1170*W800", per: 0.0125 }, // 추정: 일반 파티션 H1200*W800급과 동일 취급
+  { item: "안전각", spec: "플랫파티션 전용 안전각", per: 0.003333 }, // 추정: 기존 안전각(철제)과 동일 취급
+  { item: "시계", spec: "리마켓 벽시계(판촉용)", per: 0.005 }, // 추정: 기존 벽걸이형 시계와 동일 취급
+  { item: "모니터", spec: "24인치", per: 0.01 }, // 추정: TV다이급 소형 전자기기
+];
+
+function normalizeTonText(s) {
+  return (s || "").replace(/\s+/g, " ").trim();
+}
+
+// 콤마/공백/* 기준으로 토큰을 쪼갠다(치수, 색상, 재질 등 각 구성요소가 토큰 하나씩 된다).
+function tonTokens(s) {
+  return normalizeTonText(s)
+    .split(/[,\*]/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
+// 정확히 일치하는 규격이 없을 때, 같은 품목(또는 기준표 전체) 안에서 치수/구성이 가장 비슷한 규격을 찾아 그 값을 대신 쓴다.
+// (예: "화이트" 색상만 다르고 치수가 같은 제품, "3단오픈장"처럼 핵심 구성은 같고 부가 설명만 다른 경우)
+function fuzzyTonMatch(item, spec, sameItemOnly) {
+  const ni = normalizeTonText(item);
+  const ns = normalizeTonText(spec);
+  const qTokens = tonTokens(ns);
+  if (qTokens.length === 0) return null;
+  const pool = sameItemOnly ? TON_REFERENCE_TABLE.filter((r) => normalizeTonText(r.item) === ni) : TON_REFERENCE_TABLE;
+  let best = null;
+  let bestScore = 0;
+  for (const r of pool) {
+    const rTokens = tonTokens(r.spec);
+    const shared = qTokens.filter((t) => rTokens.includes(t)).length;
+    if (shared > bestScore) {
+      bestScore = shared;
+      best = r;
+    }
+  }
+  return bestScore > 0 ? best.per : null;
+}
+
+// 품목/규격으로 "개당 용적(톤)"을 찾는다.
+// 0) 직원이 이전에 직접 입력해서 저장해둔 값(ton_overrides, DB) → 1) 기준표에서 품목+규격 정확히 일치
+// → 2) 규격만 정확히 일치 → 3) 같은 품목 안에서 치수/구성이 가장 비슷한 규격
+// → 4) 기준표 전체에서 가장 비슷한 규격(품목 자체가 기준표에 없는 경우). 그래도 하나도 안 겹치면 null(직접 입력 대상).
+// customOverrides: [{item, spec, per}] — 직원이 한 번 채워넣으면 다음부터 자동으로 채워지는 학습된 값.
+function lookupTonPerUnit(item, spec, customOverrides) {
+  const ni = normalizeTonText(item);
+  const ns = normalizeTonText(spec);
+  if (!ns) return null;
+  if (customOverrides && customOverrides.length) {
+    const overrideHit = customOverrides.find((r) => normalizeTonText(r.item) === ni && normalizeTonText(r.spec) === ns);
+    if (overrideHit) return overrideHit.per;
+  }
+  const pairHit = TON_REFERENCE_TABLE.find((r) => normalizeTonText(r.item) === ni && normalizeTonText(r.spec) === ns);
+  if (pairHit) return pairHit.per;
+  const specHit = TON_REFERENCE_TABLE.find((r) => normalizeTonText(r.spec) === ns);
+  if (specHit) return specHit.per;
+  const sameItemFuzzy = fuzzyTonMatch(item, spec, true);
+  if (sameItemFuzzy != null) return sameItemFuzzy;
+  return fuzzyTonMatch(item, spec, false);
+}
+
+// 품목 리스트(items)를 받아 각 행에 톤수(수량 × 개당용적)를 채워서 반환한다. 정말 비슷한 품목조차 없을 때만 톤수를 null로 둔다.
+function withComputedTons(items, customOverrides) {
+  return (items || []).map((it) => {
+    const per = lookupTonPerUnit(it.item, it.spec, customOverrides);
+    const ton = per != null && it.qty ? Math.round(Number(it.qty) * per * 1000) / 1000 : null;
+    return { ...it, ton };
+  });
+}
+
+function QuoteUploadPanel({ importState, setImportState, onFile, onCancel, onConfirm, importing, isAdmin = true, tonOverrides, onTonOverrideSaved }) {
   const update = (patch) => setImportState({ ...importState, ...patch });
 
   return (
@@ -1771,23 +2202,71 @@ function QuoteUploadPanel({ importState, setImportState, onFile, onCancel, onCon
       {importState && (
         <>
           <QuoteHeaderForm state={importState} update={update} isAdmin={isAdmin} />
-          <ImportPreview state={importState} setState={setImportState} onCancel={onCancel} onConfirm={onConfirm} importing={importing} />
+          <ImportPreview
+            state={importState}
+            setState={setImportState}
+            onCancel={onCancel}
+            onConfirm={onConfirm}
+            importing={importing}
+            tonOverrides={tonOverrides}
+            onTonOverrideSaved={onTonOverrideSaved}
+          />
         </>
       )}
     </div>
   );
 }
 
-const importPreviewCols = ["현장/구역", "품목", "규격", "수량", "단가", "금액", "비고"];
-const importPreviewInitialWidths = [110, 170, 190, 55, 100, 100, 180];
+const importPreviewCols = ["현장/구역", "품목", "규격", "수량", "단가", "금액", "톤수", "비고"];
+const importPreviewInitialWidths = [110, 170, 190, 55, 100, 100, 95, 180];
 
-function ImportPreview({ state, setState, onCancel, onConfirm, importing }) {
+function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOverrides, onTonOverrideSaved }) {
   const updateItem = (idx, patch) => {
     const items = [...state.items];
     items[idx] = { ...items[idx], ...patch };
     setState({ ...state, items });
   };
   const totalAmount = state.items.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
+  // 톤수를 못 찾아 비어있는(null) 품목이 있으면 "미확인 있음"으로 표시해서, 총 톤수만 보고 안심하지 않게 한다.
+  const tonItems = state.items.filter((it) => it.ton != null);
+  const totalTon = tonItems.reduce((sum, it) => sum + Number(it.ton), 0);
+  const missingTonCount = state.items.length - tonItems.length;
+  const [savingTonIdx, setSavingTonIdx] = useState(null);
+
+  // 이 품목(품목명+규격)의 톤수를 다음부터 자동으로 채워지도록 저장한다. 같은 품목+규격을 가진 다른 행에도 바로 반영한다.
+  async function saveTonOverride(idx) {
+    const it = state.items[idx];
+    if (it.ton == null || !it.qty) {
+      alert("톤수와 수량을 먼저 입력해주세요.");
+      return;
+    }
+    if (!(it.item || "").trim() || !(it.spec || "").trim()) {
+      alert("품목명과 규격을 먼저 입력해주세요.");
+      return;
+    }
+    setSavingTonIdx(idx);
+    const per = Math.round((Number(it.ton) / Number(it.qty)) * 1000000) / 1000000;
+    const { error } = await supabase
+      .from("ton_overrides")
+      .upsert({ item: it.item.trim(), spec: it.spec.trim(), per }, { onConflict: "item,spec" });
+    setSavingTonIdx(null);
+    if (error) {
+      alert("저장하지 못했어요: " + error.message + " (Supabase에 ton_overrides 테이블이 아직 없다면 관리자에게 설정을 요청해주세요.)");
+      return;
+    }
+    // 같은 품목+규격을 가진 다른 행에도 이 값을 즉시 반영
+    const ni = normalizeTonText(it.item);
+    const ns = normalizeTonText(it.spec);
+    const items = state.items.map((row) =>
+      normalizeTonText(row.item) === ni && normalizeTonText(row.spec) === ns
+        ? { ...row, ton: row.qty ? Math.round(Number(row.qty) * per * 1000) / 1000 : row.ton }
+        : row
+    );
+    setState({ ...state, items });
+    onTonOverrideSaved && onTonOverrideSaved();
+    alert("저장했어요. 다음부터 이 품목은 자동으로 채워져요.");
+  }
+
   const [colWidths, startResize] = useResizableColumns(importPreviewInitialWidths);
   const gridTemplate = colWidths.map((w) => `${w}px`).join(" ");
 
@@ -1796,6 +2275,7 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing }) {
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>품목 내역</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         총 {state.items.length}개 품목이 인식됐어요. 등록 전에 내용을 확인·수정해주세요. (칸 경계를 드래그하면 너비를 늘이고 줄일 수 있어요)
+        톤수는 기준표에서 자동으로 채워져요. 노란 칸은 비슷한 품목조차 없어 직접 입력이 필요한 경우인데, 입력 후 "저장"을 누르면 다음부터는 이 품목도 자동으로 채워져요.
       </div>
 
       <div style={{ maxHeight: 360, overflow: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
@@ -1815,12 +2295,36 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing }) {
             <input type="number" style={smallInputStyle} value={it.qty ?? ""} onChange={(e) => updateItem(idx, { qty: Number(e.target.value) })} />
             <NumberInput style={smallInputStyle} value={it.unit_price} onChange={(v) => updateItem(idx, { unit_price: v })} />
             <NumberInput style={smallInputStyle} value={it.amount} onChange={(v) => updateItem(idx, { amount: v })} />
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <input
+                type="number"
+                step="0.001"
+                style={{ ...smallInputStyle, background: it.ton == null ? "#FFF6E5" : smallInputStyle.background }}
+                value={it.ton ?? ""}
+                placeholder="직접입력"
+                onChange={(e) => updateItem(idx, { ton: e.target.value === "" ? null : Number(e.target.value) })}
+              />
+              <button
+                type="button"
+                title="이 품목의 톤수를 저장해서 다음부터 자동으로 채워지게 해요"
+                onClick={() => saveTonOverride(idx)}
+                disabled={savingTonIdx === idx}
+                style={{ border: `1px solid ${C.line}`, background: "none", cursor: "pointer", fontSize: 12, padding: "5px 6px", color: C.inkSoft, flexShrink: 0 }}
+              >
+                {savingTonIdx === idx ? "…" : "저장"}
+              </button>
+            </div>
             <input style={smallInputStyle} value={it.note || ""} onChange={(e) => updateItem(idx, { note: e.target.value })} />
           </div>
         ))}
       </div>
 
-      <div style={{ fontSize: 13, color: C.inkSoft, marginBottom: 14 }}>합계 {fmtWon(totalAmount)}</div>
+      <div style={{ fontSize: 13, color: C.inkSoft, marginBottom: 14 }}>
+        합계 {fmtWon(totalAmount)} · 총 톤수 {totalTon.toFixed(3)}톤
+        {missingTonCount > 0 && (
+          <span style={{ color: "#B45309" }}> (기준표에 없어 톤수 미확인 {missingTonCount}건 — 노란 칸을 직접 채워주세요)</span>
+        )}
+      </div>
 
       <div style={{ display: "flex", gap: 8 }}>
         <button onClick={onConfirm} disabled={importing} style={primaryBtnStyle2}>
