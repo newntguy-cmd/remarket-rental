@@ -423,6 +423,20 @@ function detectColumns(rows) {
   return null;
 }
 
+// "렌탈기간" 칸 텍스트에서 "YYYY.MM.DD~YYYY.MM.DD"처럼 일 단위까지 적힌 시작~종료 날짜 범위를 찾는다.
+// (예: "렌탈기간 : 15개월(2026.09.20~2027.12.19)") 구분자는 "."/"-"/"/"/"년,월,일", 범위 기호는 "~"/"∼"/"-" 모두 허용.
+function parseRentalPeriodDateRange(cell) {
+  const DATE = "(\\d{4})[.\\-/년]\\s*(\\d{1,2})[.\\-/월]\\s*(\\d{1,2})\\s*일?";
+  const re = new RegExp(DATE + "\\s*[~∼\\-]\\s*" + DATE);
+  const m = cell.match(re);
+  if (!m) return null;
+  const pad = (n) => String(n).padStart(2, "0");
+  return {
+    start: `${m[1]}-${pad(m[2])}-${pad(m[3])}`,
+    end: `${m[4]}-${pad(m[5])}-${pad(m[6])}`,
+  };
+}
+
 async function parseQuoteExcel(file) {
   const XLSX = await import("xlsx");
   const buf = await file.arrayBuffer();
@@ -452,6 +466,7 @@ async function parseQuoteExcel(file) {
   let phone = "";
   let recipient = ""; // 수령자/연락처
   let deliveryDate = ""; // 배송일자 (발행일과 다를 수 있음)
+  let rentalPeriodRange = null; // "렌탈기간" 칸에 일 단위 시작~종료 날짜가 적혀 있으면 그 값 ({start, end})
 
   let siteName = ""; // "수신" 칸의 "거래처 - 현장명" 표기에서 나오는 현장명(있을 때만)
 
@@ -511,7 +526,11 @@ async function parseQuoteExcel(file) {
       if (m) manager = m[1].trim();
 
       // 렌탈/구매 구분은 "렌탈기간" 항목이 있는지 여부로 체크한다(값 형식이 무엇이든 라벨만 있으면 렌탈로 판단).
-      if (cell.replace(/\s/g, "").includes("렌탈기간")) transactionType = "rental";
+      if (cell.replace(/\s/g, "").includes("렌탈기간")) {
+        transactionType = "rental";
+        // "렌탈기간" 칸 자체에 "2026.09.20~2027.12.19"처럼 일 단위 시작~종료 날짜가 적혀 있으면 그걸 최우선으로 쓴다.
+        if (!rentalPeriodRange) rentalPeriodRange = parseRentalPeriodDateRange(cell);
+      }
 
       // "렌탈 10개월"뿐 아니라 "10개월 렌탈기준"처럼 순서가 반대인 표기도 인식한다.
       m = cell.match(/(\d+)\s*개월/);
@@ -521,9 +540,9 @@ async function parseQuoteExcel(file) {
         periodDays = Number(m[1]) * 30;
       }
       // "(YYYY-MM~YYYY-MM)" 요약 표기는 월 단위라 정확도가 떨어지므로,
-      // "렌탈 N개월" 값을 못 찾았을 때만 보조적으로 사용한다. 구분자가 "."인 표기("(YYYY.MM~YYYY.MM)")도 인식한다.
+      // "렌탈 N개월" 값도, 일 단위 날짜 범위도 못 찾았을 때만 보조적으로 사용한다. 구분자가 "."인 표기도 인식한다.
       m = cell.match(/\((\d{4})[.\-](\d{2})~(\d{4})[.\-](\d{2})\)/);
-      if (m && !periodMonths) {
+      if (m && !periodMonths && !rentalPeriodRange) {
         transactionType = "rental";
         outDate = `${m[1]}-${m[2]}-01`;
         const endYear = Number(m[3]);
@@ -534,10 +553,20 @@ async function parseQuoteExcel(file) {
     }
   }
 
-  // 배송일자가 별도로 명시돼 있으면 그 값을 출고일(=렌탈개시일)로 사용, 없으면 발행일을 그대로 씀
-  if (deliveryDate) outDate = deliveryDate;
-  else deliveryDate = outDate;
-  if (periodMonths) dueDate = addMonthsMinusDay(outDate, periodMonths);
+  // 렌탈개시일(=배송일자) 우선순위: 1) 명시적 "배송일자:" 라벨  2) "렌탈기간" 칸에 적힌 일 단위 날짜 범위
+  // 3) (위에서 처리한) "렌탈 N개월" 월 요약 범위  4) 마지막 수단으로 발행일자.
+  // "렌탈기간"에 실제 시작~종료일이 적혀 있으면, 그게 영업사원이 실제로 잡은 배송일이라
+  // 견적서를 만든 날짜(발행일자)보다 훨씬 정확하다.
+  if (deliveryDate) {
+    outDate = deliveryDate;
+  } else if (rentalPeriodRange) {
+    outDate = rentalPeriodRange.start;
+    deliveryDate = outDate;
+  } else {
+    deliveryDate = outDate;
+  }
+  if (rentalPeriodRange) dueDate = rentalPeriodRange.end;
+  else if (periodMonths) dueDate = addMonthsMinusDay(outDate, periodMonths);
 
   // 품목 표 시작 행 + 실제 열 위치 찾기 (양식마다 B열부터 시작하거나 C열부터 시작할 수 있음)
   const detected = detectColumns(rows);
@@ -717,6 +746,7 @@ async function parseQuotePdf(file) {
   let phone = "";
   let recipient = "";
   let deliveryDate = "";
+  let rentalPeriodRange = null; // "렌탈기간" 칸에 일 단위 시작~종료 날짜가 적혀 있으면 그 값 ({start, end})
   let siteName = "";
 
   // 1) 첫 페이지 위쪽 정보 영역에서 라벨:값 스캔 (엑셀 버전과 동일한 정규식을 그대로 사용)
@@ -768,7 +798,11 @@ async function parseQuotePdf(file) {
       if (m) manager = m[1].trim();
 
       // 렌탈/구매 구분은 "렌탈기간" 항목이 있는지 여부로 체크한다(값 형식이 무엇이든 라벨만 있으면 렌탈로 판단).
-      if (cell.replace(/\s/g, "").includes("렌탈기간")) transactionType = "rental";
+      if (cell.replace(/\s/g, "").includes("렌탈기간")) {
+        transactionType = "rental";
+        // "렌탈기간" 칸 자체에 "2026.09.20~2027.12.19"처럼 일 단위 시작~종료 날짜가 적혀 있으면 그걸 최우선으로 쓴다.
+        if (!rentalPeriodRange) rentalPeriodRange = parseRentalPeriodDateRange(cell);
+      }
 
       // "렌탈 10개월"뿐 아니라 "10개월 렌탈기준"처럼 순서가 반대인 표기도 인식한다.
       m = cell.match(/(\d+)\s*개월/);
@@ -777,9 +811,9 @@ async function parseQuotePdf(file) {
         periodMonths = Number(m[1]);
         periodDays = Number(m[1]) * 30;
       }
-      // 구분자가 "."인 표기("(YYYY.MM~YYYY.MM)")도 인식한다.
+      // 구분자가 "."인 표기("(YYYY.MM~YYYY.MM)")도 인식한다. "렌탈 N개월" 값도, 일 단위 날짜 범위도 못 찾았을 때만 보조적으로 사용.
       m = cell.match(/\((\d{4})[.\-](\d{2})~(\d{4})[.\-](\d{2})\)/);
-      if (m && !periodMonths) {
+      if (m && !periodMonths && !rentalPeriodRange) {
         transactionType = "rental";
         outDate = `${m[1]}-${m[2]}-01`;
         const endYear = Number(m[3]);
@@ -789,9 +823,18 @@ async function parseQuotePdf(file) {
       }
     }
   }
-  if (deliveryDate) outDate = deliveryDate;
-  else deliveryDate = outDate;
-  if (periodMonths) dueDate = addMonthsMinusDay(outDate, periodMonths);
+  // 렌탈개시일(=배송일자) 우선순위: 1) 명시적 "배송일자:" 라벨  2) "렌탈기간" 칸에 적힌 일 단위 날짜 범위
+  // 3) (위에서 처리한) "렌탈 N개월" 월 요약 범위  4) 마지막 수단으로 발행일자.
+  if (deliveryDate) {
+    outDate = deliveryDate;
+  } else if (rentalPeriodRange) {
+    outDate = rentalPeriodRange.start;
+    deliveryDate = outDate;
+  } else {
+    deliveryDate = outDate;
+  }
+  if (rentalPeriodRange) dueDate = rentalPeriodRange.end;
+  else if (periodMonths) dueDate = addMonthsMinusDay(outDate, periodMonths);
 
   // 2) 품목 표 파싱 (여러 페이지에 걸쳐 있을 수 있음)
   let colCenters = null;
