@@ -2767,9 +2767,41 @@ function DeliverySiteInfoButton({ address }) {
 // 1) 구매제품의 "톤당배송료"는 사진상 모든 구간에서 동일하게 보여서 "1톤당 1만원"으로 읽어 반영했다(불확실).
 // 2) 무빙트럭 표에서 다마스 요금이 없는 지역, 흐릿하게 찍힌 일부 라보 칸은 빈칸("-")으로 뒀다.
 
+// "광주"는 경기도 광주시(분당·용인 인근)와 광주광역시(전라남도 인접, 별도 광역시)를 둘 다 가리킬 수 있는 애매한
+// 키워드라, 주소에 "전남광주 고흥군..."처럼 다른 시/도 이름이 함께 적혀 있으면 경기 광주로 잘못 매칭될 수 있다.
+// 그래서 "광주" 하나만으로 지역을 정하지 않고, 주소에 다른 시/도 이름이 같이 있으면 경기 광주 구역에서는 제외한다.
+const AMBIGUOUS_GWANGJU_EXCLUDE = [
+  "광주광역시",
+  "전남",
+  "전라남도",
+  "경남",
+  "경상남도",
+  "전북",
+  "전라북도",
+  "경북",
+  "경상북도",
+  "충남",
+  "충청남도",
+  "충북",
+  "충청북도",
+  "강원",
+  "강원도",
+  "부산",
+  "대구",
+  "울산",
+];
+
 // 렌탈제품 설치/회수비 - 지역별 소량/0.5톤/1톤 요금(원 단위)
 const RENTAL_DELIVERY_ZONES = [
-  { zone: "분당/용인/수원/화성/광주", keywords: ["분당", "용인", "수원", "화성", "광주"], small: 40000, half: 80000, one: 160000 },
+  {
+    zone: "분당/용인/수원/화성/광주",
+    keywords: ["분당", "용인", "수원", "화성", "광주"],
+    ambiguousKeywords: ["광주"],
+    excludeIfIncludes: AMBIGUOUS_GWANGJU_EXCLUDE,
+    small: 40000,
+    half: 80000,
+    one: 160000,
+  },
   { zone: "서울전역/하남/안양/광명/과천/구리", keywords: ["서울", "하남", "안양", "광명", "과천", "구리"], small: 60000, half: 120000, one: 240000 },
   { zone: "기타 경기도, 인천 전지역", keywords: ["경기", "인천"], small: 80000, half: 160000, one: 320000 },
   { zone: "충청남도, 충청북도, 강원도 일부", keywords: ["충청남도", "충남", "충청북도", "충북", "강원"], half: 240000, one: 420000 },
@@ -2782,7 +2814,13 @@ const RENTAL_DELIVERY_ZONES = [
 const PURCHASE_PER_TON_RATE = 10000;
 const PURCHASE_DELIVERY_ZONES = [
   { zone: "인근지역(분당,용인,동탄 등)", keywords: ["분당", "용인", "동탄", "포곡", "둔전", "전대리", "대리", "에버랜드", "팔달", "영통", "반월", "반정", "능동"], surcharge: 0 },
-  { zone: "서울/경기(인근)", keywords: ["서울", "오산", "광주", "수원", "양지", "모현", "천리", "송전", "원삼", "백암", "매송", "비봉", "정남"], surcharge: 20000 },
+  {
+    zone: "서울/경기(인근)",
+    keywords: ["서울", "오산", "광주", "수원", "양지", "모현", "천리", "송전", "원삼", "백암", "매송", "비봉", "정남"],
+    ambiguousKeywords: ["광주"],
+    excludeIfIncludes: AMBIGUOUS_GWANGJU_EXCLUDE,
+    surcharge: 20000,
+  },
   { zone: "경기(근거리)", keywords: ["광명", "과천", "시흥", "안양", "의왕", "안산", "부천", "하남", "평택", "군포", "화성"], surcharge: 30000 },
   { zone: "경기(원거리)", keywords: ["구리", "남양주", "의정부", "양주", "인천", "일산", "파주", "김포", "고양"], surcharge: 40000 },
   { zone: "경기(장거리)", keywords: ["양평", "여주", "이천", "안성", "가평", "포천", "동두천", "강화"], surcharge: 50000 },
@@ -2885,7 +2923,17 @@ const CHARTERED_TRUCK_ROWS = CHARTERED_TRUCK_GROUPS.flatMap((g) => g.rows.map((r
 
 function findZoneIndex(zones, address) {
   const a = address || "";
-  const idx = zones.findIndex((z) => z.keywords.some((k) => a.includes(k)));
+  const idx = zones.findIndex((z) =>
+    z.keywords.some((k) => {
+      if (!a.includes(k)) return false;
+      // "광주"처럼 다른 지역과 이름이 겹치는 애매한 키워드는, 주소에 그 지역과 무관한 다른 시/도 이름이
+      // 함께 있으면 이 키워드로는 매칭시키지 않는다(같은 구역의 다른 키워드는 그대로 유효하게 매칭된다).
+      if (z.ambiguousKeywords && z.ambiguousKeywords.includes(k) && z.excludeIfIncludes) {
+        if (z.excludeIfIncludes.some((ex) => a.includes(ex))) return false;
+      }
+      return true;
+    })
+  );
   return idx >= 0 ? idx : null;
 }
 
