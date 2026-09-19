@@ -219,6 +219,36 @@ function addRecentValue(storageKey, value) {
   }
 }
 
+// ---------- "품목별 수량 데이터" 화면에서 숨긴 품목(이 화면에서만 안 보이게, 원본 렌탈 데이터는 그대로 둔다) ----------
+// 전표별로 구분해서 저장한다(다른 전표에 영향 없게). 브라우저(localStorage)에만 저장되므로 이 컴퓨터·이 브라우저에서만 유지된다.
+function hiddenItemStatsStorageKey(voucherKey) {
+  return `remarket_hidden_itemstats:${voucherKey || ""}`;
+}
+
+function getHiddenItemStatKeys(voucherKey) {
+  if (typeof window === "undefined" || !voucherKey) return [];
+  try {
+    const raw = window.localStorage.getItem(hiddenItemStatsStorageKey(voucherKey));
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function setHiddenItemStatKeys(voucherKey, keys) {
+  if (typeof window === "undefined" || !voucherKey) return;
+  try {
+    if (!keys || keys.length === 0) {
+      window.localStorage.removeItem(hiddenItemStatsStorageKey(voucherKey));
+    } else {
+      window.localStorage.setItem(hiddenItemStatsStorageKey(voucherKey), JSON.stringify(keys));
+    }
+  } catch {
+    // 프라이빗 모드 등 localStorage를 못 쓰는 환경이면 그냥 무시(숨기기 기능만 안 될 뿐, 다른 동작엔 지장 없음)
+  }
+}
+
 // 오른쪽 화살표(▾)를 누르면 이 필드에 최근 입력·검색했던 값 목록이 드롭다운으로 뜨고, 클릭하면 바로 채워진다.
 // extraOptions를 넘기면(예: 실제 등록된 업체명 전체 목록) 최근 입력 내역이 없어도 타이핑 중인 글자가
 // 이름 "중간"에 포함되기만 해도(부분일치) 후보로 함께 떠서 바로 골라 채울 수 있다.
@@ -1144,6 +1174,7 @@ function Dashboard({ profile, onLogout }) {
   const [salesResetKey, setSalesResetKey] = useState(0);
   // 출고/회수 내역서도 대장 상세화면에 들어갈 수 있으니, 메뉴를 다시 눌렀을 때 항상 대장 목록으로 되돌아가게 한다.
   const [ledgerResetKey, setLedgerResetKey] = useState(0);
+  const [asboardResetKey, setAsboardResetKey] = useState(0);
   const [loadingData, setLoadingData] = useState(true);
   const [importState, setImportState] = useState(null); // parsed preview
   const [importing, setImporting] = useState(false);
@@ -1315,6 +1346,7 @@ function Dashboard({ profile, onLogout }) {
     ...(isStaff ? [{ key: "sales", label: "판매현황" }] : []),
     ...(isStaff ? [{ key: "customerData", label: "업체별데이터" }] : []),
     ...(isStaff ? [{ key: "ledger", label: "출고/회수 내역서" }] : []),
+    ...(isStaff ? [{ key: "asboard", label: "A/S관리대장" }] : []),
   ];
 
   return (
@@ -1344,6 +1376,7 @@ function Dashboard({ profile, onLogout }) {
                 if (m.key === "rentals") setRentalsResetKey((k) => k + 1); // 렌탈내역도 눌릴 때마다 목록 화면으로 리셋
                 if (m.key === "sales") setSalesResetKey((k) => k + 1); // 판매현황도 눌릴 때마다 검색 화면으로 리셋
                 if (m.key === "ledger") setLedgerResetKey((k) => k + 1); // 출고/회수 내역서도 눌릴 때마다 대장 목록으로 리셋
+                if (m.key === "asboard") setAsboardResetKey((k) => k + 1); // A/S관리대장도 눌릴 때마다 목록 화면으로 리셋
               }}
               style={{
                 display: "block",
@@ -1402,6 +1435,10 @@ function Dashboard({ profile, onLogout }) {
 
         {activeTab === "ledger" && isStaff && (
           <LedgerTab key={ledgerResetKey} rentals={rentals} isAdmin={isAdmin} managerName={managerName} />
+        )}
+
+        {activeTab === "asboard" && isStaff && (
+          <AsBoardTab key={asboardResetKey} isAdmin={isAdmin} managerName={managerName} />
         )}
 
         {!isStaff && (
@@ -5186,8 +5223,8 @@ function CustomerDataTab({ rentals, onRefresh }) {
   }
 
   // 선택한 전표 "안에서" 같은 품목명+규격끼리 수량/건수/금액을 합산한다(전표 하나 기준 집계).
-  // ids에는 이 그룹으로 합쳐진 원본 렌탈 행들의 id를 모아둬서, 선택삭제 시 실제로 지울 행을 알 수 있게 한다.
-  const itemStats = useMemo(() => {
+  // ids는 원본 렌탈 행들의 id(참고용으로만 모아둠 — 이 화면의 선택삭제는 더 이상 이 id로 원본 데이터를 지우지 않는다).
+  const rawItemStats = useMemo(() => {
     const rows = selectedItemGroup ? selectedItemGroup.rows : [];
     const map = new Map();
     for (const r of rows) {
@@ -5201,7 +5238,18 @@ function CustomerDataTab({ rentals, onRefresh }) {
       e.amount += Number(r.amount) || 0;
       e.ids.push(r.id);
     }
-    const arr = Array.from(map.values());
+    return Array.from(map.values());
+  }, [selectedItemGroup]);
+
+  // 이 화면(품목별 수량 데이터)에서만 숨긴 품목 — 전표를 바꾸면 그 전표에 저장된 숨김 목록을 새로 불러온다.
+  // 여기서 숨기는 건 화면 표시만 걸러내는 것이고, rentals 원본 데이터·렌탈내역의 총 렌탈금액은 절대 건드리지 않는다.
+  const [hiddenStatKeys, setHiddenStatKeysState] = useState(() => new Set());
+  useEffect(() => {
+    setHiddenStatKeysState(new Set(getHiddenItemStatKeys(selectedItemVoucherKey)));
+  }, [selectedItemVoucherKey]);
+
+  const itemStats = useMemo(() => {
+    const arr = rawItemStats.filter((r) => !hiddenStatKeys.has(r.key));
     const dir = itemSortDir === "asc" ? 1 : -1;
     arr.sort((a, b) => {
       if (itemSortKey === "qty") return (a.qty - b.qty) * dir;
@@ -5210,13 +5258,13 @@ function CustomerDataTab({ rentals, onRefresh }) {
       return (av || "").localeCompare(bv || "", "ko") * dir;
     });
     return arr;
-  }, [selectedItemGroup, itemSortKey, itemSortDir]);
+  }, [rawItemStats, hiddenStatKeys, itemSortKey, itemSortDir]);
   const itemStatsTotalQty = itemStats.reduce((s, r) => s + r.qty, 0);
   const itemStatsTotalAmount = itemStats.reduce((s, r) => s + r.amount, 0);
+  const hiddenStatCount = rawItemStats.filter((r) => hiddenStatKeys.has(r.key)).length;
 
   // 품목별 수량 통계 표의 체크박스 선택삭제 상태(전표를 바꾸면 초기화)
   const [checkedStatKeys, setCheckedStatKeys] = useState(new Set());
-  const [deletingStats, setDeletingStats] = useState(false);
   useEffect(() => {
     setCheckedStatKeys(new Set());
   }, [selectedItemVoucherKey]);
@@ -5234,20 +5282,22 @@ function CustomerDataTab({ rentals, onRefresh }) {
     setCheckedStatKeys((prev) => (prev.size === itemStats.length ? new Set() : new Set(itemStats.map((r) => r.key))));
   }
 
-  async function handleDeleteSelectedStats() {
+  // 선택한 품목을 "이 화면에서만" 숨긴다. rentals 테이블은 전혀 건드리지 않으므로 렌탈내역·총 렌탈금액에는 영향이 없다.
+  function handleDeleteSelectedStats() {
     const chosen = itemStats.filter((r) => checkedStatKeys.has(r.key));
     if (chosen.length === 0) return;
-    const allIds = chosen.flatMap((r) => r.ids);
-    if (!confirm(`선택한 품목 ${chosen.length}종(행 ${allIds.length}개)을 이 전표에서 삭제할까요? 되돌릴 수 없어요.`)) return;
-    setDeletingStats(true);
-    const { error } = await supabase.from("rentals").delete().in("id", allIds);
-    setDeletingStats(false);
-    if (error) {
-      alert("삭제 중 오류가 발생했어요: " + error.message);
-      return;
-    }
+    if (!confirm(`선택한 품목 ${chosen.length}종을 이 "품목별 수량 데이터" 화면에서만 숨길까요?\n(렌탈내역의 원본 데이터와 총 렌탈금액에는 전혀 영향을 주지 않아요)`)) return;
+    const next = new Set(hiddenStatKeys);
+    for (const r of chosen) next.add(r.key);
+    setHiddenStatKeysState(next);
+    setHiddenItemStatKeys(selectedItemVoucherKey, Array.from(next));
     setCheckedStatKeys(new Set());
-    onRefresh && onRefresh();
+  }
+
+  // 이 전표에서 숨긴 품목을 전부 다시 보이게 한다.
+  function handleRestoreHiddenStats() {
+    setHiddenStatKeysState(new Set());
+    setHiddenItemStatKeys(selectedItemVoucherKey, []);
   }
 
   // 인쇄/PDF 저장 시 브라우저 상단에 뜨는 문서 제목("리마켓 렌탈장부")을 잠깐 "품목별 수량통계"로 바꿔서,
@@ -5457,11 +5507,19 @@ function CustomerDataTab({ rentals, onRefresh }) {
                 <button onClick={handlePrintItemStats} style={primaryBtnStyle2}>인쇄 / PDF로 저장</button>
                 <button
                   onClick={handleDeleteSelectedStats}
-                  disabled={checkedStatKeys.size === 0 || deletingStats}
-                  style={{ ...ghostBtnStyle, opacity: checkedStatKeys.size === 0 || deletingStats ? 0.5 : 1 }}
+                  disabled={checkedStatKeys.size === 0}
+                  style={{ ...ghostBtnStyle, opacity: checkedStatKeys.size === 0 ? 0.5 : 1 }}
                 >
-                  {deletingStats ? "삭제 중..." : `선택삭제${checkedStatKeys.size > 0 ? ` (${checkedStatKeys.size})` : ""}`}
+                  {`선택삭제${checkedStatKeys.size > 0 ? ` (${checkedStatKeys.size})` : ""}`}
                 </button>
+                {hiddenStatCount > 0 && (
+                  <button onClick={handleRestoreHiddenStats} style={ghostBtnStyle}>
+                    숨긴 품목 복원 ({hiddenStatCount})
+                  </button>
+                )}
+              </div>
+              <div className="itemstats-no-print" style={{ fontSize: 11.5, color: C.muted, marginTop: -6, marginBottom: 12 }}>
+                * 여기서 "선택삭제"는 이 화면에서만 안 보이게 숨기는 거예요. 렌탈내역의 원본 데이터와 총 렌탈금액에는 영향이 없어요.
               </div>
 
               <div className="itemstats-no-print" style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
@@ -6345,6 +6403,418 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
             </tbody>
           </table>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- A/S 관리대장 ----------
+const AS_STATUSES = ["접수", "재방문", "조치완료", "보류", "취소"];
+const AS_STATUS_STYLE = {
+  접수: { bg: C.amberBg, color: C.amber },
+  재방문: { bg: C.purpleBg, color: C.purple },
+  조치완료: { bg: C.greenBg, color: C.green },
+  보류: { bg: C.mutedBg, color: C.muted },
+  취소: { bg: C.brickBg, color: C.brick },
+};
+const AS_PAGE_SIZE = 15;
+const asTh = { padding: "9px 10px", textAlign: "left", fontSize: 11.5, color: C.muted, fontWeight: 600, whiteSpace: "nowrap" };
+const asTd = { padding: "9px 10px", verticalAlign: "top" };
+
+function fmtAsDate(v) {
+  return (v || "").slice(0, 10);
+}
+
+function AsBoardTab({ isAdmin, managerName }) {
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [showForm, setShowForm] = useState(false);
+  const [editingRecord, setEditingRecord] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [deletingSelected, setDeletingSelected] = useState(false);
+  const [savingStatusId, setSavingStatusId] = useState(null);
+
+  useEffect(() => {
+    fetchRecords();
+  }, []);
+
+  async function fetchRecords() {
+    setLoading(true);
+    const { data, error } = await supabase.from("as_requests").select("*").order("created_at", { ascending: false });
+    if (!error) setRecords(data || []);
+    setLoading(false);
+  }
+
+  const counts = useMemo(() => {
+    const m = { all: records.length };
+    for (const s of AS_STATUSES) m[s] = records.filter((r) => r.status === s).length;
+    return m;
+  }, [records]);
+
+  const filtered = useMemo(() => {
+    let list = records;
+    if (statusFilter !== "all") list = list.filter((r) => r.status === statusFilter);
+    const q = query.trim().toLowerCase();
+    if (q) {
+      list = list.filter((r) =>
+        [r.customer_name, r.contact, r.address, r.content, r.author].filter(Boolean).join(" ").toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [records, statusFilter, query]);
+
+  useEffect(() => {
+    setPage(1); // 상태 탭/검색어가 바뀌면 항상 1페이지로 되돌린다.
+  }, [statusFilter, query]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / AS_PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const pageItems = filtered.slice((pageSafe - 1) * AS_PAGE_SIZE, pageSafe * AS_PAGE_SIZE);
+
+  function openNew() {
+    setEditingRecord(null);
+    setShowForm(true);
+  }
+  function openEdit(record) {
+    setEditingRecord(record);
+    setShowForm(true);
+  }
+
+  async function handleSave(fields) {
+    if (editingRecord) {
+      const { error } = await supabase.from("as_requests").update(fields).eq("id", editingRecord.id);
+      if (error) {
+        alert("저장 중 오류가 발생했어요: " + error.message);
+        return false;
+      }
+    } else {
+      const { error } = await supabase.from("as_requests").insert(fields);
+      if (error) {
+        alert("등록 중 오류가 발생했어요: " + error.message);
+        return false;
+      }
+    }
+    setShowForm(false);
+    setEditingRecord(null);
+    await fetchRecords();
+    return true;
+  }
+
+  // 진행상태는 목록 화면에서 바로 바꿀 수 있게 한다(수정 화면을 매번 열지 않아도 되도록).
+  // "접수" 상태가 아닌 다른 상태로 처음 바뀌는 순간, 새로 들어온 건이라는 "N" 표시도 함께 지운다.
+  async function handleStatusChange(record, status) {
+    setSavingStatusId(record.id);
+    const patch = { status };
+    if (record.is_new && status !== "접수") patch.is_new = false;
+    const { error } = await supabase.from("as_requests").update(patch).eq("id", record.id);
+    setSavingStatusId(null);
+    if (error) {
+      alert("상태 변경 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setRecords((prev) => prev.map((r) => (r.id === record.id ? { ...r, ...patch } : r)));
+  }
+
+  function toggleSelected(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  const allPageSelected = pageItems.length > 0 && pageItems.every((r) => selectedIds.has(r.id));
+  function toggleSelectAllPage() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected) pageItems.forEach((r) => next.delete(r.id));
+      else pageItems.forEach((r) => next.add(r.id));
+      return next;
+    });
+  }
+
+  async function handleDeleteSelected() {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`선택한 ${selectedIds.size}건을 삭제할까요? 되돌릴 수 없어요.`)) return;
+    const ids = Array.from(selectedIds);
+    setDeletingSelected(true);
+    const { error } = await supabase.from("as_requests").delete().in("id", ids);
+    setDeletingSelected(false);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setSelectedIds(new Set());
+    fetchRecords();
+  }
+
+  const tabs = [{ key: "all", label: "전체" }, ...AS_STATUSES.map((s) => ({ key: s, label: s }))];
+
+  return (
+    <div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>A/S관리대장</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+        고객 A/S 접수부터 방문·조치까지 한 곳에서 관리해요. 진행상태는 목록에서 바로 바꿀 수 있어요.
+      </div>
+
+      {showForm && (
+        <AsRequestForm
+          initial={editingRecord}
+          isAdmin={isAdmin}
+          managerName={managerName}
+          onCancel={() => {
+            setShowForm(false);
+            setEditingRecord(null);
+          }}
+          onSave={handleSave}
+        />
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setStatusFilter(t.key)}
+            style={{
+              ...miniBtnStyle,
+              background: statusFilter === t.key ? C.ink : "transparent",
+              color: statusFilter === t.key ? "#fff" : C.inkSoft,
+              borderColor: statusFilter === t.key ? C.ink : C.line,
+            }}
+          >
+            {t.label} ({counts[t.key] ?? 0})
+          </button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <input
+          placeholder="고객명, 주소, A/S내용, 작성자 검색"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{ ...inputStyle, width: 260 }}
+        />
+        <button onClick={openNew} style={primaryBtnStyle2}>+ 신규 등록</button>
+      </div>
+
+      {selectedIds.size > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+          <span style={{ fontSize: 12.5, color: C.inkSoft }}>{selectedIds.size}건 선택됨</span>
+          <button
+            onClick={handleDeleteSelected}
+            disabled={deletingSelected}
+            style={{ ...ghostBtnStyle, borderColor: C.brick, color: C.brick, padding: "5px 10px", fontSize: 12.5 }}
+          >
+            {deletingSelected ? "삭제 중…" : "선택 삭제"}
+          </button>
+        </div>
+      )}
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 980, width: "100%" }}>
+          <thead>
+            <tr style={{ background: C.bg, borderBottom: `1px solid ${C.line}` }}>
+              <th style={asTh}>
+                <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAllPage} />
+              </th>
+              <th style={asTh}>번호</th>
+              <th style={asTh}>고객명</th>
+              <th style={asTh}>연락처</th>
+              <th style={asTh}>방문예정일</th>
+              <th style={asTh}>주소</th>
+              <th style={{ ...asTh, minWidth: 220 }}>A/S 내용</th>
+              <th style={asTh}>작성자</th>
+              <th style={asTh}>작성일</th>
+              <th style={asTh}>진행상태</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr>
+                <td colSpan={10} style={{ ...asTd, textAlign: "center", color: C.muted, padding: 30 }}>불러오는 중…</td>
+              </tr>
+            )}
+            {!loading && pageItems.length === 0 && (
+              <tr>
+                <td colSpan={10} style={{ ...asTd, textAlign: "center", color: C.muted, padding: 30 }}>
+                  등록된 A/S 내역이 없어요. "+ 신규 등록"으로 시작해보세요.
+                </td>
+              </tr>
+            )}
+            {!loading &&
+              pageItems.map((r, idx) => {
+                const st = AS_STATUS_STYLE[r.status] || AS_STATUS_STYLE["접수"];
+                return (
+                  <tr key={r.id} style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+                    <td style={asTd}>
+                      <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => toggleSelected(r.id)} />
+                    </td>
+                    <td style={asTd}>{filtered.length - ((pageSafe - 1) * AS_PAGE_SIZE + idx)}</td>
+                    <td style={asTd}>{r.customer_name || "-"}</td>
+                    <td style={asTd}>{r.contact || "-"}</td>
+                    <td style={asTd}>{r.visit_date || "-"}</td>
+                    <td style={asTd}>{r.address || "-"}</td>
+                    <td style={asTd}>
+                      <button
+                        onClick={() => openEdit(r)}
+                        style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 12.5, textAlign: "left" }}
+                      >
+                        {r.content || "-"}
+                      </button>
+                      {r.is_new && (
+                        <span
+                          title="새로 등록된 건이에요"
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: 15,
+                            height: 15,
+                            borderRadius: "50%",
+                            background: C.brick,
+                            color: "#fff",
+                            fontSize: 9.5,
+                            fontWeight: 700,
+                            marginLeft: 5,
+                          }}
+                        >
+                          N
+                        </span>
+                      )}
+                    </td>
+                    <td style={asTd}>{r.author || "-"}</td>
+                    <td style={asTd}>{fmtAsDate(r.created_at)}</td>
+                    <td style={asTd}>
+                      <select
+                        value={r.status}
+                        onChange={(e) => handleStatusChange(r, e.target.value)}
+                        disabled={savingStatusId === r.id}
+                        style={{ border: `1px solid ${st.color}`, background: st.bg, color: st.color, fontSize: 12, padding: "4px 6px", fontFamily: sans, fontWeight: 600 }}
+                      >
+                        {AS_STATUSES.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                  </tr>
+                );
+              })}
+          </tbody>
+        </table>
+      </div>
+
+      {totalPages > 1 && (
+        <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 16, flexWrap: "wrap" }}>
+          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={pageSafe === 1} style={miniBtnStyle}>
+            ‹
+          </button>
+          {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPage(p)}
+              style={{
+                ...miniBtnStyle,
+                background: p === pageSafe ? C.ink : "transparent",
+                color: p === pageSafe ? "#fff" : C.inkSoft,
+                borderColor: p === pageSafe ? C.ink : C.line,
+              }}
+            >
+              {p}
+            </button>
+          ))}
+          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={pageSafe === totalPages} style={miniBtnStyle}>
+            ›
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AsRequestForm({ initial, isAdmin, managerName, onCancel, onSave }) {
+  const [f, setF] = useState(
+    initial || {
+      customer_name: "",
+      contact: "",
+      visit_date: "",
+      address: "",
+      content: "",
+      author: isAdmin ? "" : managerName,
+      status: "접수",
+    }
+  );
+  const [saving, setSaving] = useState(false);
+  const update = (patch) => setF({ ...f, ...patch });
+
+  async function handleSubmit() {
+    if (!(f.customer_name || "").trim()) {
+      alert("고객명을 입력해주세요.");
+      return;
+    }
+    if (!(f.content || "").trim()) {
+      alert("A/S 내용을 입력해주세요.");
+      return;
+    }
+    setSaving(true);
+    await onSave({
+      customer_name: f.customer_name.trim(),
+      contact: (f.contact || "").trim() || null,
+      visit_date: (f.visit_date || "").trim() || null,
+      address: (f.address || "").trim() || null,
+      content: f.content.trim(),
+      author: (f.author || "").trim() || null,
+      status: f.status || "접수",
+    });
+    setSaving(false);
+  }
+
+  return (
+    <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 16 }}>{initial ? "A/S 내역 수정" : "A/S 신규 등록"}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+        <Field label="고객명">
+          <input style={inputStyle} value={f.customer_name || ""} onChange={(e) => update({ customer_name: e.target.value })} placeholder="예: 한우리건설" />
+        </Field>
+        <Field label="연락처">
+          <input style={inputStyle} value={f.contact || ""} onChange={(e) => update({ contact: e.target.value })} placeholder="예: 박제현 사원님 010-8020-3363" />
+        </Field>
+        <Field label="방문예정일">
+          <input style={inputStyle} value={f.visit_date || ""} onChange={(e) => update({ visit_date: e.target.value })} placeholder="예: 2026-09-22 또는 택배발송" />
+        </Field>
+        <Field label="작성자">
+          <input style={inputStyle} value={f.author || ""} onChange={(e) => update({ author: e.target.value })} placeholder="예: 김영업" />
+        </Field>
+        <Field label="진행상태">
+          <select style={inputStyle} value={f.status || "접수"} onChange={(e) => update({ status: e.target.value })}>
+            {AS_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <Field label="주소">
+        <input style={inputStyle} value={f.address || ""} onChange={(e) => update({ address: e.target.value })} placeholder="예: 전남 여수시 국동남6길 25-1" />
+      </Field>
+      <Field label="A/S 내용">
+        <textarea
+          value={f.content || ""}
+          onChange={(e) => update({ content: e.target.value })}
+          placeholder="예: 책장 회수 및 테이블, 사무집기 배송"
+          style={{ ...inputStyle, minHeight: 70, resize: "vertical" }}
+        />
+      </Field>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={handleSubmit} disabled={saving} style={primaryBtnStyle2}>
+          {saving ? "저장 중…" : initial ? "저장" : "등록"}
+        </button>
+        <button onClick={onCancel} style={ghostBtnStyle}>
+          취소
+        </button>
       </div>
     </div>
   );
