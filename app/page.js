@@ -451,7 +451,20 @@ async function parseQuoteExcel(file) {
   const firstSheetName = visibleSheetNames[0] || wb.SheetNames[0];
   const sheet = wb.Sheets[firstSheetName];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+  return parseQuoteRows(rows);
+}
 
+// 엑셀에서 긁어 온(클립보드에 복사한) 견적서 텍스트도 "셀이 2차원 배열로 늘어선 표" 형태라는 점은
+// 엑셀 파일과 동일하다(엑셀 복사 시 탭/줄바꿈으로 구분된 TSV로 클립보드에 담기므로). 그래서 파일 업로드와
+// 완전히 같은 인식 로직(parseQuoteRows)을 그대로 재사용해서, 붙여넣기로 등록해도 파일 업로드와 똑같이 동작한다.
+function parsePastedQuoteText(text) {
+  const rows = parsePastedTable(text);
+  return parseQuoteRows(rows);
+}
+
+// 엑셀 파일이든 붙여넣은 텍스트든, "셀이 2차원 배열로 늘어선 표"만 주어지면 거래처/배송지/담당자 같은
+// 전표 상단 정보와 품목 표를 똑같은 방식으로 인식한다(견적서 업로드와 붙여넣기 등록이 동일한 결과를 내는 핵심).
+function parseQuoteRows(rows) {
   let customer = "";
   let site = "";
   let manager = "";
@@ -599,7 +612,10 @@ async function parseQuoteExcel(file) {
     // 품목/규격 칸이 둘 다 비어있으면 표와 무관한 잡음 행(예: 총계 옆 "납품확인" 라벨)이므로 건너뜀
     if (!itemCell && !specCell) continue;
 
-    const hasData = qtyRaw != null || priceRaw != null || amountRaw != null;
+    // 빈 칸 표기가 소스마다 다르다: 엑셀 파일은 빈 칸이 null로 오지만, 붙여넣기는 빈 문자열("")로 온다.
+    // 어느 쪽이든 "실제로 텍스트가 있는지"로 판단해야 "ㅡ 소장실 ㅡ" 같은 구획 제목 줄이 품목으로 잘못
+    // 등록되지 않는다(빈 문자열은 hasData로 치지 않음).
+    const hasData = cellText(qtyRaw) !== "" || cellText(priceRaw) !== "" || cellText(amountRaw) !== "";
     if (itemCell && !hasData && !specCell) {
       currentSite = itemCell;
       continue;
@@ -608,10 +624,12 @@ async function parseQuoteExcel(file) {
     if (itemCell) currentItem = itemCell;
     if (!currentItem) continue;
 
-    // 단가/금액 칸이 "-" 같은 텍스트(회계서식의 0원 표기 등)인 경우 Number()가 NaN이 되므로 그런 값은 무시한다.
+    // 단가/금액 칸이 "-"(회계서식의 0원 표기)이거나 "47,000"처럼 콤마가 섞여 있어도(붙여넣기는 셀이
+    // 항상 문자열로 온다) 안전하게 숫자로 바꾼다.
     const toNum = (v) => {
-      if (v == null) return null;
-      const n = Number(v);
+      const t = cellText(v).replace(/,/g, "");
+      if (t === "" || t === "-") return null;
+      const n = Number(t);
       return isNaN(n) ? null : n;
     };
     const qty = toNum(qtyRaw) ?? 1;
@@ -1183,6 +1201,28 @@ function Dashboard({ profile, onLogout }) {
     }
   }
 
+  // 엑셀 파일을 올리는 대신, 엑셀에서 긁은(복사한) 견적서 내용을 그대로 붙여넣어도 파일 업로드와 똑같이
+  // 전표 정보/품목이 채워지게 한다(관리 중인 엑셀 탭이 여러 개라 파일로 저장/업로드하기보다 바로 복사해서
+  // 붙여넣는 게 더 간편하다는 요청). 이후 흐름(확인 화면, 등록)은 파일 업로드와 완전히 동일하다.
+  function processPastedQuote(text) {
+    if (!text || !text.trim()) return;
+    try {
+      const parsed = parsePastedQuoteText(text);
+      parsed.isPdf = false;
+      parsed.items = withComputedTons(parsed.items, tonOverrides);
+      parsed.voucherNo = "";
+      if (!isAdmin) parsed.manager = managerName;
+      // 붙여넣기는 원본 파일이 없으니 Storage 업로드(원본 파일 저장) 단계는 건너뛴다.
+      setImportState(parsed);
+      if (parsed.items.length === 0) {
+        alert("붙여넣은 내용에서 품목을 인식하지 못했어요. 품목/규격/수량이 있는 표까지 포함해서 다시 붙여넣어주세요.");
+      }
+    } catch (err) {
+      alert("붙여넣은 내용을 읽는 중 문제가 발생했어요.");
+      console.error(err);
+    }
+  }
+
   async function confirmImport() {
     if (!importState) return;
     if (!(importState.voucherNo || "").trim()) {
@@ -1329,6 +1369,7 @@ function Dashboard({ profile, onLogout }) {
           <QuoteUploadPanel
             importState={importState}
             onFile={processQuoteFile}
+            onPasteText={processPastedQuote}
             onCancel={() => setImportState(null)}
             onConfirm={confirmImport}
             importing={importing}
@@ -1662,6 +1703,37 @@ function CustomerDetailPanel({ customerName, rentals, customers, isAdmin, onClos
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// 관리 중인 엑셀 탭이 여러 개일 때 파일로 저장/업로드하는 것보다 그냥 긁어서 붙여넣는 게 더 간편하다는
+// 요청으로 추가된 붙여넣기 입력창. 상단 거래처/배송지 정보부터 품목표까지 한 번에 긁어서 넣으면
+// 견적서 파일 업로드와 완전히 동일한 인식 로직(parsePastedQuoteText → parseQuoteRows)으로 채워진다.
+function QuotePasteBox({ onPasteText, hasData }) {
+  const [text, setText] = useState("");
+  function handleChange(e) {
+    const v = e.target.value;
+    setText(v);
+    if (v.trim()) onPasteText && onPasteText(v);
+  }
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <textarea
+        value={text}
+        onChange={handleChange}
+        placeholder="엑셀에서 견적서 내용을 그대로 복사해서 여기에 붙여넣으세요 (거래처/배송지 정보부터 품목표까지 한 번에 긁어서 넣으면 자동으로 인식해요)"
+        style={{
+          width: "100%",
+          minHeight: hasData ? 70 : 110,
+          boxSizing: "border-box",
+          border: `1px solid ${C.line}`,
+          padding: 10,
+          fontSize: 12.5,
+          fontFamily: sans,
+          resize: "vertical",
+        }}
+      />
     </div>
   );
 }
@@ -3131,16 +3203,17 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
   );
 }
 
-function QuoteUploadPanel({ importState, setImportState, onFile, onCancel, onConfirm, importing, isAdmin = true, tonOverrides, onTonOverrideSaved }) {
+function QuoteUploadPanel({ importState, setImportState, onFile, onPasteText, onCancel, onConfirm, importing, isAdmin = true, tonOverrides, onTonOverrideSaved }) {
   const update = (patch) => setImportState({ ...importState, ...patch });
 
   return (
     <div>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>견적서 업로드</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
-        엑셀 또는 PDF 견적서를 올리면 아래 전표 정보와 품목이 자동으로 채워져요. (PDF는 표 형식에 따라 인식률이 다를 수 있으니) 등록 전에 내용을 꼭 확인·수정해주세요.
+        엑셀 또는 PDF 견적서를 올리거나, 엑셀에서 내용을 그대로 복사해서 붙여넣어도 아래 전표 정보와 품목이 자동으로 채워져요. (PDF는 표 형식에 따라 인식률이 다를 수 있으니) 등록 전에 내용을 꼭 확인·수정해주세요.
       </div>
 
+      <QuotePasteBox onPasteText={onPasteText} hasData={!!importState} />
       <QuoteDropZone onFile={onFile} hasData={!!importState} />
 
       {importState && (
@@ -5475,6 +5548,8 @@ function LedgerTab({ rentals, isAdmin, managerName }) {
   const [newBookCustomer, setNewBookCustomer] = useState("");
   const [newBookSite, setNewBookSite] = useState("");
   const [creatingBook, setCreatingBook] = useState(false);
+  const [selectedBookIds, setSelectedBookIds] = useState(() => new Set());
+  const [deletingSelectedBooks, setDeletingSelectedBooks] = useState(false);
 
   useEffect(() => {
     fetchBooks();
@@ -5518,6 +5593,35 @@ function LedgerTab({ rentals, isAdmin, managerName }) {
     setShowNewBook(false);
     await fetchBooks();
     setSelectedBookId(data.id);
+  }
+
+  function toggleBookSelected(id) {
+    setSelectedBookIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const allBooksSelected = filteredBooks.length > 0 && filteredBooks.every((b) => selectedBookIds.has(b.id));
+  function toggleSelectAllBooks() {
+    setSelectedBookIds(allBooksSelected ? new Set() : new Set(filteredBooks.map((b) => b.id)));
+  }
+
+  async function handleDeleteSelectedBooks() {
+    if (selectedBookIds.size === 0) return;
+    if (!confirm(`선택한 대장 ${selectedBookIds.size}개를 삭제할까요? 안에 있는 출고·회수 내역이 모두 지워지고 되돌릴 수 없어요.`)) return;
+    const ids = Array.from(selectedBookIds);
+    setDeletingSelectedBooks(true);
+    const { error } = await supabase.from("ledger_books").delete().in("id", ids);
+    setDeletingSelectedBooks(false);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setSelectedBookIds(new Set());
+    fetchBooks();
   }
 
   if (selectedBookId) {
@@ -5569,8 +5673,22 @@ function LedgerTab({ rentals, isAdmin, managerName }) {
         </div>
       )}
 
+      {selectedBookIds.size > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+          <span style={{ fontSize: 12.5, color: C.inkSoft }}>{selectedBookIds.size}개 선택됨</span>
+          <button
+            onClick={handleDeleteSelectedBooks}
+            disabled={deletingSelectedBooks}
+            style={{ ...ghostBtnStyle, borderColor: C.brick, color: C.brick, padding: "5px 10px", fontSize: 12.5 }}
+          >
+            {deletingSelectedBooks ? "삭제 중…" : "선택 삭제"}
+          </button>
+        </div>
+      )}
+
       <div style={{ border: `1px solid ${C.line}`, background: C.panel }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}` }}>
+        <div style={{ display: "grid", gridTemplateColumns: "24px 1.5fr 1fr 1fr 1fr", gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, alignItems: "center" }}>
+          <input type="checkbox" checked={allBooksSelected} onChange={toggleSelectAllBooks} />
           <div>업체명</div>
           <div>현장명</div>
           <div>담당자</div>
@@ -5579,8 +5697,9 @@ function LedgerTab({ rentals, isAdmin, managerName }) {
         {filteredBooks.map((b) => (
           <div
             key={b.id}
-            style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 8, padding: "12px 14px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center" }}
+            style={{ display: "grid", gridTemplateColumns: "24px 1.5fr 1fr 1fr 1fr", gap: 8, padding: "12px 14px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center" }}
           >
+            <input type="checkbox" checked={selectedBookIds.has(b.id)} onChange={() => toggleBookSelected(b.id)} />
             <div>
               <button
                 onClick={() => setSelectedBookId(b.id)}
