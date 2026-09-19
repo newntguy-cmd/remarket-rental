@@ -2609,6 +2609,35 @@ function extractPastedSiteAddress(text) {
   return "";
 }
 
+// 붙여넣은 견적서 텍스트에서 "수신: 거래처 - 현장명" / "담당자: ..." 값을 찾아온다(견적서 헤더 파싱과 같은 정규식,
+// extractPastedSiteAddress와 같은 방식으로 붙여넣은 텍스트 전체를 훑는다). 품목별 데이터 출력물에 거래처·담당자를
+// 표시하기 위한 것 — 업체별데이터의 "품목별 수량 통계" 출력물과 형식을 맞춘다.
+function extractPastedCustomerInfo(text) {
+  const rows = parsePastedTable(text);
+  let customer = "";
+  let siteName = "";
+  let manager = "";
+  for (const row of rows) {
+    for (const cell of row) {
+      const raw = cellText(cell);
+      let m = raw.match(/수\s*신\s*[:：]\s*([^\n]+)/);
+      if (m) {
+        const v = m[1].trim();
+        if (v.includes(" - ")) {
+          const [c, s] = v.split(" - ");
+          customer = c.trim();
+          siteName = s.trim();
+        } else {
+          customer = v;
+        }
+      }
+      m = raw.match(/담당자\s*[:：]\s*([^\/\n]+)/);
+      if (m) manager = m[1].trim();
+    }
+  }
+  return { customer, siteName, manager };
+}
+
 // 주소 문자열을 공백만 정리해서 비교/저장 키로 쓴다 (톤수의 normalizeTonText와 같은 방식).
 function normalizeAddressText(s) {
   return (s || "").replace(/\s+/g, " ").trim();
@@ -3233,6 +3262,10 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
     if (extractedAddress) setAddress(extractedAddress);
   }, [extractedAddress]);
 
+  // 붙여넣은 텍스트에 거래처/담당자 정보가 있으면 품목별 데이터 출력물 상단에 그대로 보여준다
+  // (업체별데이터의 "품목별 수량 통계" 출력물과 같은 형식).
+  const customerInfo = useMemo(() => extractPastedCustomerInfo(text), [text]);
+
   const rawItems = useMemo(() => parsePastedItems(text), [text]);
   const items = useMemo(
     () => withComputedTons(rawItems, tonOverrides).map((it, idx) => (tonEdits[idx] !== undefined ? { ...it, ton: tonEdits[idx] === "" ? null : Number(tonEdits[idx]) } : it)),
@@ -3448,8 +3481,11 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 16 }}>
                 <div>
-                  <div>배송지: {address || "-"}</div>
-                  <div>거래유형: {transactionType === "purchase" ? "구매" : "렌탈"}</div>
+                  <div>
+                    거래처: {customerInfo.customer || "-"}
+                    {customerInfo.siteName ? ` · 현장명: ${customerInfo.siteName}` : ""}
+                  </div>
+                  <div>담당자: {customerInfo.manager || "-"}</div>
                 </div>
                 <div style={{ textAlign: "right" }}>
                   <div>작성일: {new Date().toLocaleDateString("ko-KR")}</div>
