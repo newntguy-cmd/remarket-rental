@@ -2400,22 +2400,34 @@ function fuzzyTonMatch(item, spec, sameItemOnly) {
   return bestScore > 0 ? best.per : null;
 }
 
+// 규격 끝에 "(신품)", "(중고)", "(단상)"처럼 실측치에는 영향 없는 부가 설명이 괄호로 붙어 있으면,
+// 기준표에 있는 것과 사실상 같은 규격인데도 문자열이 달라 정확일치를 못 찾는 경우가 있다.
+// 그래서 정확일치를 시도할 때 원문 그대로뿐 아니라 끝의 괄호 설명을 뗀 버전으로도 같이 비교한다.
+function stripTrailingParen(s) {
+  return normalizeTonText((s || "").replace(/\s*\([^)]*\)\s*$/, ""));
+}
+
 // 품목/규격으로 "개당 용적(톤)"을 찾는다.
-// 0) 직원이 이전에 직접 입력해서 저장해둔 값(ton_overrides, DB) → 1) 기준표에서 품목+규격 정확히 일치
-// → 2) 규격만 정확히 일치 → 3) 같은 품목 안에서 치수/구성이 가장 비슷한 규격
+// 0) 직원이 이전에 직접 입력해서 저장해둔 값(ton_overrides, DB) → 1) 기준표에서 품목+규격 정확히 일치(끝 괄호 설명 뗀 버전 포함)
+// → 2) 규격만 정확히 일치(마찬가지) → 3) 같은 품목 안에서 치수/구성이 가장 비슷한 규격
 // → 4) 기준표 전체에서 가장 비슷한 규격(품목 자체가 기준표에 없는 경우). 그래도 하나도 안 겹치면 null(직접 입력 대상).
 // customOverrides: [{item, spec, per}] — 직원이 한 번 채워넣으면 다음부터 자동으로 채워지는 학습된 값.
 function lookupTonPerUnit(item, spec, customOverrides) {
   const ni = normalizeTonText(item);
   const ns = normalizeTonText(spec);
+  const nsStripped = stripTrailingParen(spec);
+  const specMatches = (rSpec) => {
+    const rn = normalizeTonText(rSpec);
+    return rn === ns || (!!nsStripped && rn === nsStripped);
+  };
   if (!ns) return null;
   if (customOverrides && customOverrides.length) {
-    const overrideHit = customOverrides.find((r) => normalizeTonText(r.item) === ni && normalizeTonText(r.spec) === ns);
+    const overrideHit = customOverrides.find((r) => normalizeTonText(r.item) === ni && specMatches(r.spec));
     if (overrideHit) return overrideHit.per;
   }
-  const pairHit = TON_REFERENCE_TABLE.find((r) => normalizeTonText(r.item) === ni && normalizeTonText(r.spec) === ns);
+  const pairHit = TON_REFERENCE_TABLE.find((r) => normalizeTonText(r.item) === ni && specMatches(r.spec));
   if (pairHit) return pairHit.per;
-  const specHit = TON_REFERENCE_TABLE.find((r) => normalizeTonText(r.spec) === ns);
+  const specHit = TON_REFERENCE_TABLE.find((r) => specMatches(r.spec));
   if (specHit) return specHit.per;
   const sameItemFuzzy = fuzzyTonMatch(item, spec, true);
   if (sameItemFuzzy != null) return sameItemFuzzy;
@@ -2425,13 +2437,21 @@ function lookupTonPerUnit(item, spec, customOverrides) {
 // DC(할인), 기본설치비, 배송비처럼 실제로 트럭에 실리는 "물건"이 아니라 요금/비용 성격의 품목은
 // 애초에 톤수 계산 대상이 아니다. "DC"는 실제 제품명(예: "DC 인버터")에도 섞여 나올 수 있어 품목명이
 // 정확히 "DC"일 때만 제외하고, 나머지는 이 글자가 품목명에 들어있으면 제외한다.
+// 배관/전선/용접은 실제 배관공사·전기공사·용접 "시공"이라 트럭에 실리는 물건이 아니므로 기본설치비와
+// 같은 성격으로 보고 제외 목록에 넣었다(m당/개당 단가로 청구되는 공임·자재비 항목들).
 const TON_EXCLUDED_EXACT = ["dc"];
-const TON_EXCLUDED_KEYWORDS = ["설치비", "배송비", "운반비", "운송비", "상차비", "하차비", "수수료", "할인"];
-function isTonExcludedItem(item) {
+const TON_EXCLUDED_KEYWORDS = ["설치비", "배송비", "운반비", "운송비", "상차비", "하차비", "수수료", "할인", "배관", "전선", "용접"];
+// 위 키워드에 없는 품목이라도, 규격에 "OO당 OO원"(m당 20,000원 등) 형태의 단가가 적혀 있으면
+// 개수가 아니라 시공 길이·횟수 기준으로 청구하는 공임/자재비 항목이라는 뜻이라 마찬가지로 제외한다.
+const TON_EXCLUDED_SPEC_PATTERN = /(m|미터|개|회|평|㎡)\s*당\s*[\d,]+\s*원/;
+function isTonExcludedItem(item, spec) {
   const t = normalizeTonText(item).toLowerCase();
-  if (!t) return false;
-  if (TON_EXCLUDED_EXACT.includes(t)) return true;
-  return TON_EXCLUDED_KEYWORDS.some((kw) => t.includes(kw));
+  if (t) {
+    if (TON_EXCLUDED_EXACT.includes(t)) return true;
+    if (TON_EXCLUDED_KEYWORDS.some((kw) => t.includes(kw))) return true;
+  }
+  if (spec && TON_EXCLUDED_SPEC_PATTERN.test(spec)) return true;
+  return false;
 }
 
 // 품목 리스트(items)를 받아 각 행에 톤수(수량 × 개당용적)를 채워서 반환한다. 정말 비슷한 품목조차 없을 때만 톤수를 null로 둔다.
@@ -2439,7 +2459,7 @@ function isTonExcludedItem(item) {
 // ("미확인"이 아니라 "해당 없음"이므로, 화면에서 노란 칸으로 직접 입력을 요구하지 않는다).
 function withComputedTons(items, customOverrides) {
   return (items || []).map((it) => {
-    if (isTonExcludedItem(it.item)) return { ...it, ton: null, tonExcluded: true };
+    if (isTonExcludedItem(it.item, it.spec)) return { ...it, ton: null, tonExcluded: true };
     const per = lookupTonPerUnit(it.item, it.spec, customOverrides);
     const ton = per != null && it.qty ? Math.round(Number(it.qty) * per * 1000) / 1000 : null;
     return { ...it, ton, tonExcluded: false };
