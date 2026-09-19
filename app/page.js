@@ -153,34 +153,50 @@ const inputStyle = {
   padding: "10px 12px",
   fontSize: 14.5,
   border: `1px solid ${C.line}`,
+  borderRadius: 6,
   background: C.bg,
   color: C.ink,
   outline: "none",
   fontFamily: sans,
+  transition: "border-color 0.15s ease, box-shadow 0.15s ease",
 };
-const smallInputStyle = { ...inputStyle, padding: "6px 8px", fontSize: 13 };
+const smallInputStyle = { ...inputStyle, padding: "6px 8px", fontSize: 13, borderRadius: 5 };
 const primaryBtnStyle = {
   width: "100%",
   padding: "11px 0",
   background: C.ink,
   color: "#fff",
   border: "none",
+  borderRadius: 7,
   fontSize: 14.5,
+  fontWeight: 600,
+  letterSpacing: 0.1,
   cursor: "pointer",
   fontFamily: sans,
+  boxShadow: "0 2px 8px rgba(28,43,58,0.18)",
+  transition: "transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease",
 };
 const primaryBtnStyle2 = { ...primaryBtnStyle, width: "auto", padding: "9px 16px", fontSize: 13.5 };
 const ghostBtnStyle = {
   padding: "8px 14px",
   background: "transparent",
   border: `1px solid ${C.line}`,
+  borderRadius: 7,
   color: C.inkSoft,
   fontSize: 13,
   cursor: "pointer",
   fontFamily: sans,
+  transition: "background 0.15s ease, border-color 0.15s ease, color 0.15s ease",
 };
-const miniBtnStyle = { ...ghostBtnStyle, padding: "5px 10px", fontSize: 12 };
-const miniBtnStylePrimary = { ...miniBtnStyle, background: C.green, border: `1px solid ${C.green}`, color: "#fff" };
+const miniBtnStyle = { ...ghostBtnStyle, padding: "5px 10px", fontSize: 12, borderRadius: 6 };
+const miniBtnStylePrimary = {
+  ...miniBtnStyle,
+  background: C.green,
+  border: `1px solid ${C.green}`,
+  color: "#fff",
+  fontWeight: 600,
+  boxShadow: "0 2px 6px rgba(63,122,92,0.22)",
+};
 
 function Field({ label, children }) {
   return (
@@ -1339,62 +1355,113 @@ function Dashboard({ profile, onLogout }) {
   }
 
   const menuItems = [
-    ...(isStaff ? [{ key: "quickcalc", label: "톤수/배송비/품목별데이터" }] : []),
-    ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
-    ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
-    ...(isStaff ? [{ key: "shares", label: "지분관리" }] : []),
-    ...(isStaff ? [{ key: "sales", label: "판매현황" }] : []),
-    ...(isStaff ? [{ key: "customerData", label: "업체별데이터" }] : []),
-    ...(isStaff ? [{ key: "ledger", label: "출고/회수 내역서" }] : []),
-    ...(isStaff ? [{ key: "asboard", label: "A/S관리대장" }] : []),
+    ...(isStaff ? [{ key: "quickcalc", label: "톤수/배송비/품목별데이터", icon: "🧮" }] : []),
+    ...(isStaff ? [{ key: "quote", label: "견적서 업로드", icon: "📥" }] : []),
+    ...(isStaff ? [{ key: "rentals", label: "렌탈내역", icon: "📒" }] : []),
+    ...(isStaff ? [{ key: "shares", label: "지분관리", icon: "🤝" }] : []),
+    ...(isStaff ? [{ key: "sales", label: "판매현황", icon: "📈" }] : []),
+    ...(isStaff ? [{ key: "customerData", label: "업체별데이터", icon: "🏢" }] : []),
+    ...(isStaff ? [{ key: "ledger", label: "출고/회수 내역서", icon: "🚛" }] : []),
+    ...(isStaff ? [{ key: "asboard", label: "A/S관리대장", icon: "🔧" }] : []),
   ];
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: sans, color: C.ink }}>
-      <div style={{ borderBottom: `1px solid ${C.line}`, background: C.panel }}>
+      <style>{`
+        .rm-menu-btn { transition: background 0.16s ease, color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease; }
+        .rm-menu-btn.is-inactive:hover { background: ${C.bg} !important; color: ${C.ink} !important; transform: translateX(2px); }
+        .rm-logout-btn:hover { background: ${C.bg}; border-color: ${C.ink}; color: ${C.ink}; }
+      `}</style>
+      <div style={{ borderBottom: `1px solid ${C.line}`, background: `linear-gradient(135deg, ${C.panel} 0%, ${C.bg} 100%)` }}>
         <div style={{ maxWidth: 1600, margin: "0 auto", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ fontFamily: serif, fontSize: 20 }}>리마켓 렌탈장부</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div
+              style={{
+                width: 36,
+                height: 36,
+                flexShrink: 0,
+                borderRadius: 10,
+                background: `linear-gradient(135deg, ${C.ink} 0%, #34506B 100%)`,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#fff",
+                fontFamily: serif,
+                fontSize: 16,
+                boxShadow: "0 3px 10px rgba(28,43,58,0.28)",
+              }}
+            >
+              렘
+            </div>
+            <div>
+              <div style={{ fontFamily: serif, fontSize: 19, letterSpacing: 0.2 }}>리마켓 렌탈장부</div>
+              <div style={{ fontSize: 10, color: C.muted, letterSpacing: 1.2, marginTop: 1 }}>RENTAL LEDGER</div>
+            </div>
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <div style={{ fontSize: 13, color: C.inkSoft, textAlign: "right" }}>
-              <div style={{ color: C.ink }}>{profile.name}</div>
+              <div style={{ color: C.ink, fontWeight: 600 }}>{profile.name}</div>
               <div style={{ fontSize: 11.5 }}>{isAdmin ? "관리자" : isSales ? `${managerName} 담당자` : `${profile.company} 담당자`}</div>
             </div>
-            <button onClick={onLogout} style={ghostBtnStyle}>로그아웃</button>
+            <button className="rm-logout-btn" onClick={onLogout} style={ghostBtnStyle}>로그아웃</button>
           </div>
         </div>
       </div>
 
       <div style={{ maxWidth: 1600, margin: "0 auto", padding: "28px 24px 60px", display: "flex", gap: 24, alignItems: "flex-start" }}>
-        <aside style={{ width: 160, flexShrink: 0, border: `1px solid ${C.line}`, background: C.panel }}>
-          <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.line}`, fontSize: 11.5, color: C.muted, letterSpacing: 0.3 }}>메뉴</div>
-          {menuItems.map((m) => (
-            <button
-              key={m.key}
-              onClick={() => {
-                setActiveTab(m.key);
-                if (m.key === "shares") setSharesResetKey((k) => k + 1); // 지분관리는 눌릴 때마다 목록 화면으로 리셋
-                if (m.key === "rentals") setRentalsResetKey((k) => k + 1); // 렌탈내역도 눌릴 때마다 목록 화면으로 리셋
-                if (m.key === "sales") setSalesResetKey((k) => k + 1); // 판매현황도 눌릴 때마다 검색 화면으로 리셋
-                if (m.key === "ledger") setLedgerResetKey((k) => k + 1); // 출고/회수 내역서도 눌릴 때마다 대장 목록으로 리셋
-                if (m.key === "asboard") setAsboardResetKey((k) => k + 1); // A/S관리대장도 눌릴 때마다 목록 화면으로 리셋
-              }}
-              style={{
-                display: "block",
-                width: "100%",
-                textAlign: "left",
-                padding: "12px 16px",
-                background: activeTab === m.key ? C.bg : "transparent",
-                border: "none",
-                borderLeft: activeTab === m.key ? `3px solid ${C.ink}` : "3px solid transparent",
-                color: activeTab === m.key ? C.ink : C.inkSoft,
-                fontSize: 13.5,
-                cursor: "pointer",
-                fontFamily: sans,
-              }}
-            >
-              {m.label}
-            </button>
-          ))}
+        <aside
+          style={{
+            width: 196,
+            flexShrink: 0,
+            border: `1px solid ${C.line}`,
+            borderRadius: 12,
+            background: C.panel,
+            boxShadow: "0 6px 20px rgba(28,43,58,0.07)",
+            overflow: "hidden",
+            padding: 8,
+            position: "sticky",
+            top: 20,
+          }}
+        >
+          <div style={{ padding: "8px 10px 10px", fontSize: 10.5, color: C.muted, letterSpacing: 1.2, fontWeight: 700 }}>MENU</div>
+          {menuItems.map((m) => {
+            const active = activeTab === m.key;
+            return (
+              <button
+                key={m.key}
+                className={`rm-menu-btn${active ? "" : " is-inactive"}`}
+                onClick={() => {
+                  setActiveTab(m.key);
+                  if (m.key === "shares") setSharesResetKey((k) => k + 1); // 지분관리는 눌릴 때마다 목록 화면으로 리셋
+                  if (m.key === "rentals") setRentalsResetKey((k) => k + 1); // 렌탈내역도 눌릴 때마다 목록 화면으로 리셋
+                  if (m.key === "sales") setSalesResetKey((k) => k + 1); // 판매현황도 눌릴 때마다 검색 화면으로 리셋
+                  if (m.key === "ledger") setLedgerResetKey((k) => k + 1); // 출고/회수 내역서도 눌릴 때마다 대장 목록으로 리셋
+                  if (m.key === "asboard") setAsboardResetKey((k) => k + 1); // A/S관리대장도 눌릴 때마다 목록 화면으로 리셋
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "11px 12px",
+                  marginBottom: 3,
+                  borderRadius: 8,
+                  background: active ? `linear-gradient(135deg, ${C.ink} 0%, #2C4356 100%)` : "transparent",
+                  border: "none",
+                  color: active ? "#fff" : C.inkSoft,
+                  fontSize: 13.3,
+                  fontWeight: active ? 700 : 500,
+                  cursor: "pointer",
+                  fontFamily: sans,
+                  boxShadow: active ? "0 4px 12px rgba(28,43,58,0.28)" : "none",
+                }}
+              >
+                <span style={{ fontSize: 15, opacity: active ? 1 : 0.7, flexShrink: 0 }}>{m.icon}</span>
+                <span>{m.label}</span>
+              </button>
+            );
+          })}
         </aside>
 
         <div style={{ flex: 1, minWidth: 0 }}>
