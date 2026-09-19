@@ -1707,27 +1707,68 @@ function CustomerDetailPanel({ customerName, rentals, customers, isAdmin, onClos
   );
 }
 
+// 카드 형태 입력 영역 공통 헤더(아이콘+제목+설명) — 붙여넣기/파일업로드 두 방법을 한눈에 구분되게 보여준다.
+function InputCardHeader({ icon, iconBg, title, desc }) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 10 }}>
+      <div
+        style={{
+          width: 30,
+          height: 30,
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 15,
+          background: iconBg,
+          borderRadius: "50%",
+        }}
+      >
+        {icon}
+      </div>
+      <div>
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{title}</div>
+        <div style={{ fontSize: 11.5, color: C.muted, marginTop: 1 }}>{desc}</div>
+      </div>
+    </div>
+  );
+}
+
 // 관리 중인 엑셀 탭이 여러 개일 때 파일로 저장/업로드하는 것보다 그냥 긁어서 붙여넣는 게 더 간편하다는
 // 요청으로 추가된 붙여넣기 입력창. 상단 거래처/배송지 정보부터 품목표까지 한 번에 긁어서 넣으면
 // 견적서 파일 업로드와 완전히 동일한 인식 로직(parsePastedQuoteText → parseQuoteRows)으로 채워진다.
 function QuotePasteBox({ onPasteText, hasData }) {
   const [text, setText] = useState("");
+  const [focused, setFocused] = useState(false);
   function handleChange(e) {
     const v = e.target.value;
     setText(v);
     if (v.trim()) onPasteText && onPasteText(v);
   }
+  const active = focused || text.trim().length > 0;
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div
+      style={{
+        flex: "1 1 320px",
+        minWidth: 260,
+        border: `1px solid ${active ? C.green : C.line}`,
+        borderTop: `3px solid ${C.green}`,
+        background: C.panel,
+        padding: 16,
+      }}
+    >
+      <InputCardHeader icon="📋" iconBg={C.greenBg} title="① 엑셀에서 긁어서 붙여넣기" desc="여러 탭을 파일로 저장할 필요 없이, 복사한 내용을 바로 넣으면 돼요" />
       <textarea
         value={text}
         onChange={handleChange}
-        placeholder="엑셀에서 견적서 내용을 그대로 복사해서 여기에 붙여넣으세요 (거래처/배송지 정보부터 품목표까지 한 번에 긁어서 넣으면 자동으로 인식해요)"
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        placeholder="거래처/배송지 정보부터 품목표까지 한 번에 긁어서 여기에 Ctrl+V로 붙여넣으세요"
         style={{
           width: "100%",
-          minHeight: hasData ? 70 : 110,
+          minHeight: hasData ? 64 : 96,
           boxSizing: "border-box",
-          border: `1px solid ${C.line}`,
+          border: `1px solid ${C.lineSoft}`,
           padding: 10,
           fontSize: 12.5,
           fontFamily: sans,
@@ -1751,41 +1792,53 @@ function QuoteDropZone({ onFile, hasData }) {
 
   return (
     <div
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDragOver(true);
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={handleDrop}
-      onClick={() => inputRef.current?.click()}
       style={{
-        border: `2px dashed ${dragOver ? C.ink : C.line}`,
-        background: dragOver ? C.bg : C.panel,
-        padding: hasData ? 16 : 40,
-        textAlign: "center",
-        cursor: "pointer",
-        marginBottom: 16,
+        flex: "1 1 320px",
+        minWidth: 260,
+        border: `1px solid ${dragOver ? C.purple : C.line}`,
+        borderTop: `3px solid ${C.purple}`,
+        background: C.panel,
+        padding: 16,
       }}
     >
-      <input
-        type="file"
-        accept=".xlsx,.xls,.pdf"
-        ref={inputRef}
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          e.target.value = "";
-          if (file) onFile(file);
+      <InputCardHeader icon="📁" iconBg={C.purpleBg} title="② 견적서 파일 올리기" desc="엑셀(.xlsx) 또는 PDF 파일을 그대로 업로드해요" />
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
         }}
-        style={{ display: "none" }}
-      />
-      {hasData ? (
-        <div style={{ fontSize: 12.5, color: C.inkSoft }}>다른 견적서로 다시 채우려면 여기로 새 파일을 드래그하거나 클릭하세요</div>
-      ) : (
-        <>
-          <div style={{ fontSize: 15, color: C.ink, marginBottom: 6 }}>여기로 렌탈·구매 견적서 파일을 끌어다 놓으세요</div>
-          <div style={{ fontSize: 12.5, color: C.muted }}>또는 클릭해서 파일 선택 (.xlsx, .xls, .pdf)</div>
-        </>
-      )}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+        onClick={() => inputRef.current?.click()}
+        style={{
+          border: `2px dashed ${dragOver ? C.purple : C.lineSoft}`,
+          background: dragOver ? C.purpleBg : C.bg,
+          padding: hasData ? 14 : 26,
+          textAlign: "center",
+          cursor: "pointer",
+        }}
+      >
+        <input
+          type="file"
+          accept=".xlsx,.xls,.pdf"
+          ref={inputRef}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) onFile(file);
+          }}
+          style={{ display: "none" }}
+        />
+        {hasData ? (
+          <div style={{ fontSize: 12.5, color: C.inkSoft }}>다른 견적서로 다시 채우려면 여기로 새 파일을 드래그하거나 클릭하세요</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 22, marginBottom: 6 }}>⬆️</div>
+            <div style={{ fontSize: 13.5, color: C.ink, marginBottom: 4 }}>파일을 끌어다 놓으세요</div>
+            <div style={{ fontSize: 11.5, color: C.muted }}>또는 클릭해서 파일 선택 (.xlsx, .xls, .pdf)</div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -3213,8 +3266,13 @@ function QuoteUploadPanel({ importState, setImportState, onFile, onPasteText, on
         엑셀 또는 PDF 견적서를 올리거나, 엑셀에서 내용을 그대로 복사해서 붙여넣어도 아래 전표 정보와 품목이 자동으로 채워져요. (PDF는 표 형식에 따라 인식률이 다를 수 있으니) 등록 전에 내용을 꼭 확인·수정해주세요.
       </div>
 
-      <QuotePasteBox onPasteText={onPasteText} hasData={!!importState} />
-      <QuoteDropZone onFile={onFile} hasData={!!importState} />
+      <div style={{ display: "flex", alignItems: "stretch", gap: 14, marginBottom: 16, flexWrap: "wrap" }}>
+        <QuotePasteBox onPasteText={onPasteText} hasData={!!importState} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: "0 0 auto", fontSize: 11.5, fontWeight: 700, color: C.muted, padding: "0 2px" }}>
+          또는
+        </div>
+        <QuoteDropZone onFile={onFile} hasData={!!importState} />
+      </div>
 
       {importState && (
         <>
