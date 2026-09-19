@@ -1339,7 +1339,7 @@ function Dashboard({ profile, onLogout }) {
   }
 
   const menuItems = [
-    ...(isStaff ? [{ key: "quickcalc", label: "톤수/배송비 계산" }] : []),
+    ...(isStaff ? [{ key: "quickcalc", label: "톤수/배송비/품목별데이터" }] : []),
     ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
     ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
     ...(isStaff ? [{ key: "shares", label: "지분관리" }] : []),
@@ -2423,6 +2423,21 @@ function withComputedTons(items, customOverrides) {
   });
 }
 
+// 품목명+규격별로 수량을 합산해서 "현장에 총 몇 개인지" 보여주는 품목별 데이터 집계.
+// 배송비/설치비 등 요금성 품목(withComputedTons가 이미 tonExcluded로 표시해둔 것)은 물리적 수량이 아니므로 자동으로 뺀다.
+function groupItemQuantities(items) {
+  const map = new Map();
+  for (const it of items || []) {
+    if (it.tonExcluded) continue;
+    const itemName = (it.item || "").trim() || "(품목명 없음)";
+    const specName = (it.spec || "").trim();
+    const key = `${itemName}〓${specName}`;
+    if (!map.has(key)) map.set(key, { key, item: itemName, spec: specName, qty: 0 });
+    map.get(key).qty += Number(it.qty) || 0;
+  }
+  return Array.from(map.values()).sort((a, b) => b.qty - a.qty || a.item.localeCompare(b.item, "ko"));
+}
+
 // ---------- 견적서를 등록하지 않고 붙여넣기만으로 톤수/배송비를 미리 확인하는 기능 ----------
 // 엑셀에서 표 영역을 복사하면 셀 사이는 탭(\t), 행 사이는 줄바꿈으로 구분된 텍스트가 클립보드에 담긴다.
 // 다만 "품목\n(Product)"처럼 한 칸 안에 줄바꿈이 있는 셀(견적서 헤더에 흔함)은 엑셀이 그 칸 전체를
@@ -2886,6 +2901,89 @@ async function geocodeAddress(address) {
   });
 }
 
+// 배송지 주소를 입력하면 카카오 로드뷰(거리뷰)로 그 근처 실제 사진을 미리 보여준다.
+// 로드뷰 사진이 없는 위치(파노라마가 촬영 안 된 골목 등)는 조용히 안내 문구만 보여준다.
+// containerRef가 가리키는 div는 항상 비워두고(React가 관리하는 자식을 넣지 않고) 카카오 SDK가 직접
+// DOM을 그려 넣게 해서, React 재렌더링과 충돌(예: "removeChild" 오류)이 나지 않게 한다.
+function AddressRoadview({ address }) {
+  const containerRef = useRef(null);
+  const [status, setStatus] = useState("idle"); // idle | loading | ready | notfound | error
+
+  useEffect(() => {
+    let cancelled = false;
+    setStatus(address ? "loading" : "idle");
+    if (!address) return;
+    // 타이핑 중에는 계속 호출하지 않도록, 입력이 잠깐 멈췄을 때만 조회한다.
+    const timer = setTimeout(async () => {
+      const kakao = await loadKakaoMapsSdk();
+      if (cancelled) return;
+      if (!kakao) {
+        setStatus("error");
+        return;
+      }
+      const coords = await geocodeAddress(address);
+      if (cancelled) return;
+      if (!coords) {
+        setStatus("notfound");
+        return;
+      }
+      try {
+        const position = new kakao.maps.LatLng(coords.lat, coords.lng);
+        const client = new kakao.maps.RoadviewClient();
+        client.getNearestPanoId(position, 50, (panoId) => {
+          if (cancelled) return;
+          if (!panoId) {
+            setStatus("notfound");
+            return;
+          }
+          if (!containerRef.current) return;
+          containerRef.current.innerHTML = ""; // 이전 로드뷰가 남아있으면 지우고 새로 그린다
+          const roadview = new kakao.maps.Roadview(containerRef.current);
+          roadview.setPanoId(panoId, position);
+          setStatus("ready");
+        });
+      } catch {
+        setStatus("error");
+      }
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [address]);
+
+  if (!address) return null;
+
+  return (
+    <div style={{ marginTop: 12, width: "100%" }}>
+      <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 6 }}>📍 배송지 로드뷰</div>
+      <div style={{ position: "relative", width: "100%", height: 220, border: `1px solid ${C.lineSoft}`, background: C.bg }}>
+        <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+        {status !== "ready" && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 12,
+              color: C.muted,
+              pointerEvents: "none",
+              textAlign: "center",
+              padding: "0 12px",
+            }}
+          >
+            {status === "loading" && "로드뷰를 불러오는 중…"}
+            {status === "notfound" && "이 주소 근처엔 로드뷰 사진이 없어요"}
+            {status === "error" && "로드뷰를 불러오지 못했어요(지도 설정을 확인해주세요)"}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // 출발지(용인시 기흥구 공세동)는 항상 같은 곳이라, 좌표를 한 번만 조회해서 세션 안에서 재사용한다.
 // 단, 실패한 결과는 캐시하지 않는다 — 카카오 설정(도메인/서비스 활성화 등)을 나중에 고친 뒤 재시도할 수 있어야 하므로.
 let originCoordsPromise = null;
@@ -3181,6 +3279,10 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
   const totalTon = known.reduce((sum, it) => sum + Number(it.ton), 0);
   const missingCount = applicable.length - known.length;
 
+  // 품목별 데이터: 같은 품목명+규격끼리 수량을 합산해서 "현장에 총 몇 개인지" 한눈에 보여준다.
+  const groupedItemStats = useMemo(() => groupItemQuantities(items), [items]);
+  const groupedItemTotalQty = groupedItemStats.reduce((s, r) => s + r.qty, 0);
+
   async function saveTonOverride(idx) {
     const it = items[idx];
     if (it.ton == null || !it.qty) {
@@ -3210,9 +3312,9 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
 
   return (
     <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20 }}>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>톤수/배송비 계산</div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>톤수/배송비/품목별데이터</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
-        견적서를 등록하지 않고도 톤수와 배송비를 먼저 확인할 수 있어요. 엑셀에서 품목표(품목/규격/수량 칸)를 그대로 복사해서 아래에 붙여넣어보세요.
+        견적서를 등록하지 않고도 품목별 수량·톤수·배송비를 한번에 확인할 수 있어요. 엑셀에서 품목표(품목/규격/수량 칸)를 그대로 복사해서 아래에 붙여넣어보세요.
         헤더(품목/규격/수량 등)까지 같이 복사하면 더 정확하게 읽혀요. 여기서 계산한 내용은 등록되지 않고, 톤수를 직접 입력해서 저장한 값만 기준표에 남아요.
       </div>
 
@@ -3225,55 +3327,116 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
 
       {items.length > 0 && (
         <>
-          <div style={{ border: `1px solid ${C.lineSoft}`, marginBottom: 14 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 130px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
-              <div>품목</div>
-              <div>규격</div>
-              <div>수량</div>
-              <div>톤수</div>
+          <div style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
+            <StatCell label="품목 종류" value={`${groupedItemStats.length}종`} />
+            <StatCell label="총 수량" value={`${groupedItemTotalQty.toLocaleString("ko-KR")}개`} />
+            <StatCell label="총 톤수" value={`${totalTon.toFixed(3)}톤`} color={missingCount > 0 ? C.amber : C.green} last />
+          </div>
+          {missingCount > 0 && (
+            <div style={{ fontSize: 12, color: C.amber, marginTop: -10, marginBottom: 14 }}>
+              ⚠ 톤수 미확인 {missingCount}건이 있어요 — 아래 "🚚 톤수 계산" 표의 노란 칸을 직접 채워주세요.
             </div>
-            <div style={{ maxHeight: 320, overflow: "auto" }}>
-              {items.map((it, idx) => (
-                <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 130px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}>
-                  <div>{it.item}</div>
-                  <div>{it.spec}</div>
-                  <div>{it.qty}</div>
-                  {it.tonExcluded ? (
-                    <div style={{ fontSize: 11.5, color: C.muted }} title="DC·설치비·배송비 등은 톤수 계산에서 제외돼요">
-                      제외
-                    </div>
-                  ) : (
-                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                      <input
-                        type="number"
-                        step="0.001"
-                        style={{ ...smallInputStyle, background: it.ton == null ? "#FFF6E5" : smallInputStyle.background }}
-                        value={tonEdits[idx] !== undefined ? tonEdits[idx] : it.ton ?? ""}
-                        placeholder="직접입력"
-                        onChange={(e) => setTonEdits((prev) => ({ ...prev, [idx]: e.target.value }))}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => saveTonOverride(idx)}
-                        disabled={savingIdx === idx}
-                        style={{ border: `1px solid ${C.line}`, background: "none", cursor: "pointer", fontSize: 11.5, padding: "4px 6px", color: C.inkSoft, flexShrink: 0 }}
-                      >
-                        {savingIdx === idx ? "…" : "저장"}
-                      </button>
-                    </div>
-                  )}
+          )}
+
+          {/* 카드① 품목별 데이터 — 현장에 흩어진 수량을 품목·규격별로 합쳐서 총 개수만 보여준다(요금성 품목은 자동 제외) */}
+          <div style={{ border: `1px solid ${C.line}`, borderTop: `3px solid ${C.purple}`, background: C.panel, padding: 18, marginBottom: 14 }}>
+            <InputCardHeader
+              icon="📦"
+              iconBg={C.purpleBg}
+              title="① 품목별 데이터"
+              desc="같은 품목·규격끼리 수량을 합쳐서 총 몇 개인지 한눈에 보여줘요 (배송비·설치비 등 요금성 항목은 자동으로 빠져요)"
+            />
+            <div style={{ border: `1px solid ${C.lineSoft}` }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
+                <div>품목</div>
+                <div>규격</div>
+                <div style={{ textAlign: "right" }}>총수량</div>
+              </div>
+              <div style={{ maxHeight: 260, overflow: "auto" }}>
+                {groupedItemStats.map((r) => (
+                  <div key={r.key} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 8, padding: "6px 10px", fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}` }}>
+                    <div>{r.item}</div>
+                    <div>{r.spec || "-"}</div>
+                    <div style={{ textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</div>
+                  </div>
+                ))}
+                {groupedItemStats.length === 0 && (
+                  <div style={{ padding: 20, textAlign: "center", color: C.muted, fontSize: 12.5 }}>집계할 품목이 없어요.</div>
+                )}
+              </div>
+              {groupedItemStats.length > 0 && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 8, padding: "8px 10px", fontSize: 12.5, fontWeight: 600, borderTop: `1px solid ${C.lineSoft}`, background: C.bg }}>
+                  <div style={{ gridColumn: "1 / 3" }}>합계</div>
+                  <div style={{ textAlign: "right" }}>{groupedItemTotalQty.toLocaleString("ko-KR")}</div>
                 </div>
-              ))}
+              )}
             </div>
           </div>
 
-          <div style={{ border: `1px solid ${C.line}`, background: "#F7F4EC", padding: "14px 18px", display: "flex", alignItems: "center", flexWrap: "wrap", gap: 14 }}>
-            <div style={{ fontSize: 13.5 }}>
-              🚚 총 톤수 <strong>{totalTon.toFixed(3)}톤</strong>
-              {missingCount > 0 && <span style={{ color: "#B45309", fontSize: 12.5 }}> (톤수 미확인 {missingCount}건 — 노란 칸을 직접 채워주세요)</span>}
+          {/* 카드② 톤수 계산 — 품목별 실제 톤수와 기준표에 없는 품목의 직접입력/저장 */}
+          <div style={{ border: `1px solid ${C.line}`, borderTop: `3px solid ${C.green}`, background: C.panel, padding: 18, marginBottom: 14 }}>
+            <InputCardHeader
+              icon="🚚"
+              iconBg={C.greenBg}
+              title="② 톤수 계산"
+              desc="품목별 톤수를 확인하고, 기준표에 없는 품목(노란 칸)은 직접 입력해서 저장하면 다음부터 자동으로 채워져요"
+            />
+            <div style={{ border: `1px solid ${C.lineSoft}` }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 130px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
+                <div>품목</div>
+                <div>규격</div>
+                <div>수량</div>
+                <div>톤수</div>
+              </div>
+              <div style={{ maxHeight: 260, overflow: "auto" }}>
+                {items.map((it, idx) => (
+                  <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 130px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}>
+                    <div>{it.item}</div>
+                    <div>{it.spec}</div>
+                    <div>{it.qty}</div>
+                    {it.tonExcluded ? (
+                      <div style={{ fontSize: 11.5, color: C.muted }} title="DC·설치비·배송비 등은 톤수 계산에서 제외돼요">
+                        제외
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <input
+                          type="number"
+                          step="0.001"
+                          style={{ ...smallInputStyle, background: it.ton == null ? "#FFF6E5" : smallInputStyle.background }}
+                          value={tonEdits[idx] !== undefined ? tonEdits[idx] : it.ton ?? ""}
+                          placeholder="직접입력"
+                          onChange={(e) => setTonEdits((prev) => ({ ...prev, [idx]: e.target.value }))}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => saveTonOverride(idx)}
+                          disabled={savingIdx === idx}
+                          style={{ border: `1px solid ${C.line}`, background: "none", cursor: "pointer", fontSize: 11.5, padding: "4px 6px", color: C.inkSoft, flexShrink: 0 }}
+                        >
+                          {savingIdx === idx ? "…" : "저장"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
-            <div style={{ width: 1, alignSelf: "stretch", background: C.line }} />
-            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+            <div style={{ marginTop: 10, fontSize: 13.5 }}>
+              총 톤수 <strong>{totalTon.toFixed(3)}톤</strong>
+              {missingCount > 0 && <span style={{ color: "#B45309", fontSize: 12.5 }}> (미확인 {missingCount}건)</span>}
+            </div>
+          </div>
+
+          {/* 카드③ 배송비 계산 — 거래유형·배송지를 입력하고 기본배송비+용차를 계산 */}
+          <div style={{ border: `1px solid ${C.line}`, borderTop: `3px solid ${C.amber}`, background: C.panel, padding: 18 }}>
+            <InputCardHeader
+              icon="💰"
+              iconBg={C.amberBg}
+              title="③ 배송비 계산"
+              desc="거래유형과 배송지를 입력하면 총 톤수를 기준으로 기본배송비와 용차 추가 비용을 계산할 수 있어요"
+            />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <select style={{ ...inputStyle, fontSize: 12.5, padding: "5px 8px", width: "auto" }} value={transactionType} onChange={(e) => setTransactionType(e.target.value)}>
                 <option value="rental">렌탈</option>
                 <option value="purchase">구매</option>
@@ -3284,8 +3447,9 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
                 onChange={(e) => setAddress(e.target.value)}
                 placeholder="배송지 주소"
               />
+              <DeliveryFeeButton address={address} transactionType={transactionType} totalTon={totalTon} />
             </div>
-            <DeliveryFeeButton address={address} transactionType={transactionType} totalTon={totalTon} />
+            <AddressRoadview address={address} />
           </div>
         </>
       )}
