@@ -425,13 +425,19 @@ function useResizableColumns(initialWidths) {
   return [widths, startResize];
 }
 
+// 표 헤더 칸 경계에 놓는 드래그 손잡이. 마우스가 놓일 수 있는 영역은 10px로 넉넉하게 잡되, 그 자리를
+// 평소에도 옅은 세로선으로 보여주고 마우스를 올리면 진해지게 해서 "여기를 드래그하면 되는구나"를 바로 알 수 있게 한다.
 function ColResizeHandle({ onMouseDown }) {
   return (
     <div
+      className="col-resize-handle"
       onMouseDown={onMouseDown}
-      style={{ position: "absolute", top: 0, bottom: 0, right: -6, width: 10, cursor: "col-resize", zIndex: 2 }}
+      style={{ position: "absolute", top: 0, bottom: 0, right: -6, width: 10, cursor: "col-resize", zIndex: 2, display: "flex", justifyContent: "center" }}
       onClick={(e) => e.stopPropagation()}
-    />
+      title="드래그해서 칸 너비 조절"
+    >
+      <div className="col-resize-bar" style={{ width: 3, alignSelf: "stretch", borderRadius: 2 }} />
+    </div>
   );
 }
 
@@ -1371,6 +1377,8 @@ function Dashboard({ profile, onLogout }) {
         .rm-menu-btn { transition: background 0.14s ease, color 0.14s ease; }
         .rm-menu-btn.is-inactive:hover { background: ${C.bg} !important; color: ${C.ink} !important; }
         .rm-logout-btn:hover { background: ${C.bg}; border-color: ${C.ink}; color: ${C.ink}; }
+        .col-resize-bar { background: #C7CDD6; transition: background 0.12s ease, width 0.12s ease; }
+        .col-resize-handle:hover .col-resize-bar { background: ${C.ink}; width: 4px; }
       `}</style>
       <div style={{ borderBottom: `1px solid ${C.line}`, background: C.panel }}>
         <div style={{ maxWidth: 1600, margin: "0 auto", padding: "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -2372,9 +2380,12 @@ function normalizeTonText(s) {
 }
 
 // 콤마/공백/* 기준으로 토큰을 쪼갠다(치수, 색상, 재질 등 각 구성요소가 토큰 하나씩 된다).
+// 공백으로도 쪼개기 때문에 "12kg 통돌이"와 "통돌이 12kg"처럼 순서만 다른 표기도 같은 토큰 집합으로 인식된다.
+// "200리터급"처럼 숫자+단위 뒤에 "급"이 붙은 표기는 "200리터"와 같은 걸로 보고 "급"을 뗀다(기준표에 두 표기가 섞여 있음).
 function tonTokens(s) {
   return normalizeTonText(s)
-    .split(/[,\*]/)
+    .replace(/(\d+(?:\.\d+)?)\s*(리터|kg|평|인치|톤|mm|cm)\s*급/g, "$1$2")
+    .split(/[,\*\s]+/)
     .map((t) => t.trim())
     .filter(Boolean);
 }
@@ -2407,8 +2418,14 @@ function stripTrailingParen(s) {
   return normalizeTonText((s || "").replace(/\s*\([^)]*\)\s*$/, ""));
 }
 
+// 기준표에 "200리터급"처럼 숫자+단위 뒤에 "급"이 붙어 있는데 실제 입력은 "200리터"처럼 "급"이 없는 경우(혹은 그 반대)도
+// 같은 규격으로 봐야 한다. 양쪽 다 "급"을 뗀 형태로 정규화해서 비교할 수 있게 한다.
+function stripGeupSuffix(s) {
+  return normalizeTonText(s).replace(/(\d+(?:\.\d+)?)\s*(리터|kg|평|인치|톤|mm|cm)\s*급/g, "$1$2");
+}
+
 // 품목/규격으로 "개당 용적(톤)"을 찾는다.
-// 0) 직원이 이전에 직접 입력해서 저장해둔 값(ton_overrides, DB) → 1) 기준표에서 품목+규격 정확히 일치(끝 괄호 설명 뗀 버전 포함)
+// 0) 직원이 이전에 직접 입력해서 저장해둔 값(ton_overrides, DB) → 1) 기준표에서 품목+규격 정확히 일치(끝 괄호 설명 뗀 버전/"급" 뗀 버전 포함)
 // → 2) 규격만 정확히 일치(마찬가지) → 3) 같은 품목 안에서 치수/구성이 가장 비슷한 규격
 // → 4) 기준표 전체에서 가장 비슷한 규격(품목 자체가 기준표에 없는 경우). 그래도 하나도 안 겹치면 null(직접 입력 대상).
 // customOverrides: [{item, spec, per}] — 직원이 한 번 채워넣으면 다음부터 자동으로 채워지는 학습된 값.
@@ -2416,9 +2433,13 @@ function lookupTonPerUnit(item, spec, customOverrides) {
   const ni = normalizeTonText(item);
   const ns = normalizeTonText(spec);
   const nsStripped = stripTrailingParen(spec);
+  const nsNoGeup = stripGeupSuffix(ns);
+  const nsStrippedNoGeup = stripGeupSuffix(nsStripped);
   const specMatches = (rSpec) => {
     const rn = normalizeTonText(rSpec);
-    return rn === ns || (!!nsStripped && rn === nsStripped);
+    if (rn === ns || (!!nsStripped && rn === nsStripped)) return true;
+    const rnNoGeup = stripGeupSuffix(rn);
+    return rnNoGeup === nsNoGeup || (!!nsStrippedNoGeup && rnNoGeup === nsStrippedNoGeup);
   };
   if (!ns) return null;
   if (customOverrides && customOverrides.length) {
