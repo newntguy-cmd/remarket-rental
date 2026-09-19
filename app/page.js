@@ -3476,6 +3476,13 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
     alert("저장했어요. 다음부터 이 품목은 자동으로 채워져요.");
   }
 
+  // 품목/규격/수량 등이 있는 표는 칸 경계를 드래그해서 너비를 조절할 수 있게 하는 게 이 앱의 기본 컨벤션
+  // (렌탈내역·견적서 업로드 미리보기와 같은 방식) — 카드①·② 각각 자기 칸너비를 따로 기억한다.
+  const [groupColWidths, startGroupResize] = useResizableColumns([220, 220, 110]); // 품목/규격/총수량
+  const groupGridTemplate = "32px " + groupColWidths.map((w) => `${w}px`).join(" ");
+  const [rowColWidths, startRowResize] = useResizableColumns([200, 200, 70, 130]); // 품목/규격/수량/톤수
+  const rowGridTemplate = "26px " + rowColWidths.map((w) => `${w}px`).join(" ");
+
   return (
     <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20 }}>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>품목별데이터/톤수/배송비</div>
@@ -3543,6 +3550,9 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
             <div className="qtc-no-print" style={{ fontSize: 11.5, color: C.muted, marginTop: -6, marginBottom: 10 }}>
               * 여기서 "선택삭제"는 이 계산(품목별 데이터·톤수·배송비)에서만 제외하는 거예요. 붙여넣은 원본 텍스트는 그대로 있고, 다시 붙여넣으면 복원돼요.
             </div>
+            <div className="qtc-no-print" style={{ fontSize: 11.5, color: C.muted, marginTop: -6, marginBottom: 10 }}>
+              칸 경계를 드래그하면 너비를 늘이고 줄일 수 있어요.
+            </div>
             <div id="qtc-itemstats-print-area" style={{ border: `1px solid ${C.line}`, background: "#fff", padding: 24 }}>
               <div style={{ textAlign: "center", marginBottom: 20 }}>
                 <div style={{ fontFamily: serif, fontSize: 20 }}>품목별 데이터</div>
@@ -3559,74 +3569,68 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
                   <div>작성일: {new Date().toLocaleDateString("ko-KR")}</div>
                 </div>
               </div>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr>
-                    <th className="qtc-no-print" style={{ border: `1px solid ${C.line}`, padding: "8px 10px", background: C.bg, width: 32 }}>
-                      <input
-                        type="checkbox"
-                        checked={groupedItemStats.length > 0 && checkedGroupKeys.size === groupedItemStats.length}
-                        onChange={toggleGroupCheckedAll}
-                      />
-                    </th>
-                    {[
-                      { label: "품목", key: "item" },
-                      { label: "규격", key: "spec" },
-                      { label: "총수량", key: "qty" },
-                    ].map((h) => (
-                      <th
-                        key={h.key}
-                        onClick={() => toggleGroupSort(h.key)}
-                        style={{
-                          border: `1px solid ${C.line}`,
-                          padding: "8px 10px",
-                          background: C.bg,
-                          textAlign: h.key === "qty" ? "right" : "left",
-                          cursor: "pointer",
-                          userSelect: "none",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {h.label}
-                        {groupSortKey === h.key ? (groupSortDir === "asc" ? " ▲" : " ▼") : ""}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {groupedItemStats.map((r) => (
-                    <tr key={r.key}>
-                      <td className="qtc-no-print" style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>
-                        <input type="checkbox" checked={checkedGroupKeys.has(r.key)} onChange={() => toggleGroupChecked(r.key)} />
-                      </td>
-                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.item}</td>
-                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.spec || "-"}</td>
-                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</td>
-                    </tr>
+              <div style={{ border: `1px solid ${C.line}`, overflowX: "auto" }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: groupGridTemplate,
+                    gap: 8,
+                    padding: "8px 10px",
+                    fontSize: 12.5,
+                    background: C.bg,
+                    borderBottom: `1px solid ${C.line}`,
+                    minWidth: "max-content",
+                  }}
+                >
+                  <div className="qtc-no-print">
+                    <input
+                      type="checkbox"
+                      checked={groupedItemStats.length > 0 && checkedGroupKeys.size === groupedItemStats.length}
+                      onChange={toggleGroupCheckedAll}
+                    />
+                  </div>
+                  {[
+                    { label: "품목", key: "item" },
+                    { label: "규격", key: "spec" },
+                    { label: "총수량", key: "qty" },
+                  ].map((h, i) => (
+                    <div
+                      key={h.key}
+                      onClick={() => toggleGroupSort(h.key)}
+                      style={{ position: "relative", textAlign: h.key === "qty" ? "right" : "left", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+                    >
+                      {h.label}
+                      {groupSortKey === h.key ? (groupSortDir === "asc" ? " ▲" : " ▼") : ""}
+                      <ColResizeHandle onMouseDown={startGroupResize(i)} />
+                    </div>
                   ))}
-                  {groupedItemStats.length === 0 && (
-                    <tr>
-                      <td className="qtc-no-print" style={{ border: `1px solid ${C.line}`, padding: "20px 10px" }}></td>
-                      <td colSpan={3} style={{ border: `1px solid ${C.line}`, padding: "20px 10px", textAlign: "center", color: C.muted }}>
-                        집계할 품목이 없어요.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-                {groupedItemStats.length > 0 && (
-                  <tfoot>
-                    <tr>
-                      <td className="qtc-no-print" style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}></td>
-                      <td colSpan={2} style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
-                        합계
-                      </td>
-                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
-                        {groupedItemTotalQty.toLocaleString("ko-KR")}
-                      </td>
-                    </tr>
-                  </tfoot>
+                </div>
+                {groupedItemStats.map((r) => (
+                  <div
+                    key={r.key}
+                    style={{ display: "grid", gridTemplateColumns: groupGridTemplate, gap: 8, padding: "6px 10px", fontSize: 13, borderBottom: `1px solid ${C.line}`, alignItems: "center", minWidth: "max-content" }}
+                  >
+                    <div className="qtc-no-print">
+                      <input type="checkbox" checked={checkedGroupKeys.has(r.key)} onChange={() => toggleGroupChecked(r.key)} />
+                    </div>
+                    <div>{r.item}</div>
+                    <div>{r.spec || "-"}</div>
+                    <div style={{ textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</div>
+                  </div>
+                ))}
+                {groupedItemStats.length === 0 && (
+                  <div style={{ padding: 20, textAlign: "center", color: C.muted, fontSize: 13 }}>집계할 품목이 없어요.</div>
                 )}
-              </table>
+                {groupedItemStats.length > 0 && (
+                  <div
+                    style={{ display: "grid", gridTemplateColumns: groupGridTemplate, gap: 8, padding: "8px 10px", fontSize: 13, fontWeight: 600, background: C.bg, minWidth: "max-content" }}
+                  >
+                    <div className="qtc-no-print"></div>
+                    <div style={{ gridColumn: "span 2", textAlign: "right" }}>합계</div>
+                    <div style={{ textAlign: "right" }}>{groupedItemTotalQty.toLocaleString("ko-KR")}</div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -3646,18 +3650,21 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
                 {`선택삭제${checkedRowIdxs.size > 0 ? ` (${checkedRowIdxs.size})` : ""}`}
               </button>
             </div>
-            <div style={{ border: `1px solid ${C.lineSoft}` }}>
-              <div style={{ display: "grid", gridTemplateColumns: "26px 1fr 1fr 70px 130px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center" }}>
+            <div style={{ fontSize: 11.5, color: C.muted, marginTop: -6, marginBottom: 10 }}>칸 경계를 드래그하면 너비를 늘이고 줄일 수 있어요.</div>
+            <div style={{ border: `1px solid ${C.lineSoft}`, overflowX: "auto" }}>
+              <div style={{ display: "grid", gridTemplateColumns: rowGridTemplate, gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center", minWidth: "max-content" }}>
                 <input type="checkbox" checked={visibleRowIdxs.length > 0 && checkedRowIdxs.size === visibleRowIdxs.length} onChange={toggleRowCheckedAll} />
-                <div>품목</div>
-                <div>규격</div>
-                <div>수량</div>
-                <div>톤수</div>
+                {["품목", "규격", "수량", "톤수"].map((label, i) => (
+                  <div key={label} style={{ position: "relative" }}>
+                    {label}
+                    <ColResizeHandle onMouseDown={startRowResize(i)} />
+                  </div>
+                ))}
               </div>
               <div style={{ maxHeight: 260, overflow: "auto" }}>
                 {items.map((it, idx) =>
                   excludedIdxs.has(idx) ? null : (
-                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "26px 1fr 1fr 70px 130px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}>
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: rowGridTemplate, gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content" }}>
                       <input type="checkbox" checked={checkedRowIdxs.has(idx)} onChange={() => toggleRowChecked(idx)} />
                       <div>{it.item}</div>
                       <div>{it.spec}</div>
