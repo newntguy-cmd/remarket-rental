@@ -1355,7 +1355,7 @@ function Dashboard({ profile, onLogout }) {
   }
 
   const menuItems = [
-    ...(isStaff ? [{ key: "quickcalc", label: "톤수/배송비/품목별데이터" }] : []),
+    ...(isStaff ? [{ key: "quickcalc", label: "품목별데이터/톤수/배송비" }] : []),
     ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
     ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
     ...(isStaff ? [{ key: "shares", label: "지분관리" }] : []),
@@ -1388,7 +1388,7 @@ function Dashboard({ profile, onLogout }) {
       <div style={{ maxWidth: 1600, margin: "0 auto", padding: "28px 24px 60px", display: "flex", gap: 24, alignItems: "flex-start" }}>
         <aside
           style={{
-            width: 190,
+            width: 232,
             flexShrink: 0,
             border: `1px solid ${C.line}`,
             borderRadius: 6,
@@ -1427,6 +1427,7 @@ function Dashboard({ profile, onLogout }) {
                   fontWeight: active ? 600 : 500,
                   cursor: "pointer",
                   fontFamily: sans,
+                  whiteSpace: "nowrap",
                 }}
               >
                 {m.label}
@@ -2447,17 +2448,23 @@ function withComputedTons(items, customOverrides) {
 
 // 품목명+규격별로 수량을 합산해서 "현장에 총 몇 개인지" 보여주는 품목별 데이터 집계.
 // 배송비/설치비 등 요금성 품목(withComputedTons가 이미 tonExcluded로 표시해둔 것)은 물리적 수량이 아니므로 자동으로 뺀다.
-function groupItemQuantities(items) {
+// excludedIdxs에 들어있는 행(사용자가 직접 선택삭제한 행)도 함께 뺀다.
+// idxs에는 이 그룹으로 합쳐진 원본 items 배열의 인덱스를 모아둬서, 그룹 단위 선택삭제 시 어떤 행을 뺄지 알 수 있게 한다.
+// 정렬은 화면(컴포넌트)에서 사용자가 고른 기준으로 하므로, 여기서는 정렬하지 않고 그대로 반환한다.
+function groupItemQuantities(items, excludedIdxs) {
   const map = new Map();
-  for (const it of items || []) {
-    if (it.tonExcluded) continue;
+  (items || []).forEach((it, idx) => {
+    if (it.tonExcluded) return;
+    if (excludedIdxs && excludedIdxs.has(idx)) return;
     const itemName = (it.item || "").trim() || "(품목명 없음)";
     const specName = (it.spec || "").trim();
     const key = `${itemName}〓${specName}`;
-    if (!map.has(key)) map.set(key, { key, item: itemName, spec: specName, qty: 0 });
-    map.get(key).qty += Number(it.qty) || 0;
-  }
-  return Array.from(map.values()).sort((a, b) => b.qty - a.qty || a.item.localeCompare(b.item, "ko"));
+    if (!map.has(key)) map.set(key, { key, item: itemName, spec: specName, qty: 0, idxs: [] });
+    const e = map.get(key);
+    e.qty += Number(it.qty) || 0;
+    e.idxs.push(idx);
+  });
+  return Array.from(map.values());
 }
 
 // ---------- 견적서를 등록하지 않고 붙여넣기만으로 톤수/배송비를 미리 확인하는 기능 ----------
@@ -2923,85 +2930,21 @@ async function geocodeAddress(address) {
   });
 }
 
-// 배송지 주소를 입력하면 카카오 로드뷰(거리뷰)로 그 근처 실제 사진을 미리 보여준다.
-// 로드뷰 사진이 없는 위치(파노라마가 촬영 안 된 골목 등)는 조용히 안내 문구만 보여준다.
-// containerRef가 가리키는 div는 항상 비워두고(React가 관리하는 자식을 넣지 않고) 카카오 SDK가 직접
-// DOM을 그려 넣게 해서, React 재렌더링과 충돌(예: "removeChild" 오류)이 나지 않게 한다.
-function AddressRoadview({ address }) {
-  const containerRef = useRef(null);
-  const [status, setStatus] = useState("idle"); // idle | loading | ready | notfound | error
-
-  useEffect(() => {
-    let cancelled = false;
-    setStatus(address ? "loading" : "idle");
-    if (!address) return;
-    // 타이핑 중에는 계속 호출하지 않도록, 입력이 잠깐 멈췄을 때만 조회한다.
-    const timer = setTimeout(async () => {
-      const kakao = await loadKakaoMapsSdk();
-      if (cancelled) return;
-      if (!kakao) {
-        setStatus("error");
-        return;
-      }
-      const coords = await geocodeAddress(address);
-      if (cancelled) return;
-      if (!coords) {
-        setStatus("notfound");
-        return;
-      }
-      try {
-        const position = new kakao.maps.LatLng(coords.lat, coords.lng);
-        const client = new kakao.maps.RoadviewClient();
-        client.getNearestPanoId(position, 50, (panoId) => {
-          if (cancelled) return;
-          if (!panoId) {
-            setStatus("notfound");
-            return;
-          }
-          if (!containerRef.current) return;
-          containerRef.current.innerHTML = ""; // 이전 로드뷰가 남아있으면 지우고 새로 그린다
-          const roadview = new kakao.maps.Roadview(containerRef.current);
-          roadview.setPanoId(panoId, position);
-          setStatus("ready");
-        });
-      } catch {
-        setStatus("error");
-      }
-    }, 500);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [address]);
-
-  if (!address) return null;
-
+// 로드뷰를 화면에 직접 띄우지 않고, 카카오맵/네이버지도로 바로 이동해서 로드뷰·거리뷰를 볼 수 있는 링크 버튼만 보여준다.
+// (배송지 정보 버튼에서 쓰는 것과 같은 링크 방식 — 새 탭에서 열려서 필요할 때만 클릭해서 본다)
+function AddressMapLinks({ address }) {
+  const na = normalizeAddressText(address);
+  if (!na) return null;
+  const kakaoUrl = `https://map.kakao.com/link/search/${encodeURIComponent(na)}`;
+  const naverUrl = `https://map.naver.com/p/search/${encodeURIComponent(na)}`;
   return (
-    <div style={{ marginTop: 12, width: "100%" }}>
-      <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 6 }}>배송지 로드뷰</div>
-      <div style={{ position: "relative", width: "100%", height: 220, border: `1px solid ${C.lineSoft}`, background: C.bg }}>
-        <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
-        {status !== "ready" && (
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 12,
-              color: C.muted,
-              pointerEvents: "none",
-              textAlign: "center",
-              padding: "0 12px",
-            }}
-          >
-            {status === "loading" && "로드뷰를 불러오는 중…"}
-            {status === "notfound" && "이 주소 근처엔 로드뷰 사진이 없어요"}
-            {status === "error" && "로드뷰를 불러오지 못했어요(지도 설정을 확인해주세요)"}
-          </div>
-        )}
-      </div>
+    <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+      <a href={kakaoUrl} target="_blank" rel="noreferrer" style={{ ...miniBtnStyle, textDecoration: "none", textAlign: "center" }}>
+        카카오맵·로드뷰
+      </a>
+      <a href={naverUrl} target="_blank" rel="noreferrer" style={{ ...miniBtnStyle, textDecoration: "none", textAlign: "center" }}>
+        네이버지도
+      </a>
     </div>
   );
 }
@@ -3296,14 +3239,114 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
     [rawItems, tonOverrides, tonEdits]
   );
 
-  const applicable = items.filter((it) => !it.tonExcluded);
+  // 사용자가 "선택삭제"로 이 계산에서 뺀 행(원본 items 배열의 인덱스 기준). 카드①(품목별 데이터)·카드②(톤수 계산)
+  // 둘 중 어디서 빼도 같은 excludedIdxs를 공유해서, 톤수·배송비 계산에 곧바로 함께 반영된다.
+  // 붙여넣은 내용이 바뀌면(행 구성이 달라지면) 이전 인덱스가 더 이상 맞지 않으므로 초기화한다.
+  const [excludedIdxs, setExcludedIdxs] = useState(() => new Set());
+  useEffect(() => {
+    setExcludedIdxs(new Set());
+  }, [rawItems]);
+
+  const applicable = items.filter((it, idx) => !it.tonExcluded && !excludedIdxs.has(idx));
   const known = applicable.filter((it) => it.ton != null);
   const totalTon = known.reduce((sum, it) => sum + Number(it.ton), 0);
   const missingCount = applicable.length - known.length;
 
   // 품목별 데이터: 같은 품목명+규격끼리 수량을 합산해서 "현장에 총 몇 개인지" 한눈에 보여준다.
-  const groupedItemStats = useMemo(() => groupItemQuantities(items), [items]);
+  // 품목/규격/총수량 머리글을 눌러 정렬 기준·방향을 바꿀 수 있다(기본은 총수량 많은순).
+  const rawGroupedStats = useMemo(() => groupItemQuantities(items, excludedIdxs), [items, excludedIdxs]);
+  const [groupSortKey, setGroupSortKey] = useState("qty"); // "item" | "spec" | "qty"
+  const [groupSortDir, setGroupSortDir] = useState("desc"); // "asc" | "desc"
+  function toggleGroupSort(key) {
+    if (groupSortKey === key) {
+      setGroupSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setGroupSortKey(key);
+      setGroupSortDir(key === "qty" ? "desc" : "asc");
+    }
+  }
+  const groupedItemStats = useMemo(() => {
+    const arr = [...rawGroupedStats];
+    const dir = groupSortDir === "asc" ? 1 : -1;
+    arr.sort((a, b) => {
+      if (groupSortKey === "qty") return (a.qty - b.qty) * dir;
+      const av = groupSortKey === "item" ? a.item : a.spec;
+      const bv = groupSortKey === "item" ? b.item : b.spec;
+      return (av || "").localeCompare(bv || "", "ko") * dir;
+    });
+    return arr;
+  }, [rawGroupedStats, groupSortKey, groupSortDir]);
   const groupedItemTotalQty = groupedItemStats.reduce((s, r) => s + r.qty, 0);
+
+  // 카드① 품목별 데이터의 체크박스 선택삭제 상태(붙여넣은 내용이 바뀌면 초기화)
+  const [checkedGroupKeys, setCheckedGroupKeys] = useState(() => new Set());
+  useEffect(() => {
+    setCheckedGroupKeys(new Set());
+  }, [rawItems]);
+  function toggleGroupChecked(key) {
+    setCheckedGroupKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+  function toggleGroupCheckedAll() {
+    setCheckedGroupKeys((prev) => (prev.size === groupedItemStats.length ? new Set() : new Set(groupedItemStats.map((r) => r.key))));
+  }
+  // 선택한 품목(그룹)을 이 계산에서 제외한다 — 그 품목·규격으로 합쳐졌던 원본 행 전부(idxs)를 excludedIdxs에 더한다.
+  function handleDeleteSelectedGroups() {
+    const chosen = groupedItemStats.filter((r) => checkedGroupKeys.has(r.key));
+    if (chosen.length === 0) return;
+    if (!confirm(`선택한 품목 ${chosen.length}종을 이 계산에서 제외할까요? (다시 붙여넣으면 언제든 되돌아와요)`)) return;
+    setExcludedIdxs((prev) => {
+      const next = new Set(prev);
+      for (const r of chosen) for (const idx of r.idxs) next.add(idx);
+      return next;
+    });
+    setCheckedGroupKeys(new Set());
+  }
+
+  // 카드② 톤수 계산의 체크박스 선택삭제 상태(원본 행 인덱스 기준, 붙여넣은 내용이 바뀌면 초기화)
+  const [checkedRowIdxs, setCheckedRowIdxs] = useState(() => new Set());
+  useEffect(() => {
+    setCheckedRowIdxs(new Set());
+  }, [rawItems]);
+  const visibleRowIdxs = items.map((_, idx) => idx).filter((idx) => !excludedIdxs.has(idx));
+  function toggleRowChecked(idx) {
+    setCheckedRowIdxs((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  }
+  function toggleRowCheckedAll() {
+    setCheckedRowIdxs((prev) => (prev.size === visibleRowIdxs.length ? new Set() : new Set(visibleRowIdxs)));
+  }
+  function handleDeleteSelectedRows() {
+    if (checkedRowIdxs.size === 0) return;
+    if (!confirm(`선택한 품목 ${checkedRowIdxs.size}개를 이 계산에서 제외할까요? (다시 붙여넣으면 언제든 되돌아와요)`)) return;
+    setExcludedIdxs((prev) => new Set([...prev, ...checkedRowIdxs]));
+    setCheckedRowIdxs(new Set());
+  }
+
+  // 카드①·② 어디서 뺐든 한 번에 되돌리는 복원 버튼(요약 바에 표시)
+  function handleRestoreExcluded() {
+    setExcludedIdxs(new Set());
+  }
+
+  // 카드① 품목별 데이터 인쇄/PDF 저장 — 인쇄 중엔 문서 제목을 잠깐 바꿔서 인쇄 머리글·PDF 기본 파일명도 "품목별 데이터"가 되게 한다.
+  function handlePrintGroupedItems() {
+    const prevTitle = document.title;
+    document.title = "품목별 데이터";
+    const restoreTitle = () => {
+      document.title = prevTitle;
+    };
+    window.addEventListener("afterprint", restoreTitle, { once: true });
+    window.print();
+    setTimeout(restoreTitle, 2000); // afterprint가 못 붙는 브라우저를 위한 안전장치
+  }
 
   async function saveTonOverride(idx) {
     const it = items[idx];
@@ -3334,7 +3377,7 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
 
   return (
     <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20 }}>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>톤수/배송비/품목별데이터</div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>품목별데이터/톤수/배송비</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
         견적서를 등록하지 않고도 품목별 수량·톤수·배송비를 한번에 확인할 수 있어요. 엑셀에서 품목표(품목/규격/수량 칸)를 그대로 복사해서 아래에 붙여넣어보세요.
         헤더(품목/규격/수량 등)까지 같이 복사하면 더 정확하게 읽혀요. 여기서 계산한 내용은 등록되지 않고, 톤수를 직접 입력해서 저장한 값만 기준표에 남아요.
@@ -3349,14 +3392,31 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
 
       {items.length > 0 && (
         <>
-          <div style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
+          <style>{`
+            @media print {
+              body * { visibility: hidden; }
+              #qtc-itemstats-print-area, #qtc-itemstats-print-area * { visibility: visible; }
+              #qtc-itemstats-print-area { position: absolute; top: 0; left: 0; width: 100%; padding: 24px; }
+              .qtc-no-print { display: none !important; }
+            }
+          `}</style>
+
+          <div className="qtc-no-print" style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
             <StatCell label="품목 종류" value={`${groupedItemStats.length}종`} />
             <StatCell label="총 수량" value={`${groupedItemTotalQty.toLocaleString("ko-KR")}개`} />
             <StatCell label="총 톤수" value={`${totalTon.toFixed(3)}톤`} color={missingCount > 0 ? C.amber : C.green} last />
           </div>
           {missingCount > 0 && (
-            <div style={{ fontSize: 12, color: C.amber, marginTop: -10, marginBottom: 14 }}>
+            <div className="qtc-no-print" style={{ fontSize: 12, color: C.amber, marginTop: -10, marginBottom: 14 }}>
               주의: 톤수 미확인 {missingCount}건이 있어요 — 아래 "톤수 계산" 표의 노란 칸을 직접 채워주세요.
+            </div>
+          )}
+          {excludedIdxs.size > 0 && (
+            <div className="qtc-no-print" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.muted, marginTop: missingCount > 0 ? 0 : -10, marginBottom: 14 }}>
+              <span>제외된 항목 {excludedIdxs.size}개는 이 계산(품목별 데이터·톤수·배송비)에서 빠져있어요.</span>
+              <button type="button" onClick={handleRestoreExcluded} style={{ border: `1px solid ${C.line}`, background: "none", cursor: "pointer", fontSize: 11.5, padding: "3px 8px", color: C.inkSoft }}>
+                복원
+              </button>
             </div>
           )}
 
@@ -3366,78 +3426,152 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
               title="① 품목별 데이터"
               desc="같은 품목·규격끼리 수량을 합쳐서 총 몇 개인지 한눈에 보여줘요 (배송비·설치비 등 요금성 항목은 자동으로 빠져요)"
             />
-            <div style={{ border: `1px solid ${C.lineSoft}` }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
-                <div>품목</div>
-                <div>규격</div>
-                <div style={{ textAlign: "right" }}>총수량</div>
-              </div>
-              <div style={{ maxHeight: 260, overflow: "auto" }}>
-                {groupedItemStats.map((r) => (
-                  <div key={r.key} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 8, padding: "6px 10px", fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}` }}>
-                    <div>{r.item}</div>
-                    <div>{r.spec || "-"}</div>
-                    <div style={{ textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</div>
-                  </div>
-                ))}
-                {groupedItemStats.length === 0 && (
-                  <div style={{ padding: 20, textAlign: "center", color: C.muted, fontSize: 12.5 }}>집계할 품목이 없어요.</div>
+            <div className="qtc-no-print" style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <button type="button" onClick={handlePrintGroupedItems} style={primaryBtnStyle2}>
+                인쇄 / PDF로 저장
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteSelectedGroups}
+                disabled={checkedGroupKeys.size === 0}
+                style={{ ...ghostBtnStyle, opacity: checkedGroupKeys.size === 0 ? 0.5 : 1 }}
+              >
+                {`선택삭제${checkedGroupKeys.size > 0 ? ` (${checkedGroupKeys.size})` : ""}`}
+              </button>
+            </div>
+            <div id="qtc-itemstats-print-area" style={{ border: `1px solid ${C.lineSoft}`, background: "#fff" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <thead>
+                  <tr>
+                    <th className="qtc-no-print" style={{ border: `1px solid ${C.lineSoft}`, padding: "8px 10px", background: C.bg, width: 30 }}>
+                      <input
+                        type="checkbox"
+                        checked={groupedItemStats.length > 0 && checkedGroupKeys.size === groupedItemStats.length}
+                        onChange={toggleGroupCheckedAll}
+                      />
+                    </th>
+                    {[
+                      { label: "품목", key: "item" },
+                      { label: "규격", key: "spec" },
+                      { label: "총수량", key: "qty" },
+                    ].map((h) => (
+                      <th
+                        key={h.key}
+                        onClick={() => toggleGroupSort(h.key)}
+                        style={{
+                          border: `1px solid ${C.lineSoft}`,
+                          padding: "8px 10px",
+                          background: C.bg,
+                          color: C.muted,
+                          fontWeight: 500,
+                          textAlign: h.key === "qty" ? "right" : "left",
+                          cursor: "pointer",
+                          userSelect: "none",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {h.label}
+                        {groupSortKey === h.key ? (groupSortDir === "asc" ? " ▲" : " ▼") : ""}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {groupedItemStats.map((r) => (
+                    <tr key={r.key}>
+                      <td className="qtc-no-print" style={{ border: `1px solid ${C.lineSoft}`, padding: "6px 10px" }}>
+                        <input type="checkbox" checked={checkedGroupKeys.has(r.key)} onChange={() => toggleGroupChecked(r.key)} />
+                      </td>
+                      <td style={{ border: `1px solid ${C.lineSoft}`, padding: "6px 10px" }}>{r.item}</td>
+                      <td style={{ border: `1px solid ${C.lineSoft}`, padding: "6px 10px" }}>{r.spec || "-"}</td>
+                      <td style={{ border: `1px solid ${C.lineSoft}`, padding: "6px 10px", textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</td>
+                    </tr>
+                  ))}
+                  {groupedItemStats.length === 0 && (
+                    <tr>
+                      <td className="qtc-no-print" style={{ border: `1px solid ${C.lineSoft}`, padding: "20px 10px" }}></td>
+                      <td colSpan={3} style={{ border: `1px solid ${C.lineSoft}`, padding: "20px 10px", textAlign: "center", color: C.muted }}>
+                        집계할 품목이 없어요.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+                {groupedItemStats.length > 0 && (
+                  <tfoot>
+                    <tr>
+                      <td className="qtc-no-print" style={{ border: `1px solid ${C.lineSoft}`, padding: "8px 10px", background: C.bg }}></td>
+                      <td colSpan={2} style={{ border: `1px solid ${C.lineSoft}`, padding: "8px 10px", fontWeight: 600, background: C.bg }}>
+                        합계
+                      </td>
+                      <td style={{ border: `1px solid ${C.lineSoft}`, padding: "8px 10px", textAlign: "right", fontWeight: 600, background: C.bg }}>
+                        {groupedItemTotalQty.toLocaleString("ko-KR")}
+                      </td>
+                    </tr>
+                  </tfoot>
                 )}
-              </div>
-              {groupedItemStats.length > 0 && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 8, padding: "8px 10px", fontSize: 12.5, fontWeight: 600, borderTop: `1px solid ${C.lineSoft}`, background: C.bg }}>
-                  <div style={{ gridColumn: "1 / 3" }}>합계</div>
-                  <div style={{ textAlign: "right" }}>{groupedItemTotalQty.toLocaleString("ko-KR")}</div>
-                </div>
-              )}
+              </table>
             </div>
           </div>
 
           {/* 카드② 톤수 계산 — 품목별 실제 톤수와 기준표에 없는 품목의 직접입력/저장 */}
-          <div style={{ border: `1px solid ${C.line}`, borderTop: `3px solid ${C.green}`, background: C.panel, padding: 18, marginBottom: 14 }}>
+          <div className="qtc-no-print" style={{ border: `1px solid ${C.line}`, borderTop: `3px solid ${C.green}`, background: C.panel, padding: 18, marginBottom: 14 }}>
             <InputCardHeader
               title="② 톤수 계산"
               desc="품목별 톤수를 확인하고, 기준표에 없는 품목(노란 칸)은 직접 입력해서 저장하면 다음부터 자동으로 채워져요"
             />
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <button
+                type="button"
+                onClick={handleDeleteSelectedRows}
+                disabled={checkedRowIdxs.size === 0}
+                style={{ ...ghostBtnStyle, opacity: checkedRowIdxs.size === 0 ? 0.5 : 1 }}
+              >
+                {`선택삭제${checkedRowIdxs.size > 0 ? ` (${checkedRowIdxs.size})` : ""}`}
+              </button>
+            </div>
             <div style={{ border: `1px solid ${C.lineSoft}` }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 130px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
+              <div style={{ display: "grid", gridTemplateColumns: "26px 1fr 1fr 70px 130px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center" }}>
+                <input type="checkbox" checked={visibleRowIdxs.length > 0 && checkedRowIdxs.size === visibleRowIdxs.length} onChange={toggleRowCheckedAll} />
                 <div>품목</div>
                 <div>규격</div>
                 <div>수량</div>
                 <div>톤수</div>
               </div>
               <div style={{ maxHeight: 260, overflow: "auto" }}>
-                {items.map((it, idx) => (
-                  <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 130px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}>
-                    <div>{it.item}</div>
-                    <div>{it.spec}</div>
-                    <div>{it.qty}</div>
-                    {it.tonExcluded ? (
-                      <div style={{ fontSize: 11.5, color: C.muted }} title="DC·설치비·배송비 등은 톤수 계산에서 제외돼요">
-                        제외
-                      </div>
-                    ) : (
-                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        <input
-                          type="number"
-                          step="0.001"
-                          style={{ ...smallInputStyle, background: it.ton == null ? "#FFF6E5" : smallInputStyle.background }}
-                          value={tonEdits[idx] !== undefined ? tonEdits[idx] : it.ton ?? ""}
-                          placeholder="직접입력"
-                          onChange={(e) => setTonEdits((prev) => ({ ...prev, [idx]: e.target.value }))}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => saveTonOverride(idx)}
-                          disabled={savingIdx === idx}
-                          style={{ border: `1px solid ${C.line}`, background: "none", cursor: "pointer", fontSize: 11.5, padding: "4px 6px", color: C.inkSoft, flexShrink: 0 }}
-                        >
-                          {savingIdx === idx ? "…" : "저장"}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
+                {items.map((it, idx) =>
+                  excludedIdxs.has(idx) ? null : (
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "26px 1fr 1fr 70px 130px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}>
+                      <input type="checkbox" checked={checkedRowIdxs.has(idx)} onChange={() => toggleRowChecked(idx)} />
+                      <div>{it.item}</div>
+                      <div>{it.spec}</div>
+                      <div>{it.qty}</div>
+                      {it.tonExcluded ? (
+                        <div style={{ fontSize: 11.5, color: C.muted }} title="DC·설치비·배송비 등은 톤수 계산에서 제외돼요">
+                          제외
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <input
+                            type="number"
+                            step="0.001"
+                            style={{ ...smallInputStyle, background: it.ton == null ? "#FFF6E5" : smallInputStyle.background }}
+                            value={tonEdits[idx] !== undefined ? tonEdits[idx] : it.ton ?? ""}
+                            placeholder="직접입력"
+                            onChange={(e) => setTonEdits((prev) => ({ ...prev, [idx]: e.target.value }))}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => saveTonOverride(idx)}
+                            disabled={savingIdx === idx}
+                            style={{ border: `1px solid ${C.line}`, background: "none", cursor: "pointer", fontSize: 11.5, padding: "4px 6px", color: C.inkSoft, flexShrink: 0 }}
+                          >
+                            {savingIdx === idx ? "…" : "저장"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )
+                )}
               </div>
             </div>
             <div style={{ marginTop: 10, fontSize: 13.5 }}>
@@ -3447,7 +3581,7 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
           </div>
 
           {/* 카드③ 배송비 계산 — 거래유형·배송지를 입력하고 기본배송비+용차를 계산 */}
-          <div style={{ border: `1px solid ${C.line}`, borderTop: `3px solid ${C.amber}`, background: C.panel, padding: 18 }}>
+          <div className="qtc-no-print" style={{ border: `1px solid ${C.line}`, borderTop: `3px solid ${C.amber}`, background: C.panel, padding: 18 }}>
             <InputCardHeader
               title="③ 배송비 계산"
               desc="거래유형과 배송지를 입력하면 총 톤수를 기준으로 기본배송비와 용차 추가 비용을 계산할 수 있어요"
@@ -3465,7 +3599,7 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
               />
               <DeliveryFeeButton address={address} transactionType={transactionType} totalTon={totalTon} />
             </div>
-            <AddressRoadview address={address} />
+            <AddressMapLinks address={address} />
           </div>
         </>
       )}
