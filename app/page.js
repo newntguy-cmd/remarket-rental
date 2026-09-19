@@ -1268,8 +1268,8 @@ function Dashboard({ profile, onLogout }) {
   }
 
   const menuItems = [
+    ...(isStaff ? [{ key: "quickcalc", label: "톤수/배송비 계산" }] : []),
     ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
-    ...(isStaff ? [{ key: "quickcalc", label: "빠른 톤수/배송비 계산" }] : []),
     ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
     ...(isStaff ? [{ key: "shares", label: "지분관리" }] : []),
     ...(isStaff ? [{ key: "sales", label: "판매현황" }] : []),
@@ -3048,7 +3048,7 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
 
   return (
     <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20 }}>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>빠른 톤수/배송비 계산</div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>톤수/배송비 계산</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
         견적서를 등록하지 않고도 톤수와 배송비를 먼저 확인할 수 있어요. 엑셀에서 품목표(품목/규격/수량 칸)를 그대로 복사해서 아래에 붙여넣어보세요.
         헤더(품목/규격/수량 등)까지 같이 복사하면 더 정확하게 읽혀요. 여기서 계산한 내용은 등록되지 않고, 톤수를 직접 입력해서 저장한 값만 기준표에 남아요.
@@ -5619,6 +5619,8 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   const [savingManualIn, setSavingManualIn] = useState(false);
   const [deletingVoucherId, setDeletingVoucherId] = useState(null);
   const [deletingBook, setDeletingBook] = useState(false);
+  const [selectedItemIds, setSelectedItemIds] = useState(() => new Set());
+  const [deletingSelected, setDeletingSelected] = useState(false);
 
   useEffect(() => {
     fetchAll();
@@ -5812,6 +5814,42 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     fetchAll();
   }
 
+  function toggleItemSelected(id) {
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const allItemsSelected = sortedItems.length > 0 && sortedItems.every((it) => selectedItemIds.has(it.id));
+  function toggleSelectAllItems() {
+    setSelectedItemIds(allItemsSelected ? new Set() : new Set(sortedItems.map((it) => it.id)));
+  }
+
+  // 체크한 품목(행)을 대장에서 통째로 지운다 — 그 품목의 모든 출고/회수 수량 기록도 같이 지워짐(원본 렌탈 전표는 그대로 남음).
+  async function handleDeleteSelectedItems() {
+    if (selectedItemIds.size === 0) return;
+    if (!confirm(`선택한 품목 ${selectedItemIds.size}개를 삭제할까요? 해당 품목의 모든 출고/회수 수량도 함께 삭제돼요. (원본 렌탈 전표는 그대로 남아있어요)`)) return;
+    const ids = Array.from(selectedItemIds);
+    setDeletingSelected(true);
+    const { error: eErr } = await supabase.from("ledger_entries").delete().in("ledger_item_id", ids);
+    if (eErr) {
+      setDeletingSelected(false);
+      alert("삭제 중 오류가 발생했어요: " + eErr.message);
+      return;
+    }
+    const { error: iErr } = await supabase.from("ledger_items").delete().in("id", ids);
+    setDeletingSelected(false);
+    if (iErr) {
+      alert("삭제 중 오류가 발생했어요: " + iErr.message);
+      return;
+    }
+    setSelectedItemIds(new Set());
+    fetchAll();
+  }
+
   async function handleSaveNote(itemId, text) {
     const { error } = await supabase.from("ledger_items").update({ note: text }).eq("id", itemId);
     if (!error) setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, note: text } : it)));
@@ -5979,10 +6017,26 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
           </div>
         </div>
 
+        {selectedItemIds.size > 0 && (
+          <div className="ledger-no-print" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <span style={{ fontSize: 12.5, color: C.inkSoft }}>{selectedItemIds.size}개 선택됨</span>
+            <button
+              onClick={handleDeleteSelectedItems}
+              disabled={deletingSelected}
+              style={{ ...ghostBtnStyle, borderColor: C.brick, color: C.brick, padding: "5px 10px", fontSize: 12.5 }}
+            >
+              {deletingSelected ? "삭제 중…" : "선택 삭제"}
+            </button>
+          </div>
+        )}
+
         {subTab === "out" && (
           <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 600 }}>
             <thead>
               <tr>
+                <th rowSpan={2} className="ledger-no-print" style={ledgerTh}>
+                  <input type="checkbox" checked={allItemsSelected} onChange={toggleSelectAllItems} />
+                </th>
                 <th rowSpan={2} style={ledgerTh}>품목</th>
                 <th rowSpan={2} style={ledgerTh}>규격</th>
                 <th rowSpan={2} style={ledgerTh}>색상</th>
@@ -6011,6 +6065,9 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
             <tbody>
               {sortedItems.map((it) => (
                 <tr key={it.id}>
+                  <td className="ledger-no-print" style={ledgerTd}>
+                    <input type="checkbox" checked={selectedItemIds.has(it.id)} onChange={() => toggleItemSelected(it.id)} />
+                  </td>
                   {it._rowSpan > 0 && (
                     <td rowSpan={it._rowSpan} style={ledgerTd}>{it.item}</td>
                   )}
@@ -6027,7 +6084,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
               ))}
               {sortedItems.length === 0 && (
                 <tr>
-                  <td colSpan={4} style={{ ...ledgerTd, textAlign: "center", color: C.muted }}>+ 전표 추가로 출고 전표를 등록해주세요.</td>
+                  <td colSpan={5} style={{ ...ledgerTd, textAlign: "center", color: C.muted }}>+ 전표 추가로 출고 전표를 등록해주세요.</td>
                 </tr>
               )}
             </tbody>
@@ -6038,6 +6095,9 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
           <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 600 }}>
             <thead>
               <tr>
+                <th rowSpan={2} className="ledger-no-print" style={ledgerTh}>
+                  <input type="checkbox" checked={allItemsSelected} onChange={toggleSelectAllItems} />
+                </th>
                 <th rowSpan={2} style={ledgerTh}>품목</th>
                 <th rowSpan={2} style={ledgerTh}>규격</th>
                 <th rowSpan={2} style={ledgerTh}>색상</th>
@@ -6073,6 +6133,9 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
                 const remain = outTotal - inTotal;
                 return (
                   <tr key={it.id}>
+                    <td className="ledger-no-print" style={ledgerTd}>
+                      <input type="checkbox" checked={selectedItemIds.has(it.id)} onChange={() => toggleItemSelected(it.id)} />
+                    </td>
                     {it._rowSpan > 0 && (
                       <td rowSpan={it._rowSpan} style={ledgerTd}>{it.item}</td>
                     )}
@@ -6099,7 +6162,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
               })}
               {sortedItems.length === 0 && (
                 <tr>
-                  <td colSpan={7} style={{ ...ledgerTd, textAlign: "center", color: C.muted }}>먼저 출고 탭에서 전표를 추가해주세요.</td>
+                  <td colSpan={8} style={{ ...ledgerTd, textAlign: "center", color: C.muted }}>먼저 출고 탭에서 전표를 추가해주세요.</td>
                 </tr>
               )}
             </tbody>
