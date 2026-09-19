@@ -2962,6 +2962,15 @@ const CHARTERED_TRUCK_OPTIONS = [
 ];
 const CHARTERED_TRUCK_ROWS = CHARTERED_TRUCK_GROUPS.flatMap((g) => g.rows.map((r) => ({ ...r, region: g.region })));
 
+// 용차표 금액(rate 만원 단위 + extra)은 편도(배송 한 번) 기준이다. 렌탈은 계약이 끝나면 회수하러 다시 가야 해서
+// 왕복(편도×2)으로 청구하고, 구매(판매)는 배송 한 번으로 끝나니 편도 그대로 둔다. 미리보기 가격과 실제 계산 결과가
+// 같은 로직을 쓰도록 함수 하나로 뺐다.
+function truckOptionCost(rate, extra, transactionType) {
+  if (rate == null) return null;
+  const oneWay = Math.round(rate * 10000) + extra;
+  return transactionType === "rental" ? oneWay * 2 : oneWay;
+}
+
 function findZoneIndex(zones, address) {
   const a = address || "";
   const idx = zones.findIndex((z) =>
@@ -3203,9 +3212,9 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
         alert(`선택하신 지역(${truckRow.label})엔 ${opt.label} 요금이 없어요. 다른 지역을 선택해주세요.`);
         return;
       }
-      const cost = Math.round(rate * 10000) + opt.extra;
+      const cost = truckOptionCost(rate, opt.extra, transactionType);
       truckTotal += cost;
-      truckDetails.push({ label: opt.label, cost });
+      truckDetails.push({ label: transactionType === "rental" ? `${opt.label} (왕복 ×2)` : opt.label, cost });
     }
     setResult({ base: base.amount, truckTotal, truckDetails, total: base.amount + truckTotal });
   }
@@ -3297,14 +3306,18 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
               실거리 약 {Math.round(geoKm)}km로 90km 구간표를 넘어서 자동 선택을 못 했어요. 지역을 직접 확인해서 요금을 협의해주세요.
             </div>
           )}
+          <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 4 }}>
+            {transactionType === "rental" ? "※ 표시 금액은 회수까지 포함한 왕복(편도×2) 기준이에요" : "※ 표시 금액은 편도 기준이에요"}
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginBottom: 12 }}>
             {CHARTERED_TRUCK_OPTIONS.map((opt) => {
               const rate = truckRow ? truckRow[opt.col] : null;
+              const previewCost = truckOptionCost(rate, opt.extra, transactionType);
               return (
                 <label key={opt.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: rate == null && truckRow ? C.muted : C.ink }}>
                   <input type="checkbox" checked={!!checked[opt.key]} onChange={() => toggleTruck(opt.key)} />
                   {opt.label}
-                  {truckRow && rate != null && <span style={{ color: C.muted, fontSize: 11 }}>({fmtWon(Math.round(rate * 10000) + opt.extra)})</span>}
+                  {truckRow && previewCost != null && <span style={{ color: C.muted, fontSize: 11 }}>({fmtWon(previewCost)})</span>}
                 </label>
               );
             })}
