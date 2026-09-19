@@ -2334,9 +2334,9 @@ const TON_REFERENCE_TABLE = [
   { item: "파티션", spec: "H1200*W1600, PW507", per: 0.014286 },
   { item: "파티션", spec: "H1200*W800, PW507", per: 0.0125 },
   { item: "파티션", spec: "2단 사무의자 확인!", per: 0.014286 },
-  { item: "파티션", spec: "2단, 연체리 / SV", per: 0.025 },
-  { item: "파티션", spec: "스탠드 25평 (단상/인버터/YI-4500)", per: 0.2 },
-  { item: "파티션", spec: "벽걸이 11평 (단상/인버터/YI-6445)", per: 0.05 },
+  { item: "화일박스", spec: "2단, 연체리 / SV", per: 0.025 },
+  { item: "냉난방기", spec: "스탠드 25평 (단상/인버터/YI-4500)", per: 0.2 },
+  { item: "냉난방기", spec: "벽걸이 11평 (단상/인버터/YI-6445)", per: 0.05 },
   { item: "이동서랍", spec: "3단, 화이트", per: 0.0125 },
   { item: "책장", spec: "5단올문장 / 시건장치 / 화이트", per: 0.1 },
   { item: "캐비닛", spec: "5단올문, 철제", per: 0.1 },
@@ -2352,11 +2352,11 @@ const TON_REFERENCE_TABLE = [
   { item: "일반 파티션\n45T", spec: "H1800*W1000, PW503", per: 0.02 },
   { item: "일반 파티션\n45T", spec: "H1800*W700, PW503", per: 0.02 },
   { item: "냉난방기", spec: "벽걸이 11평 (YI-6445)", per: 0.05 },
-  { item: "냉난방기", spec: "근무현황판, W900", per: 0.01 },
+  { item: "근무상황판", spec: "근무현황판, W900", per: 0.01 },
   { item: "냉난방기", spec: "스탠드 25평 (YI-3998)", per: 0.2 },
   { item: "냉장고", spec: "150리터", per: 0.1 },
   { item: "냉난방기", spec: "벽걸이 9평 (단상, 인버터)", per: 0.05 },
-  { item: "냉난방기", spec: "4단올문장, 연체리", per: 0.1 },
+  { item: "책장", spec: "4단올문장, 연체리", per: 0.1 },
   { item: "냉난방기", spec: "스탠드 30평 (3상, 인버터)", per: 0.2 },
   { item: "냉난방기", spec: "벽걸이 13평 (단상, 인버터)", per: 0.05 },
   { item: "냉난방기", spec: "스탠드 25평 (단상, 인버터)", per: 0.2 },
@@ -2934,7 +2934,7 @@ const CHARTERED_TRUCK_GROUPS = [
     rows: [
       { label: "문경,영주,예천,상주", keywords: ["문경", "영주", "예천", "상주"], ton1: 19, ton2_5: 27, ton5: 34 },
       { label: "안동,의성,봉화", keywords: ["안동", "의성", "봉화"], ton1: 21, ton2_5: 30, ton5: 35 },
-      { label: "대구,구미,군위,영천,성주", keywords: ["대구", "구미", "군위", "영천", "성주"], ton1: 22, ton2_5: 33, ton5: 37 },
+      { label: "대구,구미,군위,영천,성주,경산", keywords: ["대구", "구미", "군위", "영천", "성주", "경산"], ton1: 22, ton2_5: 33, ton5: 37 },
       { label: "고령,울진,청도,칠곡", keywords: ["고령", "울진", "청도", "칠곡"], ton1: 23, ton2_5: 34, ton5: 40 },
       { label: "경주,영덕,영양,포항", keywords: ["경주", "영덕", "영양", "포항"], ton1: 24, ton2_5: 35, ton5: 42 },
     ],
@@ -3099,12 +3099,17 @@ function haversineKm(a, b) {
 const ROAD_DISTANCE_FACTOR = 1.3;
 
 // 보정된 거리(km)로 서울/수도권 용차 구간(10km 이하 ~ 90km 미만) 중 맞는 행을 찾는다.
+// 표 자체가 90km까지만 있어서, 그보다 먼 곳은 더 이상 "서울/수도권" 성격이 아니라 지역별 요금표(강원/충청/전라/경상)
+// 쪽에서 다뤄야 할 거리다. 예전엔 이런 경우도 그냥 "90km 미만" 칸에 억지로 끼워 넣어서, 실제로는 200km 넘게
+// 떨어진 곳인데도 화면엔 "90km 미만"이라고 표시되고 요금도 그만큼 훨씬 저렴하게 잡히는 문제가 있었다(예: 용인 기흥구
+// 공세동 ↔ 경북 경산시). 그래서 90km를 넘으면 자동 선택을 아예 하지 않고 null을 반환해서, 화면에서 "직접 확인
+// 필요" 경고를 보여주고 사용자가 지역을 스스로 골라야만 하도록 바꿨다.
 function findTruckRowByDistanceKm(km) {
   const seoul = CHARTERED_TRUCK_GROUPS.find((g) => g.region === "서울/수도권");
   if (!seoul || km == null) return null;
   const thresholds = [10, 20, 30, 50, 70, 90]; // rows 순서(10km 이하/20km 미만/.../90km 미만)와 1:1 대응
-  let idx = thresholds.findIndex((t) => km <= t);
-  if (idx === -1) idx = thresholds.length - 1; // 90km 넘으면 가장 먼 구간으로 잡아두되, 실제로는 직접 확인 필요
+  const idx = thresholds.findIndex((t) => km <= t);
+  if (idx === -1) return null; // 90km 초과 — 서울/수도권 구간표 밖이라 자동 선택하지 않는다.
   const row = seoul.rows[idx];
   if (!row) return null;
   return CHARTERED_TRUCK_ROWS.findIndex((r) => r.region === "서울/수도권" && r.label === row.label);
@@ -3142,9 +3147,11 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
   const [geoTruckRowIdx, setGeoTruckRowIdx] = useState(null);
   const [geoLoading, setGeoLoading] = useState(false);
   const [geoFailed, setGeoFailed] = useState(false);
+  const [geoKm, setGeoKm] = useState(null); // 계산된 실거리(km, 보정 후) — 90km 초과 경고 문구에 사용
   useEffect(() => {
     setGeoTruckRowIdx(null);
     setGeoFailed(false);
+    setGeoKm(null);
     if (!address || autoTruckRowIdx != null) return;
     let cancelled = false;
     setGeoLoading(true);
@@ -3157,6 +3164,7 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
         return;
       }
       const km = haversineKm(origin, dest) * ROAD_DISTANCE_FACTOR;
+      setGeoKm(km);
       setGeoTruckRowIdx(findTruckRowByDistanceKm(km));
     })();
     return () => {
@@ -3282,6 +3290,11 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
           {geoFailed && autoTruckRowIdx == null && (
             <div style={{ fontSize: 11, color: "#B45309", marginBottom: 6 }}>
               거리를 자동으로 계산하지 못했어요(지도 API 설정이 안 됐거나 주소를 못 찾았어요). 구간을 직접 선택해주세요.
+            </div>
+          )}
+          {!geoFailed && !geoLoading && autoTruckRowIdx == null && geoKm != null && geoTruckRowIdx == null && (
+            <div style={{ fontSize: 11, color: "#B45309", marginBottom: 6 }}>
+              실거리 약 {Math.round(geoKm)}km로 90km 구간표를 넘어서 자동 선택을 못 했어요. 지역을 직접 확인해서 요금을 협의해주세요.
             </div>
           )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginBottom: 12 }}>
