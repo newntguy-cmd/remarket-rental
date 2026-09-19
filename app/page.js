@@ -1355,7 +1355,7 @@ function Dashboard({ profile, onLogout }) {
   }
 
   const menuItems = [
-    ...(isStaff ? [{ key: "quickcalc", label: "톤수/배송비/품목별데이터", icon: "🧮" }] : []),
+    ...(isStaff ? [{ key: "quickcalc", label: "톤수 · 배송비 · 품목데이터", icon: "🧮" }] : []),
     ...(isStaff ? [{ key: "quote", label: "견적서 업로드", icon: "📥" }] : []),
     ...(isStaff ? [{ key: "rentals", label: "렌탈내역", icon: "📒" }] : []),
     ...(isStaff ? [{ key: "shares", label: "지분관리", icon: "🤝" }] : []),
@@ -1834,6 +1834,41 @@ function InputCardHeader({ icon, iconBg, title, desc }) {
         <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{title}</div>
         <div style={{ fontSize: 11.5, color: C.muted, marginTop: 1 }}>{desc}</div>
       </div>
+    </div>
+  );
+}
+
+// STEP n 배지 — 가로 스텝 플로우 카드의 상단에 붙여서 "N번째 단계"라는 걸 색으로 바로 알 수 있게 한다.
+function StepBadge({ n, color }) {
+  return (
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 18,
+          height: 18,
+          borderRadius: "50%",
+          background: color,
+          color: "#fff",
+          fontSize: 10.5,
+          fontWeight: 700,
+        }}
+      >
+        {n}
+      </span>
+      <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2, color }}>STEP {n}</span>
+    </div>
+  );
+}
+
+// 카드와 카드 사이를 이어주는 화살표 — 가로 스텝 플로우에서 "다음 단계로 이어진다"는 흐름을 보여준다.
+// 화면이 좁아지면(카드가 세로로 쌓이면) rm-flow-arrow 클래스가 숨겨진다(아래 <style> 참고).
+function FlowArrow() {
+  return (
+    <div className="rm-flow-arrow" style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: "0 0 34px", color: C.line, fontSize: 22, alignSelf: "center" }}>
+      ➜
     </div>
   );
 }
@@ -3379,10 +3414,12 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
 
   return (
     <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20 }}>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>톤수/배송비/품목별데이터</div>
+      <div style={{ fontFamily: serif, fontSize: 18, marginBottom: 4, letterSpacing: 0.2 }}>
+        톤수 <span style={{ color: C.line }}>·</span> 배송비 <span style={{ color: C.line }}>·</span> 품목데이터
+      </div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
-        견적서를 등록하지 않고도 품목별 수량·톤수·배송비를 한번에 확인할 수 있어요. 엑셀에서 품목표(품목/규격/수량 칸)를 그대로 복사해서 아래에 붙여넣어보세요.
-        헤더(품목/규격/수량 등)까지 같이 복사하면 더 정확하게 읽혀요. 여기서 계산한 내용은 등록되지 않고, 톤수를 직접 입력해서 저장한 값만 기준표에 남아요.
+        엑셀에서 품목표(품목/규격/수량 칸)를 그대로 복사해서 붙여넣기만 하면, 품목집계 → 톤수 → 배송비 세 단계가 한 번에 계산돼요.
+        헤더(품목/규격/수량 등)까지 같이 복사하면 더 정확하게 읽혀요. 견적서로 등록되진 않고, 톤수를 직접 입력해서 저장한 값만 기준표에 남아요.
       </div>
 
       <textarea
@@ -3394,7 +3431,14 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
 
       {items.length > 0 && (
         <>
-          <div style={{ display: "flex", border: `1px solid ${C.line}`, background: C.panel, marginBottom: 16 }}>
+          <style>{`
+            @media (max-width: 980px) {
+              .rm-flow-arrow { display: none; }
+              .rm-flow-card { min-width: 100% !important; }
+            }
+          `}</style>
+
+          <div style={{ display: "flex", border: `1px solid ${C.line}`, borderRadius: 8, background: C.panel, marginBottom: 16, overflow: "hidden" }}>
             <StatCell label="품목 종류" value={`${groupedItemStats.length}종`} />
             <StatCell label="총 수량" value={`${groupedItemTotalQty.toLocaleString("ko-KR")}개`} />
             <StatCell label="총 톤수" value={`${totalTon.toFixed(3)}톤`} color={missingCount > 0 ? C.amber : C.green} last />
@@ -3405,118 +3449,137 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
             </div>
           )}
 
-          {/* 카드① 품목별 데이터 — 현장에 흩어진 수량을 품목·규격별로 합쳐서 총 개수만 보여준다(요금성 품목은 자동 제외) */}
-          <div style={{ border: `1px solid ${C.line}`, borderTop: `3px solid ${C.purple}`, background: C.panel, padding: 18, marginBottom: 14 }}>
-            <InputCardHeader
-              icon="📦"
-              iconBg={C.purpleBg}
-              title="① 품목별 데이터"
-              desc="같은 품목·규격끼리 수량을 합쳐서 총 몇 개인지 한눈에 보여줘요 (배송비·설치비 등 요금성 항목은 자동으로 빠져요)"
-            />
-            <div style={{ border: `1px solid ${C.lineSoft}` }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
-                <div>품목</div>
-                <div>규격</div>
-                <div style={{ textAlign: "right" }}>총수량</div>
-              </div>
-              <div style={{ maxHeight: 260, overflow: "auto" }}>
-                {groupedItemStats.map((r) => (
-                  <div key={r.key} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 8, padding: "6px 10px", fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}` }}>
-                    <div>{r.item}</div>
-                    <div>{r.spec || "-"}</div>
-                    <div style={{ textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</div>
+          {/* 붙여넣기 → 품목집계 → 톤수 → 배송비, 3개 카드를 화살표로 이어서 계산 흐름이 한눈에 보이게 한다 */}
+          <div style={{ display: "flex", alignItems: "stretch", gap: 0, flexWrap: "wrap" }}>
+            {/* 카드① 품목별 데이터 — 현장에 흩어진 수량을 품목·규격별로 합쳐서 총 개수만 보여준다(요금성 품목은 자동 제외) */}
+            <div
+              className="rm-flow-card"
+              style={{ flex: "1 1 300px", minWidth: 280, border: `1px solid ${C.line}`, borderTop: `3px solid ${C.purple}`, borderRadius: 10, background: C.panel, padding: 18, boxShadow: "0 4px 14px rgba(107,92,165,0.08)" }}
+            >
+              <StepBadge n={1} color={C.purple} />
+              <InputCardHeader
+                icon="📦"
+                iconBg={C.purpleBg}
+                title="품목별 데이터"
+                desc="같은 품목·규격끼리 수량을 합쳐서 총 몇 개인지 보여줘요 (배송비·설치비 등 요금성 항목은 자동 제외)"
+              />
+              <div style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 6, overflow: "hidden" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
+                  <div>품목</div>
+                  <div>규격</div>
+                  <div style={{ textAlign: "right" }}>총수량</div>
+                </div>
+                <div style={{ maxHeight: 260, overflow: "auto" }}>
+                  {groupedItemStats.map((r) => (
+                    <div key={r.key} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 8, padding: "6px 10px", fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}` }}>
+                      <div>{r.item}</div>
+                      <div>{r.spec || "-"}</div>
+                      <div style={{ textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</div>
+                    </div>
+                  ))}
+                  {groupedItemStats.length === 0 && (
+                    <div style={{ padding: 20, textAlign: "center", color: C.muted, fontSize: 12.5 }}>집계할 품목이 없어요.</div>
+                  )}
+                </div>
+                {groupedItemStats.length > 0 && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 8, padding: "8px 10px", fontSize: 12.5, fontWeight: 600, borderTop: `1px solid ${C.lineSoft}`, background: C.bg }}>
+                    <div style={{ gridColumn: "1 / 3" }}>합계</div>
+                    <div style={{ textAlign: "right" }}>{groupedItemTotalQty.toLocaleString("ko-KR")}</div>
                   </div>
-                ))}
-                {groupedItemStats.length === 0 && (
-                  <div style={{ padding: 20, textAlign: "center", color: C.muted, fontSize: 12.5 }}>집계할 품목이 없어요.</div>
                 )}
               </div>
-              {groupedItemStats.length > 0 && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 8, padding: "8px 10px", fontSize: 12.5, fontWeight: 600, borderTop: `1px solid ${C.lineSoft}`, background: C.bg }}>
-                  <div style={{ gridColumn: "1 / 3" }}>합계</div>
-                  <div style={{ textAlign: "right" }}>{groupedItemTotalQty.toLocaleString("ko-KR")}</div>
-                </div>
-              )}
             </div>
-          </div>
 
-          {/* 카드② 톤수 계산 — 품목별 실제 톤수와 기준표에 없는 품목의 직접입력/저장 */}
-          <div style={{ border: `1px solid ${C.line}`, borderTop: `3px solid ${C.green}`, background: C.panel, padding: 18, marginBottom: 14 }}>
-            <InputCardHeader
-              icon="🚚"
-              iconBg={C.greenBg}
-              title="② 톤수 계산"
-              desc="품목별 톤수를 확인하고, 기준표에 없는 품목(노란 칸)은 직접 입력해서 저장하면 다음부터 자동으로 채워져요"
-            />
-            <div style={{ border: `1px solid ${C.lineSoft}` }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 130px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
-                <div>품목</div>
-                <div>규격</div>
-                <div>수량</div>
-                <div>톤수</div>
-              </div>
-              <div style={{ maxHeight: 260, overflow: "auto" }}>
-                {items.map((it, idx) => (
-                  <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 130px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}>
-                    <div>{it.item}</div>
-                    <div>{it.spec}</div>
-                    <div>{it.qty}</div>
-                    {it.tonExcluded ? (
-                      <div style={{ fontSize: 11.5, color: C.muted }} title="DC·설치비·배송비 등은 톤수 계산에서 제외돼요">
-                        제외
-                      </div>
-                    ) : (
-                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        <input
-                          type="number"
-                          step="0.001"
-                          style={{ ...smallInputStyle, background: it.ton == null ? "#FFF6E5" : smallInputStyle.background }}
-                          value={tonEdits[idx] !== undefined ? tonEdits[idx] : it.ton ?? ""}
-                          placeholder="직접입력"
-                          onChange={(e) => setTonEdits((prev) => ({ ...prev, [idx]: e.target.value }))}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => saveTonOverride(idx)}
-                          disabled={savingIdx === idx}
-                          style={{ border: `1px solid ${C.line}`, background: "none", cursor: "pointer", fontSize: 11.5, padding: "4px 6px", color: C.inkSoft, flexShrink: 0 }}
-                        >
-                          {savingIdx === idx ? "…" : "저장"}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div style={{ marginTop: 10, fontSize: 13.5 }}>
-              총 톤수 <strong>{totalTon.toFixed(3)}톤</strong>
-              {missingCount > 0 && <span style={{ color: "#B45309", fontSize: 12.5 }}> (미확인 {missingCount}건)</span>}
-            </div>
-          </div>
+            <FlowArrow />
 
-          {/* 카드③ 배송비 계산 — 거래유형·배송지를 입력하고 기본배송비+용차를 계산 */}
-          <div style={{ border: `1px solid ${C.line}`, borderTop: `3px solid ${C.amber}`, background: C.panel, padding: 18 }}>
-            <InputCardHeader
-              icon="💰"
-              iconBg={C.amberBg}
-              title="③ 배송비 계산"
-              desc="거래유형과 배송지를 입력하면 총 톤수를 기준으로 기본배송비와 용차 추가 비용을 계산할 수 있어요"
-            />
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <select style={{ ...inputStyle, fontSize: 12.5, padding: "5px 8px", width: "auto" }} value={transactionType} onChange={(e) => setTransactionType(e.target.value)}>
-                <option value="rental">렌탈</option>
-                <option value="purchase">구매</option>
-              </select>
-              <input
-                style={{ ...inputStyle, fontSize: 12.5, padding: "5px 8px", width: 200 }}
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="배송지 주소"
+            {/* 카드② 톤수 계산 — 품목별 실제 톤수와 기준표에 없는 품목의 직접입력/저장 */}
+            <div
+              className="rm-flow-card"
+              style={{ flex: "1 1 300px", minWidth: 280, border: `1px solid ${C.line}`, borderTop: `3px solid ${C.green}`, borderRadius: 10, background: C.panel, padding: 18, boxShadow: "0 4px 14px rgba(63,122,92,0.08)" }}
+            >
+              <StepBadge n={2} color={C.green} />
+              <InputCardHeader
+                icon="🚚"
+                iconBg={C.greenBg}
+                title="톤수 계산"
+                desc="품목별 톤수를 확인하고, 기준표에 없는 품목(노란 칸)은 직접 입력해서 저장하면 다음부터 자동으로 채워져요"
               />
-              <DeliveryFeeButton address={address} transactionType={transactionType} totalTon={totalTon} />
+              <div style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 6, overflow: "hidden" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 130px", gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
+                  <div>품목</div>
+                  <div>규격</div>
+                  <div>수량</div>
+                  <div>톤수</div>
+                </div>
+                <div style={{ maxHeight: 260, overflow: "auto" }}>
+                  {items.map((it, idx) => (
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 130px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}>
+                      <div>{it.item}</div>
+                      <div>{it.spec}</div>
+                      <div>{it.qty}</div>
+                      {it.tonExcluded ? (
+                        <div style={{ fontSize: 11.5, color: C.muted }} title="DC·설치비·배송비 등은 톤수 계산에서 제외돼요">
+                          제외
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <input
+                            type="number"
+                            step="0.001"
+                            style={{ ...smallInputStyle, background: it.ton == null ? "#FFF6E5" : smallInputStyle.background }}
+                            value={tonEdits[idx] !== undefined ? tonEdits[idx] : it.ton ?? ""}
+                            placeholder="직접입력"
+                            onChange={(e) => setTonEdits((prev) => ({ ...prev, [idx]: e.target.value }))}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => saveTonOverride(idx)}
+                            disabled={savingIdx === idx}
+                            style={{ border: `1px solid ${C.line}`, background: "none", cursor: "pointer", fontSize: 11.5, padding: "4px 6px", color: C.inkSoft, flexShrink: 0 }}
+                          >
+                            {savingIdx === idx ? "…" : "저장"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ marginTop: 10, fontSize: 13.5 }}>
+                총 톤수 <strong>{totalTon.toFixed(3)}톤</strong>
+                {missingCount > 0 && <span style={{ color: "#B45309", fontSize: 12.5 }}> (미확인 {missingCount}건)</span>}
+              </div>
             </div>
-            <AddressRoadview address={address} />
+
+            <FlowArrow />
+
+            {/* 카드③ 배송비 계산 — 거래유형·배송지를 입력하고 기본배송비+용차를 계산 */}
+            <div
+              className="rm-flow-card"
+              style={{ flex: "1 1 300px", minWidth: 280, border: `1px solid ${C.line}`, borderTop: `3px solid ${C.amber}`, borderRadius: 10, background: C.panel, padding: 18, boxShadow: "0 4px 14px rgba(201,138,44,0.1)" }}
+            >
+              <StepBadge n={3} color={C.amber} />
+              <InputCardHeader
+                icon="💰"
+                iconBg={C.amberBg}
+                title="배송비 계산"
+                desc="거래유형과 배송지를 입력하면 총 톤수를 기준으로 기본배송비와 용차 추가 비용을 계산할 수 있어요"
+              />
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <select style={{ ...inputStyle, fontSize: 12.5, padding: "5px 8px", width: "auto" }} value={transactionType} onChange={(e) => setTransactionType(e.target.value)}>
+                  <option value="rental">렌탈</option>
+                  <option value="purchase">구매</option>
+                </select>
+                <input
+                  style={{ ...inputStyle, fontSize: 12.5, padding: "5px 8px", width: 200 }}
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  placeholder="배송지 주소"
+                />
+                <DeliveryFeeButton address={address} transactionType={transactionType} totalTon={totalTon} />
+              </div>
+              <AddressRoadview address={address} />
+            </div>
           </div>
         </>
       )}
