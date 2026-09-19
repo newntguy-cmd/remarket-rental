@@ -3439,11 +3439,26 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
                 {`선택삭제${checkedGroupKeys.size > 0 ? ` (${checkedGroupKeys.size})` : ""}`}
               </button>
             </div>
-            <div id="qtc-itemstats-print-area" style={{ border: `1px solid ${C.lineSoft}`, background: "#fff" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <div className="qtc-no-print" style={{ fontSize: 11.5, color: C.muted, marginTop: -6, marginBottom: 10 }}>
+              * 여기서 "선택삭제"는 이 계산(품목별 데이터·톤수·배송비)에서만 제외하는 거예요. 붙여넣은 원본 텍스트는 그대로 있고, 다시 붙여넣으면 복원돼요.
+            </div>
+            <div id="qtc-itemstats-print-area" style={{ border: `1px solid ${C.line}`, background: "#fff", padding: 24 }}>
+              <div style={{ textAlign: "center", marginBottom: 20 }}>
+                <div style={{ fontFamily: serif, fontSize: 20 }}>품목별 데이터</div>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 16 }}>
+                <div>
+                  <div>배송지: {address || "-"}</div>
+                  <div>거래유형: {transactionType === "purchase" ? "구매" : "렌탈"}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div>작성일: {new Date().toLocaleDateString("ko-KR")}</div>
+                </div>
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr>
-                    <th className="qtc-no-print" style={{ border: `1px solid ${C.lineSoft}`, padding: "8px 10px", background: C.bg, width: 30 }}>
+                    <th className="qtc-no-print" style={{ border: `1px solid ${C.line}`, padding: "8px 10px", background: C.bg, width: 32 }}>
                       <input
                         type="checkbox"
                         checked={groupedItemStats.length > 0 && checkedGroupKeys.size === groupedItemStats.length}
@@ -3459,11 +3474,9 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
                         key={h.key}
                         onClick={() => toggleGroupSort(h.key)}
                         style={{
-                          border: `1px solid ${C.lineSoft}`,
+                          border: `1px solid ${C.line}`,
                           padding: "8px 10px",
                           background: C.bg,
-                          color: C.muted,
-                          fontWeight: 500,
                           textAlign: h.key === "qty" ? "right" : "left",
                           cursor: "pointer",
                           userSelect: "none",
@@ -3479,18 +3492,18 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
                 <tbody>
                   {groupedItemStats.map((r) => (
                     <tr key={r.key}>
-                      <td className="qtc-no-print" style={{ border: `1px solid ${C.lineSoft}`, padding: "6px 10px" }}>
+                      <td className="qtc-no-print" style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>
                         <input type="checkbox" checked={checkedGroupKeys.has(r.key)} onChange={() => toggleGroupChecked(r.key)} />
                       </td>
-                      <td style={{ border: `1px solid ${C.lineSoft}`, padding: "6px 10px" }}>{r.item}</td>
-                      <td style={{ border: `1px solid ${C.lineSoft}`, padding: "6px 10px" }}>{r.spec || "-"}</td>
-                      <td style={{ border: `1px solid ${C.lineSoft}`, padding: "6px 10px", textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</td>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.item}</td>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.spec || "-"}</td>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</td>
                     </tr>
                   ))}
                   {groupedItemStats.length === 0 && (
                     <tr>
-                      <td className="qtc-no-print" style={{ border: `1px solid ${C.lineSoft}`, padding: "20px 10px" }}></td>
-                      <td colSpan={3} style={{ border: `1px solid ${C.lineSoft}`, padding: "20px 10px", textAlign: "center", color: C.muted }}>
+                      <td className="qtc-no-print" style={{ border: `1px solid ${C.line}`, padding: "20px 10px" }}></td>
+                      <td colSpan={3} style={{ border: `1px solid ${C.line}`, padding: "20px 10px", textAlign: "center", color: C.muted }}>
                         집계할 품목이 없어요.
                       </td>
                     </tr>
@@ -3499,11 +3512,11 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
                 {groupedItemStats.length > 0 && (
                   <tfoot>
                     <tr>
-                      <td className="qtc-no-print" style={{ border: `1px solid ${C.lineSoft}`, padding: "8px 10px", background: C.bg }}></td>
-                      <td colSpan={2} style={{ border: `1px solid ${C.lineSoft}`, padding: "8px 10px", fontWeight: 600, background: C.bg }}>
+                      <td className="qtc-no-print" style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}></td>
+                      <td colSpan={2} style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
                         합계
                       </td>
-                      <td style={{ border: `1px solid ${C.lineSoft}`, padding: "8px 10px", textAlign: "right", fontWeight: 600, background: C.bg }}>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
                         {groupedItemTotalQty.toLocaleString("ko-KR")}
                       </td>
                     </tr>
