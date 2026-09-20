@@ -1376,10 +1376,13 @@ function collectionParsedToDbFields(parsed) {
 // A/S 접수 내용(자유 텍스트)에서 "품목명 + 수량"을 최대한 자동으로 읽어본다. 줄바꿈/쉼표/모점으로 나눈 뒤
 // 각 조각 끝의 숫자(+ea/개)를 수량으로 삼고 나머지를 품목명으로 쓴다. 정확하지 않을 수 있어, 이 결과는
 // 전표로 등록하기 전에 사람이 확인·수정하는 화면에서만 초안으로 쓰인다(현장별 렌탈잔량의 A/S 전표 추가).
+// 견적서는 품목/규격/색상/수량이 칸으로 나뉘어 있지만, A/S장에는 같은 내용을 "사무책상, 탑책상,
+// W1600*D800, 연체리, 2개"처럼 쉼표로 나열한 한 줄짜리 글로 적는다(첫 칸이 품목, 마지막 칸이 수량,
+// 그 사이가 규격·색상). 이 줄바꿈·쉼표 구조를 견적서 표와 같은 방식(품목〓규격〓색상 키)으로 갈라 읽으면,
+// 이미 등록된 같은 품목(사무책상)에 정확히 합쳐진다 — 이 함수가 그 변환을 담당한다.
+// (줄에 쉼표가 하나도 없으면 예전처럼 "품목명 + 끝자리 수량"만 보고 통짜 품목명으로 처리한다.)
 function parseAsContentItems(text) {
   if (!text) return [];
-  // 줄바꿈만 구분자로 쓴다. 쉼표는 "탑책상, W1400*D800, 연체리 2ea"처럼 한 품목의 규격을 나열할 때도
-  // 흔히 쓰여서, 쉼표까지 조각 구분자로 삼으면 규격이 별개 품목으로 쪼개져 버린다.
   const chunks = String(text)
     .split(/\n+/)
     .map((s) => s.trim())
@@ -1387,11 +1390,33 @@ function parseAsContentItems(text) {
   const results = [];
   for (const chunk of chunks) {
     const cleaned = chunk.replace(/\s*외\s*$/, "");
-    const m = cleaned.match(/^(.*?)\s*(\d+)\s*(?:ea|EA|개)?$/);
-    if (m && m[1].trim() && m[2]) {
-      results.push({ item: m[1].trim(), spec: "", qty: Number(m[2]) });
-    } else if (cleaned) {
-      results.push({ item: cleaned, spec: "", qty: 1 });
+    let parts = cleaned.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length === 0) continue;
+
+    let qty = null;
+    const last = parts[parts.length - 1];
+    // 마지막 칸이 "2개"/"3ea"처럼 수량만 딱 있으면 그대로 떼어낸다.
+    let m = last.match(/^(\d+)\s*(?:ea|개)?$/i);
+    if (m) {
+      qty = Number(m[1]);
+      parts = parts.slice(0, -1);
+    } else {
+      // "연체리 2ea"처럼 마지막 칸에 글자+수량이 붙어있으면, 수량만 떼어내고 남은 글자는 그대로 규격/색상에 둔다.
+      m = last.match(/^(.*?)\s+(\d+)\s*(?:ea|개)?$/i);
+      if (m && m[1].trim()) {
+        qty = Number(m[2]);
+        parts = [...parts.slice(0, -1), m[1].trim()];
+      }
+    }
+    if (parts.length === 0) continue;
+    if (qty == null) qty = 1;
+
+    if (parts.length === 1) {
+      results.push({ item: parts[0], spec: "", qty });
+    } else {
+      // 첫 칸은 품목, 나머지는 견적서 규격 칸과 똑같이 이어붙여둔다(끝 칸이 등록된 색상명과 일치하면
+      // splitLedgerSpecColor가 견적서 전표 추가와 동일하게 색상을 따로 떼어내 같은 품목으로 맞춰준다).
+      results.push({ item: parts[0], spec: parts.slice(1).join(", "), qty });
     }
   }
   return results;
@@ -7203,6 +7228,14 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   // 실제로 걸러진다. asQueryInput은 입력창에 지금 타이핑 중인 값(자동완성용), asSearchTerm은 검색이 실행된 값.
   const [asQueryInput, setAsQueryInput] = useState("");
   const [asSearchTerm, setAsSearchTerm] = useState("");
+  // 수량 칸을 표에서 직접 입력해 고칠 수 있게 하는 기능. editingQtyKind는 지금 출고/회수 중 어느 표가
+  // 편집 중인지, qtyEdits는 칸별로 타이핑 중인 값, selectedQtyCells는 체크해서 한번에 비울 칸들을 담는다.
+  const [editingQtyKind, setEditingQtyKind] = useState(null); // null | "out" | "in"
+  const [qtyEdits, setQtyEdits] = useState({}); // `${voucherId}|${itemId}` -> 입력 중인 문자열
+  const [selectedQtyCells, setSelectedQtyCells] = useState(() => new Set());
+  const [savingQtyEdits, setSavingQtyEdits] = useState(false);
+  // 품목·규격·색상 칸의 좌우 여백(px). 내용이 길 때 넓히거나, 표를 좁게 보고 싶을 때 줄일 수 있다.
+  const [cellPadX, setCellPadX] = useState(8);
 
   useEffect(() => {
     fetchAll();
@@ -7220,6 +7253,9 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     setAsQueryInput("");
     setAsSearchTerm("");
     setAsDraft(null);
+    setEditingQtyKind(null);
+    setQtyEdits({});
+    setSelectedQtyCells(new Set());
   }, [subTab]);
 
   async function fetchExternalSources() {
@@ -7257,6 +7293,13 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   }, [entries]);
 
   const qtyFor = (voucherId, itemId) => entryMap.get(`${voucherId}|${itemId}`) || 0;
+
+  // 수량 칸을 직접 고칠 때 어떤 ledger_entries 행을 update/delete할지 찾기 위한 id 조회용 맵.
+  const entryRowMap = useMemo(() => {
+    const m = new Map();
+    for (const e of entries) m.set(`${e.ledger_voucher_id}|${e.ledger_item_id}`, e);
+    return m;
+  }, [entries]);
 
   const outTotalByItem = useMemo(() => {
     const m = new Map();
@@ -7625,6 +7668,129 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     if (!error) setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, note: text } : it)));
   }
 
+  function toggleQtyCellSelected(key) {
+    setSelectedQtyCells((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  // 체크한 칸들을 한번에 빈 칸으로 만든다. 실제로 기존 기록이 지워지는 건 "저장"을 눌렀을 때다.
+  function handleDeleteSelectedQtyCells() {
+    if (selectedQtyCells.size === 0) return;
+    setQtyEdits((prev) => {
+      const next = { ...prev };
+      for (const key of selectedQtyCells) next[key] = "";
+      return next;
+    });
+    setSelectedQtyCells(new Set());
+  }
+
+  function startEditingQty(kind) {
+    setEditingQtyKind(kind);
+    setQtyEdits({});
+    setSelectedQtyCells(new Set());
+  }
+
+  function cancelEditingQty() {
+    setEditingQtyKind(null);
+    setQtyEdits({});
+    setSelectedQtyCells(new Set());
+  }
+
+  // 칸에 직접 입력한 수량을 한번에 저장한다. 빈 칸/0으로 바꾼 칸은 기존 기록을 지우고, 값을 바꾼 칸은
+  // update, 원래 "-"였던 칸에 새로 적은 값은 insert한다.
+  async function handleSaveQtyEdits() {
+    const changed = Object.entries(qtyEdits);
+    if (changed.length === 0) {
+      setEditingQtyKind(null);
+      return;
+    }
+    setSavingQtyEdits(true);
+    const updates = [];
+    const inserts = [];
+    const deleteIds = [];
+    for (const [key, rawVal] of changed) {
+      const [voucherId, itemId] = key.split("|");
+      const existing = entryRowMap.get(key);
+      const trimmed = String(rawVal ?? "").trim();
+      const newQty = trimmed === "" ? 0 : Number(trimmed);
+      if (trimmed === "" || isNaN(newQty) || newQty <= 0) {
+        if (existing) deleteIds.push(existing.id);
+        continue;
+      }
+      if (existing) {
+        if (Number(existing.qty) !== newQty) updates.push({ id: existing.id, qty: newQty });
+      } else {
+        inserts.push({ ledger_book_id: bookId, ledger_voucher_id: voucherId, ledger_item_id: itemId, qty: newQty });
+      }
+    }
+
+    if (deleteIds.length > 0) {
+      const { error } = await supabase.from("ledger_entries").delete().in("id", deleteIds);
+      if (error) {
+        setSavingQtyEdits(false);
+        alert("수량을 저장하는 중 오류가 발생했어요: " + error.message);
+        return;
+      }
+    }
+    for (const u of updates) {
+      const { error } = await supabase.from("ledger_entries").update({ qty: u.qty }).eq("id", u.id);
+      if (error) {
+        setSavingQtyEdits(false);
+        alert("수량을 저장하는 중 오류가 발생했어요: " + error.message);
+        return;
+      }
+    }
+    if (inserts.length > 0) {
+      const { error } = await supabase.from("ledger_entries").insert(inserts);
+      if (error) {
+        setSavingQtyEdits(false);
+        alert("수량을 저장하는 중 오류가 발생했어요: " + error.message);
+        return;
+      }
+    }
+
+    setSavingQtyEdits(false);
+    setQtyEdits({});
+    setSelectedQtyCells(new Set());
+    setEditingQtyKind(null);
+    fetchAll();
+  }
+
+  // 수량 칸 하나를 그린다. 편집 모드가 아니면 읽기전용 숫자, 편집 모드면 체크박스(선택삭제용)+입력박스로 보여준다.
+  function renderQtyCell(voucherId, itemId) {
+    const key = `${voucherId}|${itemId}`;
+    const q = qtyFor(voucherId, itemId);
+    if (editingQtyKind === subTab) {
+      const val = qtyEdits[key] !== undefined ? qtyEdits[key] : q > 0 ? String(q) : "";
+      return (
+        <td key={voucherId} className="ledger-no-print" style={{ ...ledgerTd, padding: "3px 4px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 3, justifyContent: "flex-end" }}>
+            <input
+              type="checkbox"
+              checked={selectedQtyCells.has(key)}
+              onChange={() => toggleQtyCellSelected(key)}
+              title="체크 후 '선택한 칸 비우기'로 한번에 지울 수 있어요"
+            />
+            <input
+              type="number"
+              min={0}
+              value={val}
+              onChange={(e) => setQtyEdits((prev) => ({ ...prev, [key]: e.target.value }))}
+              style={{ ...smallInputStyle, width: 56, textAlign: "right", padding: "3px 4px" }}
+            />
+          </div>
+        </td>
+      );
+    }
+    return (
+      <td key={voucherId} style={{ ...ledgerTd, textAlign: "right" }}>{q > 0 ? q.toLocaleString("ko-KR") : "-"}</td>
+    );
+  }
+
   async function handleDeleteBook() {
     if (!confirm(`"${book?.customer}" 대장을 통째로 삭제할까요? 안에 있는 출고·회수 내역이 모두 지워지고 되돌릴 수 없어요.`)) return;
     setDeletingBook(true);
@@ -7653,6 +7819,9 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   if (loading || !book) {
     return <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>불러오는 중…</div>;
   }
+
+  const itemColThStyle = { ...ledgerTh, paddingLeft: cellPadX, paddingRight: cellPadX };
+  const itemColTdStyle = { ...ledgerTd, paddingLeft: cellPadX, paddingRight: cellPadX };
 
   return (
     <div>
@@ -7929,6 +8098,38 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
           </div>
         </div>
 
+        <div className="ledger-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {editingQtyKind === subTab ? (
+              <>
+                <span style={{ fontSize: 12.5, color: C.inkSoft }}>칸을 눌러 수량을 직접 고친 뒤 저장하세요.</span>
+                {selectedQtyCells.size > 0 && (
+                  <button
+                    onClick={handleDeleteSelectedQtyCells}
+                    style={{ ...ghostBtnStyle, borderColor: C.brick, color: C.brick, padding: "5px 10px", fontSize: 12.5 }}
+                  >
+                    선택한 칸 비우기 ({selectedQtyCells.size})
+                  </button>
+                )}
+                <button onClick={handleSaveQtyEdits} disabled={savingQtyEdits} style={{ ...primaryBtnStyle2, padding: "5px 10px", fontSize: 12.5 }}>
+                  {savingQtyEdits ? "저장 중…" : "저장"}
+                </button>
+                <button onClick={cancelEditingQty} style={{ ...ghostBtnStyle, padding: "5px 10px", fontSize: 12.5 }}>취소</button>
+              </>
+            ) : (
+              <button onClick={() => startEditingQty(subTab)} style={{ ...ghostBtnStyle, padding: "5px 10px", fontSize: 12.5 }}>
+                수량 칸 직접 수정
+              </button>
+            )}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 11.5, color: C.muted }}>품목·규격 칸 여백</span>
+            <button onClick={() => setCellPadX((p) => Math.max(2, p - 2))} style={{ ...ghostBtnStyle, padding: "2px 9px", fontSize: 13 }}>−</button>
+            <span style={{ fontSize: 11.5, color: C.inkSoft, minWidth: 18, textAlign: "center" }}>{cellPadX}</span>
+            <button onClick={() => setCellPadX((p) => Math.min(30, p + 2))} style={{ ...ghostBtnStyle, padding: "2px 9px", fontSize: 13 }}>+</button>
+          </div>
+        </div>
+
         {selectedItemIds.size > 0 && (
           <div className="ledger-no-print" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
             <span style={{ fontSize: 12.5, color: C.inkSoft }}>{selectedItemIds.size}개 선택됨</span>
@@ -7949,9 +8150,9 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
                 <th rowSpan={2} className="ledger-no-print" style={ledgerTh}>
                   <input type="checkbox" checked={allItemsSelected} onChange={toggleSelectAllItems} />
                 </th>
-                <th rowSpan={2} style={ledgerTh}>품목</th>
-                <th rowSpan={2} style={ledgerTh}>규격</th>
-                <th rowSpan={2} style={ledgerTh}>색상</th>
+                <th rowSpan={2} style={itemColThStyle}>품목</th>
+                <th rowSpan={2} style={itemColThStyle}>규격</th>
+                <th rowSpan={2} style={itemColThStyle}>색상</th>
                 {outVouchers.length > 0 && (
                   <th colSpan={outVouchers.length} style={{ ...ledgerTh, background: C.amberBg }}>출고내역</th>
                 )}
@@ -7981,16 +8182,11 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
                     <input type="checkbox" checked={selectedItemIds.has(it.id)} onChange={() => toggleItemSelected(it.id)} />
                   </td>
                   {it._rowSpan > 0 && (
-                    <td rowSpan={it._rowSpan} style={ledgerTd}>{it.item}</td>
+                    <td rowSpan={it._rowSpan} style={itemColTdStyle}>{it.item}</td>
                   )}
-                  <td style={ledgerTd}>{it.spec || "-"}</td>
-                  <td style={ledgerTd}>{it.color || "-"}</td>
-                  {outVouchers.map((v) => {
-                    const q = qtyFor(v.id, it.id);
-                    return (
-                      <td key={v.id} style={{ ...ledgerTd, textAlign: "right" }}>{q > 0 ? q.toLocaleString("ko-KR") : "-"}</td>
-                    );
-                  })}
+                  <td style={itemColTdStyle}>{it.spec || "-"}</td>
+                  <td style={itemColTdStyle}>{it.color || "-"}</td>
+                  {outVouchers.map((v) => renderQtyCell(v.id, it.id))}
                   <td style={{ ...ledgerTd, textAlign: "right", fontWeight: 600 }}>{(outTotalByItem.get(it.id) || 0).toLocaleString("ko-KR")}</td>
                 </tr>
               ))}
@@ -8010,9 +8206,9 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
                 <th rowSpan={2} className="ledger-no-print" style={ledgerTh}>
                   <input type="checkbox" checked={allItemsSelected} onChange={toggleSelectAllItems} />
                 </th>
-                <th rowSpan={2} style={ledgerTh}>품목</th>
-                <th rowSpan={2} style={ledgerTh}>규격</th>
-                <th rowSpan={2} style={ledgerTh}>색상</th>
+                <th rowSpan={2} style={itemColThStyle}>품목</th>
+                <th rowSpan={2} style={itemColThStyle}>규격</th>
+                <th rowSpan={2} style={itemColThStyle}>색상</th>
                 <th rowSpan={2} style={{ ...ledgerTh, background: C.amberBg }}>출고합계</th>
                 {inVouchers.length > 0 && (
                   <th colSpan={inVouchers.length} style={{ ...ledgerTh, background: C.greenBg }}>회수내역</th>
@@ -8049,17 +8245,12 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
                       <input type="checkbox" checked={selectedItemIds.has(it.id)} onChange={() => toggleItemSelected(it.id)} />
                     </td>
                     {it._rowSpan > 0 && (
-                      <td rowSpan={it._rowSpan} style={ledgerTd}>{it.item}</td>
+                      <td rowSpan={it._rowSpan} style={itemColTdStyle}>{it.item}</td>
                     )}
-                    <td style={ledgerTd}>{it.spec || "-"}</td>
-                    <td style={ledgerTd}>{it.color || "-"}</td>
+                    <td style={itemColTdStyle}>{it.spec || "-"}</td>
+                    <td style={itemColTdStyle}>{it.color || "-"}</td>
                     <td style={{ ...ledgerTd, textAlign: "right" }}>{outTotal.toLocaleString("ko-KR")}</td>
-                    {inVouchers.map((v) => {
-                      const q = qtyFor(v.id, it.id);
-                      return (
-                        <td key={v.id} style={{ ...ledgerTd, textAlign: "right" }}>{q > 0 ? q.toLocaleString("ko-KR") : "-"}</td>
-                      );
-                    })}
+                    {inVouchers.map((v) => renderQtyCell(v.id, it.id))}
                     <td style={{ ...ledgerTd, textAlign: "right", fontWeight: 600 }}>{inTotal.toLocaleString("ko-KR")}</td>
                     <td style={{ ...ledgerTd, textAlign: "right", fontWeight: 700, color: remain > 0 ? C.brick : C.inkSoft }}>{remain.toLocaleString("ko-KR")}</td>
                     <td style={{ ...ledgerTd, padding: 0 }}>
