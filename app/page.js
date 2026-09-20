@@ -475,6 +475,20 @@ function detectColumns(rows) {
   return null;
 }
 
+// 견적서 상단(제목 바로 아래)에 "#2609232"처럼 "#" + 숫자만 단독으로 찍혀 있는 줄은 그 견적서 자체의
+// 관리번호이고, 실제로 뜯어보면 "260923"(발행일 YYMMDD) + "2"(그날의 순번) 형태로 사내 전표번호
+// 자동 생성 규칙(nextVoucherNo, YYMMDD+순번)과 사실상 같은 체계라 전표번호로 그대로 써도 안전하다.
+// 다만 이 값이 진짜 관리번호가 맞는지는 사람이 한 번 더 확인하는 게 안전하니, 자동으로 채워주되
+// 전표번호 칸은 계속 직접 수정 가능하게 두고 등록 전 확인 화면에서 눈으로 검토할 수 있게 한다.
+// "#"과 숫자 사이/숫자 사이에 공백이 섞여 나오는 경우(PDF 좌표 인식 특성)까지 감안해 공백은 모두 제거하고
+// "칸 전체가 '#'+숫자뿐"인 경우만 인정한다(다른 텍스트 안에 우연히 '#숫자'가 섞여 있는 경우의 오탐 방지).
+function extractQuoteVoucherNoFromText(raw) {
+  if (!raw) return "";
+  const compact = String(raw).replace(/\s+/g, "");
+  const m = compact.match(/^#(\d{5,10})$/);
+  return m ? m[1] : "";
+}
+
 // "렌탈기간" 칸 텍스트에서 "YYYY.MM.DD~YYYY.MM.DD"처럼 일 단위까지 적힌 시작~종료 날짜 범위를 찾는다.
 // (예: "렌탈기간 : 15개월(2026.09.20~2027.12.19)") 구분자는 "."/"-"/"/"/"년,월,일", 범위 기호는 "~"/"∼"/"-" 모두 허용.
 function parseRentalPeriodDateRange(cell) {
@@ -532,6 +546,7 @@ function parseQuoteRows(rows) {
   let recipient = ""; // 수령자/연락처
   let deliveryDate = ""; // 배송일자 (발행일과 다를 수 있음)
   let rentalPeriodRange = null; // "렌탈기간" 칸에 일 단위 시작~종료 날짜가 적혀 있으면 그 값 ({start, end})
+  let voucherNo = ""; // 견적서 상단 "#숫자" 관리번호를 찾으면 전표번호로 자동 채움(못 찾으면 그대로 공란, 직접 입력)
 
   let siteName = ""; // "수신" 칸의 "거래처 - 현장명" 표기에서 나오는 현장명(있을 때만)
 
@@ -541,6 +556,11 @@ function parseQuoteRows(rows) {
     // 라벨:값 형태의 정보는 셀 단위로 각각 따로 검사한다.
     const cells = (row || []).map(cellText).filter((t) => t.trim());
     for (const cell of cells) {
+      if (!voucherNo) {
+        const vn = extractQuoteVoucherNoFromText(cell);
+        if (vn) voucherNo = vn;
+      }
+
       let m = cell.match(/수\s*신\s*[:：]\s*([^\n]+)/);
       if (m) {
         const raw = m[1].trim();
@@ -703,7 +723,7 @@ function parseQuoteRows(rows) {
     customer,
     site,
     manager,
-    voucherNo: "",
+    voucherNo,
     transactionType,
     outDate,
     dueDate,
@@ -822,12 +842,18 @@ async function parseQuotePdf(file) {
   let deliveryDate = "";
   let rentalPeriodRange = null; // "렌탈기간" 칸에 일 단위 시작~종료 날짜가 적혀 있으면 그 값 ({start, end})
   let siteName = "";
+  let voucherNo = ""; // 견적서 상단 "#숫자" 관리번호를 찾으면 전표번호로 자동 채움(못 찾으면 그대로 공란, 직접 입력)
 
   // 1) 첫 페이지 위쪽 정보 영역에서 라벨:값 스캔 (엑셀 버전과 동일한 정규식을 그대로 사용)
   const firstPageRows = pdfGroupRows(allPagesItems[0] || []);
   for (const row of firstPageRows) {
     const segs = pdfSplitRowSegments(row.items);
     for (const cell of segs) {
+      if (!voucherNo) {
+        const vn = extractQuoteVoucherNoFromText(cell);
+        if (vn) voucherNo = vn;
+      }
+
       let m = cell.match(/수\s*신\s*[:：]\s*([^\n]+)/);
       if (m) {
         const raw = m[1].trim();
@@ -1036,7 +1062,7 @@ async function parseQuotePdf(file) {
     customer,
     site,
     manager,
-    voucherNo: "",
+    voucherNo,
     transactionType,
     outDate,
     dueDate,
@@ -1239,8 +1265,9 @@ function Dashboard({ profile, onLogout }) {
       parsed.isPdf = isPdf;
       // 품목/규격 기준으로 기준표(+직원이 이전에 저장해둔 값)를 찾아 화물차 적재 톤수를 자동으로 채운다.
       parsed.items = withComputedTons(parsed.items, tonOverrides);
-      // PDF든 엑셀이든 전표번호는 자동으로 채우지 않고 항상 비워둬서 직접 입력하게 한다.
-      parsed.voucherNo = "";
+      // 전표번호는 견적서 상단의 "#숫자" 관리번호를 찾았으면 자동으로 채워두되(parseQuotePdf/parseQuoteExcel에서
+      // 처리), 못 찾았을 땐 예전처럼 그대로 공란이라 직접 입력해야 한다. 어느 쪽이든 등록 확인 화면에서
+      // 직접 수정할 수 있고, 비어있으면 등록 버튼(confirmImport)이 막아준다.
       // 영업담당자 계정은 견적서에 어떤 이름이 적혀 있든 항상 본인 이름으로 담당자를 고정한다(다른 사람 이름으로 잘못 등록되는 것을 방지).
       if (!isAdmin) parsed.manager = managerName;
       parsed._sourceFile = file; // 원본 파일 자체(등록 확정 시 Storage에 업로드해서 나중에 다시 다운로드할 수 있게 함)
@@ -1263,7 +1290,8 @@ function Dashboard({ profile, onLogout }) {
       const parsed = parsePastedQuoteText(text);
       parsed.isPdf = false;
       parsed.items = withComputedTons(parsed.items, tonOverrides);
-      parsed.voucherNo = "";
+      // 전표번호는 parsePastedQuoteText에서 "#숫자" 관리번호를 찾았으면 이미 채워져 있고, 못 찾았으면
+      // 예전처럼 공란이라 직접 입력해야 한다(등록 확인 화면에서 언제든 직접 수정 가능).
       if (!isAdmin) parsed.manager = managerName;
       // 붙여넣기는 원본 파일이 없으니 Storage 업로드(원본 파일 저장) 단계는 건너뛴다.
       setImportState(parsed);
@@ -1367,8 +1395,8 @@ function Dashboard({ profile, onLogout }) {
     ...(isStaff ? [{ key: "shares", label: "지분관리" }] : []),
     ...(isStaff ? [{ key: "sales", label: "판매현황" }] : []),
     ...(isStaff ? [{ key: "customerData", label: "업체별데이터" }] : []),
-    ...(isStaff ? [{ key: "ledger", label: "출고/회수 내역서" }] : []),
     ...(isStaff ? [{ key: "asboard", label: "A/S관리대장" }] : []),
+    ...(isStaff ? [{ key: "ledger", label: "현장별 렌탈잔량" }] : []),
   ];
 
   return (
@@ -6363,7 +6391,7 @@ function LedgerTab({ rentals, isAdmin, managerName }) {
 
   return (
     <div>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>출고/회수 내역서</div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>현장별 렌탈잔량</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         업체(현장)별로 대장을 만들어두면, 전표가 새로 생길 때마다 계속 추가해서 출고·회수·미회수 수량을 관리할 수 있어요.
       </div>
