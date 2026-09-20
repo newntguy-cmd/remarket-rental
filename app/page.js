@@ -3566,11 +3566,13 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
       {items.length > 0 && (
         <>
           <style>{`
+            .qtc-print-only-table { display: none; }
             @media print {
               body * { visibility: hidden; }
               #qtc-itemstats-print-area, #qtc-itemstats-print-area * { visibility: visible; }
               #qtc-itemstats-print-area { position: absolute; top: 0; left: 0; width: 100%; padding: 24px; }
               .qtc-no-print { display: none !important; }
+              .qtc-print-only-table { display: table !important; }
             }
           `}</style>
 
@@ -3634,7 +3636,7 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
                   <div>작성일: {new Date().toLocaleDateString("ko-KR")}</div>
                 </div>
               </div>
-              <div style={{ border: `1px solid ${C.line}`, overflowX: "auto" }}>
+              <div className="qtc-no-print" style={{ border: `1px solid ${C.line}`, overflowX: "auto" }}>
                 <div
                   style={{
                     display: "grid",
@@ -3696,6 +3698,56 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
                   </div>
                 )}
               </div>
+
+              {/* 화면에서 칸 너비를 얼마나 드래그해서 조절했든 인쇄/PDF에는 영향이 없도록, 인쇄 전용으로 브라우저가 내용에
+                  맞춰 알아서 폭을 잡아주는 일반 표를 따로 둔다("품목별 수량 통계" 인쇄본과 같은 방식). 화면에는 안 보이고
+                  인쇄할 때만 나타난다. */}
+              <table className="qtc-print-only-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    {[
+                      { label: "품목", key: "item" },
+                      { label: "규격", key: "spec" },
+                      { label: "총수량", key: "qty" },
+                    ].map((h) => (
+                      <th
+                        key={h.key}
+                        style={{ border: `1px solid ${C.line}`, padding: "8px 10px", background: C.bg, textAlign: h.key === "qty" ? "right" : "left", whiteSpace: "nowrap" }}
+                      >
+                        {h.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {groupedItemStats.map((r) => (
+                    <tr key={r.key}>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.item}</td>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.spec || "-"}</td>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</td>
+                    </tr>
+                  ))}
+                  {groupedItemStats.length === 0 && (
+                    <tr>
+                      <td colSpan={3} style={{ padding: 20, textAlign: "center", color: C.muted, border: `1px solid ${C.line}` }}>
+                        집계할 품목이 없어요.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+                {groupedItemStats.length > 0 && (
+                  <tfoot>
+                    <tr>
+                      <td colSpan={2} style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
+                        합계
+                      </td>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
+                        {groupedItemTotalQty.toLocaleString("ko-KR")}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
             </div>
           </div>
 
