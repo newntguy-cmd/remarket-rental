@@ -8099,12 +8099,14 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   // 지금 화면에 보이는 표(출고 탭이면 출고내역, 회수 탭이면 출고합계·회수내역·미회수수량·비고까지)를 그대로 엑셀 파일로 내려받는다.
   async function handleExportExcel() {
     const XLSX = await import("xlsx");
-    // 전표(출고/회수, A/S에서 넣은 것 포함) 중 이 품목의 수량이 있는 것만 골라 "전표번호 (날짜)" 줄로 나열한다.
+    // 전표(출고/회수, A/S에서 넣은 것 포함) 중 이 품목의 수량이 있는 것만 골라 "전표번호(날짜)"를 쉼표로 나열한다.
+    // (셀 안에 줄바꿈으로 넣으면 프로그램에 따라 줄바꿈이 무시되고 숫자·글자가 다 붙어서 보이는 경우가 있어서,
+    // 합계는 숫자 그대로 두고 전표 내역은 바로 옆에 별도 칸으로 뺐다.)
     const voucherBreakdown = (voucherList, itemId) =>
       voucherList
         .filter((v) => qtyFor(v.id, itemId) > 0)
-        .map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`)
-        .join("\n");
+        .map((v) => `${v.voucher_no || "-"}(${v.voucher_date || "-"})`)
+        .join(", ") || "-";
     let header, rows, extraColWidths;
     if (subTab === "out") {
       header = ["품목", "규격", "색상", ...outVouchers.map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`), "출고합계"];
@@ -8117,25 +8119,28 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
       ]);
       extraColWidths = header.slice(3).map(() => ({ wch: 13 }));
     } else {
-      header = ["품목", "규격", "색상", "출고합계", ...inVouchers.map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`), "회수합계", "미회수수량", "비고"];
+      header = [
+        "품목", "규격", "색상", "출고합계", "출고일/전표번호",
+        ...inVouchers.map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`),
+        "회수합계", "회수일/전표번호", "미회수수량", "비고",
+      ];
       rows = sortedItems.map((it) => {
         const outTotal = outTotalByItem.get(it.id) || 0;
         const inTotal = inTotalByItem.get(it.id) || 0;
-        // 출고합계·회수합계 칸에는 합계 숫자 아래에 실제로 그 수량이 나간/들어온 출고일·전표번호(A/S 전표 포함)를 같이 적어준다.
-        const outDetail = voucherBreakdown(outVouchers, it.id);
-        const inDetail = voucherBreakdown(inVouchers, it.id);
         return [
           it.item,
           it.spec || "",
           it.color || "",
-          outDetail ? `${outTotal}\n${outDetail}` : outTotal,
+          outTotal,
+          voucherBreakdown(outVouchers, it.id),
           ...inVouchers.map((v) => qtyFor(v.id, it.id) || ""),
-          inDetail ? `${inTotal}\n${inDetail}` : inTotal,
+          inTotal,
+          voucherBreakdown(inVouchers, it.id),
           outTotal - inTotal,
           it.note || "",
         ];
       });
-      extraColWidths = header.slice(3).map((h) => (h === "출고합계" || h === "회수합계" ? { wch: 26 } : { wch: 13 }));
+      extraColWidths = header.slice(3).map((h) => (h === "출고일/전표번호" || h === "회수일/전표번호" ? { wch: 32 } : { wch: 13 }));
     }
     const aoa = [
       ["렌탈품목 출고 및 회수 리스트"],
