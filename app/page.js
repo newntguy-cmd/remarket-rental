@@ -1211,7 +1211,7 @@ function Dashboard({ profile, onLogout }) {
   const [customers, setCustomers] = useState([]);
   const [shares, setShares] = useState([]);
   const [tonOverrides, setTonOverrides] = useState([]); // 기준표에 없어 직원이 직접 입력해 저장해둔 톤수(품목/규격별), 다음 견적서부터 자동으로 채워짐
-  const [activeTab, setActiveTab] = useState("quote"); // 지금은 "quote" 하나뿐. 메뉴는 하나씩 다시 추가할 예정
+  const [activeTab, setActiveTab] = useState(null); // 로그인/새로고침 직후엔 메뉴 아무것도 선택 안 된 "무" 상태로 시작하고, 직접 눌러야만 해당 화면으로 이동한다.
   // 지분관리 화면은 목록/상세 중 어디에 있었는지를 자체적으로 기억하고 있어서, 메뉴의 "지분관리"를
   // 다시 눌러도(이미 그 탭이어도) 항상 목록 화면으로 되돌아가도록 이 값을 바꿔서 강제로 새로 마운트시킨다.
   const [sharesResetKey, setSharesResetKey] = useState(0);
@@ -1514,6 +1514,12 @@ function Dashboard({ profile, onLogout }) {
 
         {activeTab === "asboard" && isStaff && (
           <AsBoardTab key={asboardResetKey} isAdmin={isAdmin} managerName={managerName} />
+        )}
+
+        {activeTab == null && isStaff && (
+          <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 40, textAlign: "center", color: C.muted, fontSize: 13.5 }}>
+            왼쪽 메뉴에서 원하는 화면을 선택해주세요.
+          </div>
         )}
 
         {!isStaff && (
