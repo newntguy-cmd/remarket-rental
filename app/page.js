@@ -7653,6 +7653,9 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     const autoItems = parseAsContentItems(record.content);
     setAsDraft({
       record,
+      // 출고/회수 탭이 하나로 합쳐지면서, 이 A/S건이 나간 물건인지 돌아온 물건인지를 탭 대신 이 값으로 고른다.
+      // 기본은 "출고"(대부분의 A/S가 교체품 출고라서)이고, 아래 토글로 언제든 "회수"로 바꿀 수 있다.
+      kind: "out", // "out" | "in"
       voucherLabel: record.management_no ? `A/S#${record.management_no}` : "A/S장",
       voucherDate: /^\d{4}-\d{2}-\d{2}/.test(record.visit_date || "") ? record.visit_date.slice(0, 10) : todayISO(),
       items: autoItems.length > 0 ? autoItems : [{ item: "", spec: "", qty: 1 }],
@@ -7671,7 +7674,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     if (!asDraft) return;
     setSavingAsDraft(true);
     const ok = await addVoucherFromItems({
-      kind: subTab, // 지금 보고 있는 탭(출고/회수)에 맞춰 A/S장을 어느 쪽 전표로 추가할지 정한다.
+      kind: asDraft.kind, // 아래 토글로 고른 출고/회수 구분 그대로 전표를 만든다.
       source: "as_request",
       sourceRef: asDraft.record.id,
       voucherNo: asDraft.voucherLabel,
@@ -8200,7 +8203,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
           onClick={() => setSubTab("out")}
           style={{ ...miniBtnStyle, background: subTab === "out" ? C.ink : "transparent", color: subTab === "out" ? "#fff" : C.inkSoft, borderColor: subTab === "out" ? C.ink : C.line }}
         >
-          출고
+          출고/회수
         </button>
         <button
           onClick={() => setSubTab("in")}
@@ -8211,8 +8214,8 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
       </div>
 
       <div className="ledger-no-print" style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-        <button onClick={() => setShowPicker((v) => !v)} style={primaryBtnStyle2}>+ 전표 추가</button>
-        {subTab === "in" && <button onClick={openManualIn} style={ghostBtnStyle}>+ 회수 직접 입력</button>}
+        {/* 전표 추가·직접 입력은 출고/회수 탭에서만: 렌탈잔량 최종은 등록된 걸 확인·출력하는 결과 화면이라 여기서 더는 새로 추가하지 않는다. */}
+        {subTab === "out" && <button onClick={() => setShowPicker((v) => !v)} style={primaryBtnStyle2}>+ 전표 추가</button>}
         {subTab === "in" && <button onClick={handlePrint} style={ghostBtnStyle}>인쇄 / PDF로 저장</button>}
         {subTab === "in" && <button onClick={handleExportExcel} style={ghostBtnStyle}>엑셀로 출력</button>}
       </div>
@@ -8220,7 +8223,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
       {showPicker && (
         <div className="ledger-no-print" style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginBottom: 16 }}>
           <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-            {(subTab === "out" ? [["rental", "렌탈전표"], ["as", "A/S장"]] : [["collection", "회수장"], ["as", "A/S장"]]).map(([key, label]) => (
+            {[["rental", "렌탈전표"], ["collection", "회수장"], ["as", "A/S장"]].map(([key, label]) => (
               <button
                 key={key}
                 onClick={() => {
@@ -8275,7 +8278,6 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
           )}
           <div style={{ maxHeight: 320, overflowY: "auto", border: `1px solid ${C.lineSoft}` }}>
             {pickerSource === "rental" &&
-              subTab === "out" &&
               pickerResults.map((g) => {
                 const already = outVouchers.some((v) => v.rental_voucher_no === g.voucherNo);
                 const expanded = expandedRentalKey === g.key;
@@ -8327,12 +8329,11 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
                   </div>
                 );
               })}
-            {pickerSource === "rental" && subTab === "out" && pickerResults.length === 0 && (
+            {pickerSource === "rental" && pickerResults.length === 0 && (
               <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 13 }}>검색 결과가 없어요.</div>
             )}
 
             {pickerSource === "collection" &&
-              subTab === "in" &&
               collectionPickerResults.map((r) => {
                 const already = inVouchers.some((v) => v.source === "collection_request" && v.source_ref === r.id);
                 return (
@@ -8353,13 +8354,15 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
                   </div>
                 );
               })}
-            {pickerSource === "collection" && subTab === "in" && collectionPickerResults.length === 0 && (
+            {pickerSource === "collection" && collectionPickerResults.length === 0 && (
               <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 13 }}>검색 결과가 없어요.</div>
             )}
 
             {pickerSource === "as" &&
               asPickerResults.map((r) => {
-                const already = vouchers.some((v) => v.kind === subTab && v.source === "as_request" && v.source_ref === r.id);
+                // 출고/회수 탭이 하나로 합쳐지면서 "지금 보고 있는 탭 기준"이라는 개념이 없어졌으니, 출고·회수
+                // 어느 쪽으로 이미 추가됐든(등록할 때 토글로 고른 쪽) 그냥 "이미 추가됨"으로 본다.
+                const already = vouchers.some((v) => v.source === "as_request" && v.source_ref === r.id);
                 const expanded = expandedAsKey === r.id;
                 const statusStyle = AS_STATUS_STYLE[r.status] || AS_STATUS_STYLE["접수"];
                 return (
@@ -8412,7 +8415,24 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
           {asDraft && (
             <div style={{ marginTop: 14, borderTop: `1px solid ${C.lineSoft}`, paddingTop: 14 }}>
               <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>
-                A/S 내용에서 품목·수량을 자동으로 읽어봤어요. {subTab === "out" ? "출고" : "회수"} 전표로 추가하기 전에 확인·수정해주세요.
+                A/S 내용에서 품목·수량을 자동으로 읽어봤어요. {asDraft.kind === "out" ? "출고" : "회수"} 전표로 추가하기 전에 확인·수정해주세요.
+              </div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                {[["out", "출고로 등록"], ["in", "회수로 등록"]].map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setAsDraft((p) => ({ ...p, kind: key }))}
+                    style={{
+                      ...miniBtnStyle,
+                      background: asDraft.kind === key ? C.ink : "transparent",
+                      color: asDraft.kind === key ? "#fff" : C.inkSoft,
+                      borderColor: asDraft.kind === key ? C.ink : C.line,
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                 <Field label="전표번호/메모">
@@ -8451,7 +8471,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={handleSaveAsDraft} disabled={savingAsDraft} style={primaryBtnStyle2}>
-                  {savingAsDraft ? "추가 중…" : `${subTab === "out" ? "출고" : "회수"} 전표로 추가`}
+                  {savingAsDraft ? "추가 중…" : `${asDraft.kind === "out" ? "출고" : "회수"} 전표로 추가`}
                 </button>
                 <button onClick={() => setAsDraft(null)} style={ghostBtnStyle}>취소</button>
               </div>
