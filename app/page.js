@@ -1737,7 +1737,7 @@ function Dashboard({ profile, onLogout }) {
     ...(isStaff ? [{ key: "customerData", label: "업체별데이터" }] : []),
     ...(isStaff ? [{ key: "asboard", label: "A/S관리대장" }] : []),
     ...(isStaff ? [{ key: "collectionboard", label: "렌탈회수관리" }] : []),
-    ...(isStaff ? [{ key: "ledger", label: "현장별 렌탈잔량" }] : []),
+    ...(isStaff ? [{ key: "ledger", label: "현장별 렌탈잔량", star: true }] : []),
   ];
 
   return (
@@ -1808,6 +1808,7 @@ function Dashboard({ profile, onLogout }) {
                   whiteSpace: "nowrap",
                 }}
               >
+                {m.star && <span style={{ color: active ? "#fff" : C.amber, marginRight: 5 }}>★</span>}
                 {m.label}
               </button>
             );
