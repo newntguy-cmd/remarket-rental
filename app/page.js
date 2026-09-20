@@ -452,6 +452,21 @@ function cellText(v) {
   return String(v).trim();
 }
 
+// 자동완성 후보 목록을 만들 때 쓰는 두 헬퍼. 빈 값 제거 + 대소문자/앞뒤공백 무시하고 중복 제거 + 가나다순 정렬.
+function normalizeMatchText(s) {
+  return (s || "").trim().toLowerCase();
+}
+function dedupeSorted(values) {
+  const seen = new Map(); // normalizeMatchText(원본) -> 처음 만난 원본 표기 그대로 유지
+  for (const v of values) {
+    const t = (v || "").trim();
+    if (!t) continue;
+    const key = normalizeMatchText(t);
+    if (!seen.has(key)) seen.set(key, t);
+  }
+  return Array.from(seen.values()).sort((a, b) => a.localeCompare(b, "ko"));
+}
+
 // 표 머리글 행을 찾아 실제 열 위치(품목/규격/수량/단가/금액/비고)를 감지한다.
 // 견적서 양식마다 표가 시작되는 열이 다를 수 있어(B열부터 vs C열부터), 고정 인덱스 대신 헤더 텍스트로 찾는다.
 function detectColumns(rows) {
@@ -1639,7 +1654,7 @@ function Dashboard({ profile, onLogout }) {
         )}
 
         {activeTab === "ledger" && isStaff && (
-          <LedgerTab key={ledgerResetKey} rentals={rentals} isAdmin={isAdmin} managerName={managerName} />
+          <LedgerTab key={ledgerResetKey} rentals={rentals} customers={customers} isAdmin={isAdmin} managerName={managerName} />
         )}
 
         {activeTab === "asboard" && isStaff && (
@@ -6562,7 +6577,7 @@ function withLedgerRowSpans(sortedItems) {
 const ledgerTh = { border: `1px solid ${C.line}`, padding: "6px 8px", background: C.bg, fontSize: 11.5, whiteSpace: "nowrap" };
 const ledgerTd = { border: `1px solid ${C.line}`, padding: "6px 8px", fontSize: 12.5 };
 
-function LedgerTab({ rentals, isAdmin, managerName }) {
+function LedgerTab({ rentals, customers, isAdmin, managerName }) {
   const [books, setBooks] = useState([]);
   const [loadingBooks, setLoadingBooks] = useState(true);
   const [query, setQuery] = useState("");
@@ -6573,9 +6588,12 @@ function LedgerTab({ rentals, isAdmin, managerName }) {
   const [creatingBook, setCreatingBook] = useState(false);
   const [selectedBookIds, setSelectedBookIds] = useState(() => new Set());
   const [deletingSelectedBooks, setDeletingSelectedBooks] = useState(false);
+  // 업체명/현장명 자동완성용으로 A/S내역도 가볍게 한 번만 불러온다(렌탈내역은 이미 props로 받아온 걸 그대로 쓴다).
+  const [asRecordsLite, setAsRecordsLite] = useState([]);
 
   useEffect(() => {
     fetchBooks();
+    fetchAsRecordsLite();
   }, []);
 
   async function fetchBooks() {
@@ -6584,6 +6602,38 @@ function LedgerTab({ rentals, isAdmin, managerName }) {
     if (!error) setBooks(data || []);
     setLoadingBooks(false);
   }
+
+  async function fetchAsRecordsLite() {
+    const { data, error } = await supabase.from("as_requests").select("customer_name, address");
+    if (!error) setAsRecordsLite(data || []);
+    // as_requests 테이블이 아직 없거나 조회 권한이 없어도(마이그레이션 전) 자동완성 후보가 조금 줄어들 뿐,
+    // 조용히 무시하고 나머지 자동완성(거래처 목록, 렌탈내역)은 그대로 동작한다.
+  }
+
+  // 업체명 자동완성 후보: 거래처 목록(customers) + 렌탈내역 + A/S내역에 이미 등장한 이름을 모두 모아 중복 없이 정렬.
+  const customerSuggestions = useMemo(
+    () =>
+      dedupeSorted([
+        ...(customers || []).map((c) => c.name),
+        ...(rentals || []).map((r) => r.customer),
+        ...asRecordsLite.map((a) => a.customer_name),
+      ]),
+    [customers, rentals, asRecordsLite]
+  );
+
+  // 현장명 자동완성 후보: 렌탈내역에만 있는 정보라 렌탈내역에서 뽑는다. 업체명을 먼저 입력해뒀으면 그 업체의
+  // 현장명만 추려서 더 정확하게 보여주고, 업체명이 비어있으면 전체 현장명 중에서 고를 수 있게 한다.
+  const siteSuggestions = useMemo(() => {
+    const cust = normalizeMatchText(newBookCustomer);
+    const pool = cust ? (rentals || []).filter((r) => normalizeMatchText(r.customer) === cust) : rentals || [];
+    return dedupeSorted(pool.map((r) => r.site_name));
+  }, [rentals, newBookCustomer]);
+
+  // 위쪽 검색창은 업체명/현장명/담당자를 한 칸에서 같이 찾는 자유 검색이라, 업체명 후보와 현장명 후보를 합쳐서 보여준다.
+  const searchSuggestions = useMemo(
+    () => dedupeSorted([...customerSuggestions, ...(rentals || []).map((r) => r.site_name)]),
+    [customerSuggestions, rentals]
+  );
 
   const filteredBooks = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -6611,6 +6661,8 @@ function LedgerTab({ rentals, isAdmin, managerName }) {
       alert("대장을 만드는 중 오류가 발생했어요: " + error.message);
       return;
     }
+    addRecentValue("remarket_recent_customer", newBookCustomer);
+    if (newBookSite.trim()) addRecentValue("remarket_recent_ledger_site", newBookSite);
     setNewBookCustomer("");
     setNewBookSite("");
     setShowNewBook(false);
@@ -6668,12 +6720,15 @@ function LedgerTab({ rentals, isAdmin, managerName }) {
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-        <input
-          placeholder="업체명, 현장명, 담당자 검색"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          style={{ ...inputStyle, width: 320 }}
-        />
+        <div style={{ width: 320 }}>
+          <RecentValueInput
+            storageKey="remarket_recent_ledger_search"
+            value={query}
+            onChange={setQuery}
+            placeholder="업체명, 현장명, 담당자 검색"
+            extraOptions={searchSuggestions}
+          />
+        </div>
         <button onClick={() => setShowNewBook((v) => !v)} style={primaryBtnStyle2}>+ 새 대장 만들기</button>
       </div>
 
@@ -6681,10 +6736,22 @@ function LedgerTab({ rentals, isAdmin, managerName }) {
         <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
             <Field label="업체명">
-              <input style={inputStyle} value={newBookCustomer} onChange={(e) => setNewBookCustomer(e.target.value)} />
+              <RecentValueInput
+                storageKey="remarket_recent_customer"
+                value={newBookCustomer}
+                onChange={setNewBookCustomer}
+                placeholder="입력하면 렌탈내역·A/S내역에서 이미 쓰인 이름을 제안해요"
+                extraOptions={customerSuggestions}
+              />
             </Field>
             <Field label="현장명 (선택)">
-              <input style={inputStyle} value={newBookSite} onChange={(e) => setNewBookSite(e.target.value)} />
+              <RecentValueInput
+                storageKey="remarket_recent_ledger_site"
+                value={newBookSite}
+                onChange={setNewBookSite}
+                placeholder={newBookCustomer.trim() ? "이 업체의 렌탈내역에 있는 현장명을 제안해요" : "업체명을 먼저 입력하면 더 정확하게 제안돼요"}
+                extraOptions={siteSuggestions}
+              />
             </Field>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
