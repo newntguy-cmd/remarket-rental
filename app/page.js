@@ -8099,9 +8099,16 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   // 지금 화면에 보이는 표(출고 탭이면 출고내역, 회수 탭이면 출고합계·회수내역·미회수수량·비고까지)를 그대로 엑셀 파일로 내려받는다.
   async function handleExportExcel() {
     const XLSX = await import("xlsx");
+    // 전표번호 칸은 화면 표 헤더처럼 번호 위·날짜 아래 두 줄로 보이게 한다. A/S에서 들어온 전표번호는 이미
+    // "A/S#21048"처럼 #이 붙어 있으니 그대로 쓰고, 일반 전표번호(예: 2609231)에는 앞에 #을 붙여준다.
+    const voucherHeaderLabel = (v) => {
+      const no = v.voucher_no || "-";
+      const withHash = no === "-" || no.includes("#") ? no : `#${no}`;
+      return `${withHash}\n(${v.voucher_date || "-"})`;
+    };
     let header, rows, extraColWidths;
     if (subTab === "out") {
-      header = ["품목", "규격", "색상", ...outVouchers.map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`), "출고합계"];
+      header = ["품목", "규격", "색상", ...outVouchers.map(voucherHeaderLabel), "출고합계"];
       rows = sortedItems.map((it) => [
         it.item,
         it.spec || "",
@@ -8115,9 +8122,9 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
       // 최종 엑셀 한 장에서 출고일/전표번호·회수일/전표번호가 각 전표 칸으로 그대로 다 보이게 한다.
       header = [
         "품목", "규격", "색상",
-        ...outVouchers.map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`),
+        ...outVouchers.map(voucherHeaderLabel),
         "출고합계",
-        ...inVouchers.map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`),
+        ...inVouchers.map(voucherHeaderLabel),
         "회수합계", "미회수수량", "비고",
       ];
       rows = sortedItems.map((it) => {
@@ -8137,6 +8144,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
       });
       extraColWidths = header.slice(3).map(() => ({ wch: 13 }));
     }
+    const headerRowIdx = 3; // 제목, 거래처, 빈줄 다음이 헤더 행
     const aoa = [
       ["렌탈품목 출고 및 회수 리스트"],
       [`거래처: ${book.customer}${book.site_name ? " · 현장명: " + book.site_name : ""}`],
@@ -8146,6 +8154,9 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     ];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws["!cols"] = [{ wch: 16 }, { wch: 22 }, { wch: 12 }, ...extraColWidths];
+    // 전표번호/날짜 두 줄이 잘리지 않도록 헤더 행만 높이를 넉넉하게 준다.
+    ws["!rows"] = [];
+    ws["!rows"][headerRowIdx] = { hpx: 34 };
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, subTab === "out" ? "출고" : "회수 미회수");
     const safeName = (s) => (s || "").replace(/[\\/:*?"<>|]/g, "");
