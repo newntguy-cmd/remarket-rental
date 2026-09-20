@@ -1228,6 +1228,175 @@ function asParsedToDbFields(parsed) {
   };
 }
 
+// ---------- 렌탈품목 회수 지시서 엑셀 파싱 ----------
+// A/S 양식과 같은 "라벨 칸 + 값 칸" 구조지만, 아래쪽에 품목/규격/수량이 반복되는 표(회수할 물건 목록)가
+// 추가로 붙어있다. 그래서 (1) 표가 시작되는 줄 앞까지는 라벨:값 스캔으로 상단 정보를 읽고,
+// (2) 표가 시작되는 줄부터는 견적서 품목표와 같은 방식(품목 칸이 비어있으면 바로 위 품목명을 이어받음)으로 읽는다.
+const COLLECTION_FORM_LABELS = [
+  { key: "voucherNoRaw", label: "전표번호" },
+  { key: "requestType", label: "구분" },
+  { key: "customerName", label: "상호" },
+  { key: "collectionDate", label: "회수일" },
+  { key: "contact", label: "담당자" },
+  { key: "address", label: "주소" },
+  { key: "phone", label: "TEL" },
+  { key: "originalCourier", label: "최초배송자" },
+  { key: "author", label: "작성자" },
+];
+const COLLECTION_FORM_LABEL_SET = new Set(COLLECTION_FORM_LABELS.map((f) => normalizeLabel(f.label)));
+// A/S 양식과 마찬가지로 "최초배송자" 옆이 비어있고 그 옆이 바로 "작성자" 라벨인 식으로, 라벨끼리 붙어있는
+// 경우가 있어 값 찾기에서 다른 라벨은 항상 건너뛴다(COLLECTION_FORM_LABEL_SET). 결재란처럼 라벨이 아닌
+// 잡음 토큰도 섞일 수 있어 A/S와 같은 방식으로 별도 토큰도 건너뛴다.
+const COLLECTION_FORM_NONVALUE_TOKENS = new Set(["담당", "팀장", "본부장", "대표이사", "서명"].map(normalizeLabel));
+
+// 품목표 머리글 행을 찾는다. 견적서 표(detectColumns)와 달리 이 양식엔 단가/금액 칸이 없어서
+// "품목" + "수량" 칸만 있으면 인정한다("규격" 칸은 있을 수도, 없을 수도 있다).
+function detectCollectionItemColumns(rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const cols = {};
+    row.forEach((cell, idx) => {
+      const t = cellText(cell).replace(/\s/g, "");
+      if (!t) return;
+      if (t.includes("품") && t.includes("목")) cols.item = idx;
+      else if (t.includes("규격")) cols.spec = idx;
+      else if (t.includes("수량")) cols.qty = idx;
+    });
+    if (cols.item !== undefined && cols.qty !== undefined) {
+      return { headerRowIdx: i, cols };
+    }
+  }
+  return null;
+}
+
+// 표 시작 행 다음 줄부터 "품목/규격/수량이 모두 빈 줄"을 만날 때까지 읽는다(그 다음부터는 리모컨 회수
+// 체크란 등 표와 무관한 안내 문구 구간). "파티션"처럼 같은 품목이 규격만 다른 여러 줄로 이어질 때
+// 품목 칸을 첫 줄에만 적고 아래 줄은 비워두는 경우가 많아, 견적서 품목표 파싱과 동일하게 직전 품목명을 이어받는다.
+function parseCollectionItemRows(rows, headerRowIdx, cols) {
+  const specCol = cols.spec ?? cols.item + 1;
+  const items = [];
+  let currentItem = "";
+  for (let i = headerRowIdx + 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const itemCell = cellText(row[cols.item]);
+    const specCell = cellText(row[specCol]);
+    const qtyText = cellText(row[cols.qty]);
+    if (!itemCell && !specCell && !qtyText) break;
+    if (itemCell) currentItem = itemCell;
+    if (!currentItem) continue;
+    const n = Number(qtyText.replace(/,/g, ""));
+    const qty = qtyText === "" || isNaN(n) ? 1 : n;
+    items.push({ item: currentItem, spec: specCell, qty });
+  }
+  return items;
+}
+
+function parseCollectionRequestRows(rows) {
+  const result = {
+    managementNo: extractAsManagementNo(rows),
+    voucherNoRaw: "",
+    voucherNo: "",
+    requestType: "",
+    customerName: "",
+    contact: "",
+    collectionDate: "",
+    address: "",
+    phone: "",
+    originalCourier: "",
+    author: "",
+    items: [],
+  };
+
+  const detected = detectCollectionItemColumns(rows);
+  const headerScanRows = detected ? rows.slice(0, detected.headerRowIdx) : rows;
+  for (const row of headerScanRows) {
+    const cells = (row || []).map(cellText);
+    for (let i = 0; i < cells.length; i++) {
+      const norm = normalizeLabel(cells[i]);
+      if (!norm) continue;
+      const field = COLLECTION_FORM_LABELS.find((f) => normalizeLabel(f.label) === norm);
+      if (!field || result[field.key]) continue;
+      for (let j = i + 1; j < cells.length; j++) {
+        if (!cells[j].trim()) continue;
+        const jNorm = normalizeLabel(cells[j]);
+        if (COLLECTION_FORM_LABEL_SET.has(jNorm) || COLLECTION_FORM_NONVALUE_TOKENS.has(jNorm)) break;
+        result[field.key] = cells[j].trim();
+        break;
+      }
+    }
+  }
+
+  // "전표번호" 칸의 값은 "#2609231"처럼 적혀 있어 견적서 전표번호와 같은 방식(숫자만)으로 뽑아내되,
+  // 혹시 "#"+숫자 정확한 형식이 아니면 "#"만 떼어낸 값이라도 그대로 쓴다.
+  result.voucherNo = extractQuoteVoucherNoFromText(result.voucherNoRaw) || result.voucherNoRaw.replace(/^#/, "").trim();
+  delete result.voucherNoRaw;
+
+  if (detected) result.items = parseCollectionItemRows(rows, detected.headerRowIdx, detected.cols);
+
+  return result;
+}
+
+async function parseCollectionRequestExcel(file) {
+  const XLSX = await import("xlsx");
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
+  const visibleSheetNames = wb.SheetNames.filter((name) => {
+    const meta = (wb.Workbook?.Sheets || []).find((s) => s.name === name);
+    return !meta || !meta.Hidden;
+  });
+  const firstSheetName = visibleSheetNames[0] || wb.SheetNames[0];
+  const sheet = wb.Sheets[firstSheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+  return parseCollectionRequestRows(rows);
+}
+
+function parseCollectionRequestPastedText(text) {
+  const rows = parsePastedTable(text);
+  return parseCollectionRequestRows(rows);
+}
+
+// 파싱 결과(camelCase)를 collection_requests 테이블 컬럼(snake_case)으로 옮긴다.
+function collectionParsedToDbFields(parsed) {
+  return {
+    management_no: parsed.managementNo || null,
+    voucher_no: parsed.voucherNo || null,
+    request_type: parsed.requestType || null,
+    customer_name: parsed.customerName || "",
+    contact: parsed.contact || null,
+    collection_date: parsed.collectionDate || null,
+    address: parsed.address || null,
+    phone: parsed.phone || null,
+    original_courier: parsed.originalCourier || null,
+    author: parsed.author || null,
+    items: parsed.items || [],
+    status: "접수",
+  };
+}
+
+// A/S 접수 내용(자유 텍스트)에서 "품목명 + 수량"을 최대한 자동으로 읽어본다. 줄바꿈/쉼표/모점으로 나눈 뒤
+// 각 조각 끝의 숫자(+ea/개)를 수량으로 삼고 나머지를 품목명으로 쓴다. 정확하지 않을 수 있어, 이 결과는
+// 전표로 등록하기 전에 사람이 확인·수정하는 화면에서만 초안으로 쓰인다(현장별 렌탈잔량의 A/S 전표 추가).
+function parseAsContentItems(text) {
+  if (!text) return [];
+  // 줄바꿈만 구분자로 쓴다. 쉼표는 "탑책상, W1400*D800, 연체리 2ea"처럼 한 품목의 규격을 나열할 때도
+  // 흔히 쓰여서, 쉼표까지 조각 구분자로 삼으면 규격이 별개 품목으로 쪼개져 버린다.
+  const chunks = String(text)
+    .split(/\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const results = [];
+  for (const chunk of chunks) {
+    const cleaned = chunk.replace(/\s*외\s*$/, "");
+    const m = cleaned.match(/^(.*?)\s*(\d+)\s*(?:ea|EA|개)?$/);
+    if (m && m[1].trim() && m[2]) {
+      results.push({ item: m[1].trim(), spec: "", qty: Number(m[2]) });
+    } else if (cleaned) {
+      results.push({ item: cleaned, spec: "", qty: 1 });
+    }
+  }
+  return results;
+}
+
 // ---------- 메인 ----------
 export default function Home() {
   const [loading, setLoading] = useState(true);
@@ -1368,6 +1537,7 @@ function Dashboard({ profile, onLogout }) {
   // 출고/회수 내역서도 대장 상세화면에 들어갈 수 있으니, 메뉴를 다시 눌렀을 때 항상 대장 목록으로 되돌아가게 한다.
   const [ledgerResetKey, setLedgerResetKey] = useState(0);
   const [asboardResetKey, setAsboardResetKey] = useState(0);
+  const [collectionboardResetKey, setCollectionboardResetKey] = useState(0);
   const [loadingData, setLoadingData] = useState(true);
   const [importState, setImportState] = useState(null); // parsed preview
   const [importing, setImporting] = useState(false);
@@ -1541,6 +1711,7 @@ function Dashboard({ profile, onLogout }) {
     ...(isStaff ? [{ key: "sales", label: "판매현황" }] : []),
     ...(isStaff ? [{ key: "customerData", label: "업체별데이터" }] : []),
     ...(isStaff ? [{ key: "asboard", label: "A/S관리대장" }] : []),
+    ...(isStaff ? [{ key: "collectionboard", label: "렌탈회수관리" }] : []),
     ...(isStaff ? [{ key: "ledger", label: "현장별 렌탈잔량" }] : []),
   ];
 
@@ -1593,6 +1764,7 @@ function Dashboard({ profile, onLogout }) {
                   if (m.key === "sales") setSalesResetKey((k) => k + 1); // 판매현황도 눌릴 때마다 검색 화면으로 리셋
                   if (m.key === "ledger") setLedgerResetKey((k) => k + 1); // 출고/회수 내역서도 눌릴 때마다 대장 목록으로 리셋
                   if (m.key === "asboard") setAsboardResetKey((k) => k + 1); // A/S관리대장도 눌릴 때마다 목록 화면으로 리셋
+                  if (m.key === "collectionboard") setCollectionboardResetKey((k) => k + 1); // 렌탈회수관리도 눌릴 때마다 목록 화면으로 리셋
                 }}
                 style={{
                   display: "block",
@@ -1659,6 +1831,10 @@ function Dashboard({ profile, onLogout }) {
 
         {activeTab === "asboard" && isStaff && (
           <AsBoardTab key={asboardResetKey} isAdmin={isAdmin} managerName={managerName} />
+        )}
+
+        {activeTab === "collectionboard" && isStaff && (
+          <CollectionBoardTab key={collectionboardResetKey} isAdmin={isAdmin} managerName={managerName} />
         )}
 
         {activeTab == null && isStaff && (
@@ -2157,6 +2333,114 @@ function AsUploadDropZone({ onFile, hasData }) {
       }}
     >
       <InputCardHeader title="② A/S 접수 및 처리보고서 파일 올리기" desc="엑셀(.xlsx) 파일을 그대로 업로드해요" />
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+        onClick={() => inputRef.current?.click()}
+        style={{
+          border: `2px dashed ${dragOver ? C.purple : C.lineSoft}`,
+          background: dragOver ? C.purpleBg : C.bg,
+          padding: hasData ? 14 : 26,
+          textAlign: "center",
+          cursor: "pointer",
+        }}
+      >
+        <input
+          type="file"
+          accept=".xlsx,.xls"
+          ref={inputRef}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) onFile(file);
+          }}
+          style={{ display: "none" }}
+        />
+        {hasData ? (
+          <div style={{ fontSize: 12.5, color: C.inkSoft }}>다른 파일로 다시 채우려면 여기로 새 파일을 드래그하거나 클릭하세요</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 22, marginBottom: 6 }}>⬆️</div>
+            <div style={{ fontSize: 13.5, color: C.ink, marginBottom: 4 }}>파일을 끌어다 놓으세요</div>
+            <div style={{ fontSize: 11.5, color: C.muted }}>또는 클릭해서 파일 선택 (.xlsx, .xls)</div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// 렌탈품목 회수 지시서 업로드용 붙여넣기 상자. AsUploadPasteBox와 같은 구조를 회수 지시서 문구로 바꿔 재사용한다.
+function CollectionUploadPasteBox({ onPasteText, hasData }) {
+  const [text, setText] = useState("");
+  const [focused, setFocused] = useState(false);
+  function handleChange(e) {
+    const v = e.target.value;
+    setText(v);
+    if (v.trim()) onPasteText && onPasteText(v);
+  }
+  const active = focused || text.trim().length > 0;
+  return (
+    <div
+      style={{
+        flex: "1 1 320px",
+        minWidth: 260,
+        border: `1px solid ${active ? C.green : C.line}`,
+        borderTop: `3px solid ${C.green}`,
+        background: C.panel,
+        padding: 16,
+      }}
+    >
+      <InputCardHeader title="① 엑셀에서 긁어서 붙여넣기" desc="회수 지시서(렌탈제품) 내용을 그대로 복사해서 여기에 붙여넣으세요" />
+      <textarea
+        value={text}
+        onChange={handleChange}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        placeholder="회수 지시서 시트를 통째로 긁어서 여기에 Ctrl+V로 붙여넣으세요"
+        style={{
+          width: "100%",
+          minHeight: hasData ? 64 : 96,
+          boxSizing: "border-box",
+          border: `1px solid ${C.lineSoft}`,
+          padding: 10,
+          fontSize: 12.5,
+          fontFamily: sans,
+          resize: "vertical",
+        }}
+      />
+    </div>
+  );
+}
+
+// 렌탈품목 회수 지시서 업로드용 드롭존. AsUploadDropZone과 같은 구조로, 엑셀 파일만 받는다.
+function CollectionUploadDropZone({ onFile, hasData }) {
+  const inputRef = useRef(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  function handleDrop(e) {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) onFile(file);
+  }
+
+  return (
+    <div
+      style={{
+        flex: "1 1 320px",
+        minWidth: 260,
+        border: `1px solid ${dragOver ? C.purple : C.line}`,
+        borderTop: `3px solid ${C.purple}`,
+        background: C.panel,
+        padding: 16,
+      }}
+    >
+      <InputCardHeader title="② 회수 지시서 파일 올리기" desc="엑셀(.xlsx) 파일을 그대로 업로드해요" />
       <div
         onDragOver={(e) => {
           e.preventDefault();
@@ -6830,10 +7114,41 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   const [deletingBook, setDeletingBook] = useState(false);
   const [selectedItemIds, setSelectedItemIds] = useState(() => new Set());
   const [deletingSelected, setDeletingSelected] = useState(false);
+  // "+ 전표 추가" 픽커에서 렌탈전표뿐 아니라 A/S장·회수장도 골라 넣을 수 있게 한 선택지.
+  // 출고 탭은 렌탈전표/A·S장, 회수 탭은 회수장/A·S장 중에서 고른다.
+  const [pickerSource, setPickerSource] = useState("rental"); // "rental" | "collection" | "as"
+  const [asRecords, setAsRecords] = useState([]);
+  const [collectionRecords, setCollectionRecords] = useState([]);
+  const [addingCollectionKey, setAddingCollectionKey] = useState(null);
+  // A/S장은 내용이 자유 텍스트라 수량을 완전히 자동으로 믿을 수 없어서, "선택" 누르면 자동으로 읽어본
+  // 품목/수량을 바로 등록하지 않고 이 임시 상태(초안)에 담아 등록 전에 확인·수정할 수 있게 한다.
+  const [asDraft, setAsDraft] = useState(null); // { record, voucherLabel, voucherDate, items: [{item,spec,qty}] }
+  const [savingAsDraft, setSavingAsDraft] = useState(false);
 
   useEffect(() => {
     fetchAll();
   }, [bookId]);
+
+  useEffect(() => {
+    fetchExternalSources();
+  }, []);
+
+  // 대장이 다른 탭으로 바뀌면(출고 ↔ 회수) 픽커도 그 탭에 맞는 기본 원본으로 되돌리고, 열려 있던 A/S 초안은 닫는다.
+  useEffect(() => {
+    setPickerSource(subTab === "out" ? "rental" : "collection");
+    setShowPicker(false);
+    setPickerQuery("");
+    setAsDraft(null);
+  }, [subTab]);
+
+  async function fetchExternalSources() {
+    const [{ data: as }, { data: cr }] = await Promise.all([
+      supabase.from("as_requests").select("*"),
+      supabase.from("collection_requests").select("*"),
+    ]);
+    setAsRecords(as || []);
+    setCollectionRecords(cr || []);
+  }
 
   async function fetchAll() {
     setLoading(true);
@@ -6891,6 +7206,160 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
       .filter((g) => [g.voucherNo, g.head.customer, g.head.site_name].filter(Boolean).join(" ").toLowerCase().includes(q))
       .slice(0, 50);
   }, [rentalGroups, pickerQuery, book]);
+
+  const asPickerResults = useMemo(() => {
+    const q = pickerQuery.trim().toLowerCase();
+    if (!q) {
+      const cust = (book?.customer || "").toLowerCase();
+      return asRecords.filter((r) => (r.customer_name || "").toLowerCase().includes(cust)).slice(0, 50);
+    }
+    return asRecords
+      .filter((r) => [r.management_no, r.customer_name, r.address, r.content].filter(Boolean).join(" ").toLowerCase().includes(q))
+      .slice(0, 50);
+  }, [asRecords, pickerQuery, book]);
+
+  const collectionPickerResults = useMemo(() => {
+    const q = pickerQuery.trim().toLowerCase();
+    if (!q) {
+      const cust = (book?.customer || "").toLowerCase();
+      return collectionRecords.filter((r) => (r.customer_name || "").toLowerCase().includes(cust)).slice(0, 50);
+    }
+    return collectionRecords
+      .filter((r) => [r.management_no, r.voucher_no, r.customer_name, r.address].filter(Boolean).join(" ").toLowerCase().includes(q))
+      .slice(0, 50);
+  }, [collectionRecords, pickerQuery, book]);
+
+  // 렌탈전표 추가(handleAddOutVoucher)와 같은 "품목 매칭→없으면 생성→전표·수량 등록" 로직을,
+  // A/S장·회수장처럼 원본이 다른 경우에도 그대로 재사용할 수 있게 일반화한 버전.
+  // rawItems: [{item, spec, qty}] — spec에 색상까지 같이 적혀 있어도(예: "닥스, 이중력킹, 메쉬블랙")
+  // splitLedgerSpecColor로 기존 렌탈전표 추가와 동일하게 나눠서 같은 품목으로 매칭한다.
+  async function addVoucherFromItems({ kind, source, sourceRef, voucherNo, voucherDate, rawItems }) {
+    const grouped = new Map();
+    for (const r of rawItems || []) {
+      const { spec, color } = splitLedgerSpecColor(r.spec);
+      const item = (r.item || "").trim();
+      const qty = Number(r.qty) || 0;
+      if (!item || qty <= 0) continue;
+      const k = `${item}〓${spec}〓${color}`;
+      if (!grouped.has(k)) grouped.set(k, { item, spec, color, qty: 0 });
+      grouped.get(k).qty += qty;
+    }
+    const groupedList = Array.from(grouped.values());
+    if (groupedList.length === 0) {
+      alert("추가할 품목이 없어요. 품목명과 수량을 확인해주세요.");
+      return false;
+    }
+
+    const existingByKey = new Map(items.map((it) => [`${it.item}〓${it.spec || ""}〓${it.color || ""}`, it]));
+    const toCreate = groupedList.filter((g) => !existingByKey.has(`${g.item}〓${g.spec}〓${g.color}`));
+
+    let createdItems = [];
+    if (toCreate.length > 0) {
+      const rows = toCreate.map((g) => ({ ledger_book_id: bookId, item: g.item, spec: g.spec || null, color: g.color || null }));
+      const { data, error } = await supabase.from("ledger_items").insert(rows).select();
+      if (error) {
+        alert("품목을 추가하는 중 오류가 발생했어요: " + error.message);
+        return false;
+      }
+      createdItems = data || [];
+    }
+    const allItemsNow = [...items, ...createdItems];
+    const keyToItemId = new Map(allItemsNow.map((it) => [`${it.item}〓${it.spec || ""}〓${it.color || ""}`, it.id]));
+
+    const kindVouchers = vouchers.filter((v) => v.kind === kind);
+    const nextSort = kindVouchers.length > 0 ? Math.max(...kindVouchers.map((v) => v.sort_order || 0)) + 1 : 0;
+    const { data: newVoucher, error: vErr } = await supabase
+      .from("ledger_vouchers")
+      .insert({
+        ledger_book_id: bookId,
+        kind,
+        voucher_no: voucherNo || "(번호없음)",
+        voucher_date: voucherDate || null,
+        source,
+        source_ref: sourceRef || null,
+        sort_order: nextSort,
+      })
+      .select()
+      .single();
+    if (vErr) {
+      alert("전표를 추가하는 중 오류가 발생했어요: " + vErr.message);
+      return false;
+    }
+
+    const entryRows = groupedList.map((g) => ({
+      ledger_book_id: bookId,
+      ledger_voucher_id: newVoucher.id,
+      ledger_item_id: keyToItemId.get(`${g.item}〓${g.spec}〓${g.color}`),
+      qty: g.qty,
+    }));
+    const { error: eErr } = await supabase.from("ledger_entries").insert(entryRows);
+    if (eErr) {
+      alert("수량을 채우는 중 오류가 발생했어요: " + eErr.message);
+      return false;
+    }
+    fetchAll();
+    return true;
+  }
+
+  async function handleAddCollectionVoucher(record) {
+    if (inVouchers.some((v) => v.source === "collection_request" && v.source_ref === record.id)) {
+      alert("이미 이 대장에 추가된 회수장이에요.");
+      return;
+    }
+    setAddingCollectionKey(record.id);
+    const ok = await addVoucherFromItems({
+      kind: "in",
+      source: "collection_request",
+      sourceRef: record.id,
+      voucherNo: record.voucher_no || (record.management_no ? `NO.${record.management_no}` : "(번호없음)"),
+      voucherDate: record.collection_date || null,
+      rawItems: record.items || [],
+    });
+    setAddingCollectionKey(null);
+    if (ok) {
+      setShowPicker(false);
+      setPickerQuery("");
+    }
+  }
+
+  // A/S장은 자유 텍스트라 자동 인식이 정확하지 않을 수 있어, 바로 등록하지 않고 초안(asDraft)을
+  // 먼저 만들어 등록 전에 품목/수량을 확인·수정할 기회를 준다.
+  function startAsDraft(record) {
+    const autoItems = parseAsContentItems(record.content);
+    setAsDraft({
+      record,
+      voucherLabel: record.management_no ? `A/S#${record.management_no}` : "A/S장",
+      voucherDate: /^\d{4}-\d{2}-\d{2}/.test(record.visit_date || "") ? record.visit_date.slice(0, 10) : todayISO(),
+      items: autoItems.length > 0 ? autoItems : [{ item: "", spec: "", qty: 1 }],
+    });
+  }
+  function updateAsDraftItem(idx, patch) {
+    setAsDraft((prev) => ({ ...prev, items: prev.items.map((it, i) => (i === idx ? { ...it, ...patch } : it)) }));
+  }
+  function addAsDraftItemRow() {
+    setAsDraft((prev) => ({ ...prev, items: [...prev.items, { item: "", spec: "", qty: 1 }] }));
+  }
+  function removeAsDraftItemRow(idx) {
+    setAsDraft((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== idx) }));
+  }
+  async function handleSaveAsDraft() {
+    if (!asDraft) return;
+    setSavingAsDraft(true);
+    const ok = await addVoucherFromItems({
+      kind: subTab, // 지금 보고 있는 탭(출고/회수)에 맞춰 A/S장을 어느 쪽 전표로 추가할지 정한다.
+      source: "as_request",
+      sourceRef: asDraft.record.id,
+      voucherNo: asDraft.voucherLabel,
+      voucherDate: asDraft.voucherDate,
+      rawItems: asDraft.items,
+    });
+    setSavingAsDraft(false);
+    if (ok) {
+      setAsDraft(null);
+      setShowPicker(false);
+      setPickerQuery("");
+    }
+  }
 
   async function handleAddOutVoucher(group) {
     if (outVouchers.some((v) => v.rental_voucher_no === group.voucherNo)) {
@@ -7132,49 +7601,170 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
         </button>
       </div>
 
-      {subTab === "out" && (
-        <div className="ledger-no-print" style={{ marginBottom: 16 }}>
-          <button onClick={() => setShowPicker((v) => !v)} style={primaryBtnStyle2}>+ 전표 추가</button>
-          {showPicker && (
-            <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginTop: 10 }}>
-              <input
-                placeholder="전표번호, 거래처, 현장명 검색 (비워두면 이 업체 전표만 보여요)"
-                value={pickerQuery}
-                onChange={(e) => setPickerQuery(e.target.value)}
-                style={{ ...inputStyle, marginBottom: 10 }}
-              />
-              <div style={{ maxHeight: 320, overflowY: "auto", border: `1px solid ${C.lineSoft}` }}>
-                {pickerResults.map((g) => {
-                  const already = outVouchers.some((v) => v.rental_voucher_no === g.voucherNo);
-                  return (
-                    <div key={g.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: `1px solid ${C.lineSoft}`, fontSize: 13 }}>
+      <div className="ledger-no-print" style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <button onClick={() => setShowPicker((v) => !v)} style={primaryBtnStyle2}>+ 전표 추가</button>
+        {subTab === "in" && <button onClick={openManualIn} style={ghostBtnStyle}>+ 회수 직접 입력</button>}
+        {subTab === "in" && <button onClick={handlePrint} style={ghostBtnStyle}>인쇄 / PDF로 저장</button>}
+      </div>
+
+      {showPicker && (
+        <div className="ledger-no-print" style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginBottom: 16 }}>
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            {(subTab === "out" ? [["rental", "렌탈전표"], ["as", "A/S장"]] : [["collection", "회수장"], ["as", "A/S장"]]).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => {
+                  setPickerSource(key);
+                  setAsDraft(null);
+                }}
+                style={{
+                  ...miniBtnStyle,
+                  background: pickerSource === key ? C.ink : "transparent",
+                  color: pickerSource === key ? "#fff" : C.inkSoft,
+                  borderColor: pickerSource === key ? C.ink : C.line,
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <input
+            placeholder={
+              pickerSource === "rental"
+                ? "전표번호, 거래처, 현장명 검색 (비워두면 이 업체 전표만 보여요)"
+                : pickerSource === "collection"
+                ? "관리번호, 전표번호, 거래처 검색 (비워두면 이 업체 회수장만 보여요)"
+                : "관리번호, 거래처, A/S내용 검색 (비워두면 이 업체 A/S만 보여요)"
+            }
+            value={pickerQuery}
+            onChange={(e) => setPickerQuery(e.target.value)}
+            style={{ ...inputStyle, marginBottom: 10 }}
+          />
+          <div style={{ maxHeight: 320, overflowY: "auto", border: `1px solid ${C.lineSoft}` }}>
+            {pickerSource === "rental" &&
+              subTab === "out" &&
+              pickerResults.map((g) => {
+                const already = outVouchers.some((v) => v.rental_voucher_no === g.voucherNo);
+                return (
+                  <div key={g.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: `1px solid ${C.lineSoft}`, fontSize: 13 }}>
+                    <div>
                       <div>
-                        <div>
-                          {g.voucherNo || "(번호없음)"} · {g.head.customer || "-"} {g.head.site_name ? `· ${g.head.site_name}` : ""}
-                        </div>
-                        <div style={{ fontSize: 11.5, color: C.muted }}>{g.head.out_date || "-"} · 품목 {g.rows.length}건</div>
+                        {g.voucherNo || "(번호없음)"} · {g.head.customer || "-"} {g.head.site_name ? `· ${g.head.site_name}` : ""}
                       </div>
-                      <button
-                        onClick={() => handleAddOutVoucher(g)}
-                        disabled={already || addingVoucherKey === g.key}
-                        style={already ? { ...miniBtnStyle, opacity: 0.5 } : miniBtnStylePrimary}
-                      >
-                        {already ? "추가됨" : addingVoucherKey === g.key ? "추가 중…" : "이 전표 추가"}
-                      </button>
+                      <div style={{ fontSize: 11.5, color: C.muted }}>{g.head.out_date || "-"} · 품목 {g.rows.length}건</div>
                     </div>
-                  );
-                })}
-                {pickerResults.length === 0 && <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 13 }}>검색 결과가 없어요.</div>}
+                    <button
+                      onClick={() => handleAddOutVoucher(g)}
+                      disabled={already || addingVoucherKey === g.key}
+                      style={already ? { ...miniBtnStyle, opacity: 0.5 } : miniBtnStylePrimary}
+                    >
+                      {already ? "추가됨" : addingVoucherKey === g.key ? "추가 중…" : "이 전표 추가"}
+                    </button>
+                  </div>
+                );
+              })}
+            {pickerSource === "rental" && subTab === "out" && pickerResults.length === 0 && (
+              <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 13 }}>검색 결과가 없어요.</div>
+            )}
+
+            {pickerSource === "collection" &&
+              subTab === "in" &&
+              collectionPickerResults.map((r) => {
+                const already = inVouchers.some((v) => v.source === "collection_request" && v.source_ref === r.id);
+                return (
+                  <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: `1px solid ${C.lineSoft}`, fontSize: 13 }}>
+                    <div>
+                      <div>
+                        {r.voucher_no ? `#${r.voucher_no}` : r.management_no ? `NO.${r.management_no}` : "(번호없음)"} · {r.customer_name || "-"}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: C.muted }}>{r.collection_date || "-"} · 품목 {(r.items || []).length}건</div>
+                    </div>
+                    <button
+                      onClick={() => handleAddCollectionVoucher(r)}
+                      disabled={already || addingCollectionKey === r.id}
+                      style={already ? { ...miniBtnStyle, opacity: 0.5 } : miniBtnStylePrimary}
+                    >
+                      {already ? "추가됨" : addingCollectionKey === r.id ? "추가 중…" : "이 전표 추가"}
+                    </button>
+                  </div>
+                );
+              })}
+            {pickerSource === "collection" && subTab === "in" && collectionPickerResults.length === 0 && (
+              <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 13 }}>검색 결과가 없어요.</div>
+            )}
+
+            {pickerSource === "as" &&
+              asPickerResults.map((r) => {
+                const already = vouchers.some((v) => v.kind === subTab && v.source === "as_request" && v.source_ref === r.id);
+                return (
+                  <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: `1px solid ${C.lineSoft}`, fontSize: 13 }}>
+                    <div>
+                      <div>{r.management_no ? `NO.${r.management_no}` : "(번호없음)"} · {r.customer_name || "-"}</div>
+                      <div style={{ fontSize: 11.5, color: C.muted }}>{r.visit_date || "-"} · {r.content ? r.content.slice(0, 40) : "-"}</div>
+                    </div>
+                    <button
+                      onClick={() => startAsDraft(r)}
+                      disabled={already}
+                      style={already ? { ...miniBtnStyle, opacity: 0.5 } : miniBtnStylePrimary}
+                    >
+                      {already ? "추가됨" : "선택"}
+                    </button>
+                  </div>
+                );
+              })}
+            {pickerSource === "as" && asPickerResults.length === 0 && (
+              <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 13 }}>검색 결과가 없어요.</div>
+            )}
+          </div>
+
+          {asDraft && (
+            <div style={{ marginTop: 14, borderTop: `1px solid ${C.lineSoft}`, paddingTop: 14 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>
+                A/S 내용에서 품목·수량을 자동으로 읽어봤어요. {subTab === "out" ? "출고" : "회수"} 전표로 추가하기 전에 확인·수정해주세요.
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                <Field label="전표번호/메모">
+                  <input style={inputStyle} value={asDraft.voucherLabel} onChange={(e) => setAsDraft((p) => ({ ...p, voucherLabel: e.target.value }))} />
+                </Field>
+                <Field label="날짜">
+                  <input type="date" style={inputStyle} value={asDraft.voucherDate} onChange={(e) => setAsDraft((p) => ({ ...p, voucherDate: e.target.value }))} />
+                </Field>
+              </div>
+              <div style={{ border: `1px solid ${C.lineSoft}`, marginBottom: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 80px 32px", gap: 8, padding: "6px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
+                  <div>품목</div>
+                  <div>규격</div>
+                  <div>수량</div>
+                  <div></div>
+                </div>
+                {asDraft.items.map((it, idx) => (
+                  <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 80px 32px", gap: 8, padding: "6px 10px", alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}>
+                    <input style={smallInputStyle} value={it.item} onChange={(e) => updateAsDraftItem(idx, { item: e.target.value })} placeholder="품목명" />
+                    <input style={smallInputStyle} value={it.spec} onChange={(e) => updateAsDraftItem(idx, { spec: e.target.value })} placeholder="규격" />
+                    <input type="number" min={0} style={smallInputStyle} value={it.qty} onChange={(e) => updateAsDraftItem(idx, { qty: e.target.value })} />
+                    <button
+                      type="button"
+                      onClick={() => removeAsDraftItemRow(idx)}
+                      title="이 품목 삭제"
+                      aria-label="이 품목 삭제"
+                      style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <button type="button" onClick={addAsDraftItemRow} style={ghostBtnStyle}>+ 품목 추가</button>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={handleSaveAsDraft} disabled={savingAsDraft} style={primaryBtnStyle2}>
+                  {savingAsDraft ? "추가 중…" : `${subTab === "out" ? "출고" : "회수"} 전표로 추가`}
+                </button>
+                <button onClick={() => setAsDraft(null)} style={ghostBtnStyle}>취소</button>
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {subTab === "in" && (
-        <div className="ledger-no-print" style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-          <button onClick={openManualIn} style={primaryBtnStyle2}>+ 회수 추가</button>
-          <button onClick={handlePrint} style={ghostBtnStyle}>인쇄 / PDF로 저장</button>
         </div>
       )}
 
@@ -7928,6 +8518,581 @@ function AsRequestForm({ initial, prefill, isAdmin, managerName, onCancel, onSav
         <Field label="귀책사유 발생시점">
           <input style={inputStyle} value={f.fault_point || ""} onChange={(e) => update({ fault_point: e.target.value })} />
         </Field>
+      </div>
+
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={handleSubmit} disabled={saving} style={primaryBtnStyle2}>
+          {saving ? "저장 중…" : initial ? "저장" : "등록"}
+        </button>
+        <button onClick={onCancel} style={ghostBtnStyle}>
+          취소
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- 렌탈회수관리 ----------
+const COLLECTION_STATUSES = ["접수", "보류", "회수완료", "취소"];
+const COLLECTION_STATUS_STYLE = {
+  접수: { bg: C.amberBg, color: C.amber },
+  보류: { bg: C.mutedBg, color: C.muted },
+  회수완료: { bg: C.greenBg, color: C.green },
+  취소: { bg: C.brickBg, color: C.brick },
+};
+const COLLECTION_PAGE_SIZE = 15;
+
+function fmtCollectionDate(v) {
+  return (v || "").slice(0, 10);
+}
+
+// 회수 품목(items: [{item, spec, qty}])을 목록/전표 추가 화면에서 한 줄로 훑어볼 수 있게 요약한다.
+function summarizeCollectionItems(items) {
+  if (!items || items.length === 0) return "-";
+  return items.map((it) => `${it.item}${it.spec ? ` ${it.spec}` : ""} ${it.qty}`).join(", ");
+}
+
+function CollectionBoardTab({ isAdmin, managerName }) {
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [showForm, setShowForm] = useState(false);
+  const [editingRecord, setEditingRecord] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [deletingSelected, setDeletingSelected] = useState(false);
+  const [savingStatusId, setSavingStatusId] = useState(null);
+  // 엑셀 업로드(회수 지시서) 관련 상태. uploadState가 채워지면 확인 화면(CollectionRequestForm의 prefill 모드)을 보여준다.
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadState, setUploadState] = useState(null);
+  const [uploadKey, setUploadKey] = useState(0);
+
+  useEffect(() => {
+    fetchRecords();
+  }, []);
+
+  async function fetchRecords() {
+    setLoading(true);
+    const { data, error } = await supabase.from("collection_requests").select("*").order("created_at", { ascending: false });
+    if (!error) setRecords(data || []);
+    setLoading(false);
+  }
+
+  const counts = useMemo(() => {
+    const m = { all: records.length };
+    for (const s of COLLECTION_STATUSES) m[s] = records.filter((r) => r.status === s).length;
+    return m;
+  }, [records]);
+
+  const filtered = useMemo(() => {
+    let list = records;
+    if (statusFilter !== "all") list = list.filter((r) => r.status === statusFilter);
+    const q = query.trim().toLowerCase();
+    if (q) {
+      list = list.filter((r) =>
+        [r.customer_name, r.contact, r.address, r.management_no, r.voucher_no, summarizeCollectionItems(r.items)]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(q)
+      );
+    }
+    return list;
+  }, [records, statusFilter, query]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, query]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / COLLECTION_PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const pageItems = filtered.slice((pageSafe - 1) * COLLECTION_PAGE_SIZE, pageSafe * COLLECTION_PAGE_SIZE);
+
+  function openNew() {
+    setEditingRecord(null);
+    setShowForm(true);
+  }
+  function openEdit(record) {
+    setEditingRecord(record);
+    setShowForm(true);
+  }
+
+  async function handleSave(fields) {
+    if (editingRecord) {
+      const { error } = await supabase.from("collection_requests").update(fields).eq("id", editingRecord.id);
+      if (error) {
+        alert("저장 중 오류가 발생했어요: " + error.message);
+        return false;
+      }
+    } else {
+      const { error } = await supabase.from("collection_requests").insert(fields);
+      if (error) {
+        alert("등록 중 오류가 발생했어요: " + error.message);
+        return false;
+      }
+    }
+    setShowForm(false);
+    setEditingRecord(null);
+    await fetchRecords();
+    return true;
+  }
+
+  // 회수 지시서 엑셀/붙여넣기를 읽어서 확인 화면(prefill 모드의 CollectionRequestForm)에 채운다.
+  // A/S 업로드와 마찬가지로, 실제 등록은 그 화면에서 "등록"을 눌러야 이뤄진다.
+  async function processCollectionFile(file) {
+    if (!file) return;
+    try {
+      const parsed = await parseCollectionRequestExcel(file);
+      setUploadState(collectionParsedToDbFields(parsed));
+      setUploadKey((k) => k + 1);
+    } catch (err) {
+      alert("엑셀 파일을 읽는 중 문제가 발생했어요. 형식을 확인해주세요.");
+      console.error(err);
+    }
+  }
+
+  function processCollectionPastedText(text) {
+    if (!text || !text.trim()) return;
+    try {
+      const parsed = parseCollectionRequestPastedText(text);
+      setUploadState(collectionParsedToDbFields(parsed));
+      setUploadKey((k) => k + 1);
+    } catch (err) {
+      alert("붙여넣은 내용을 읽는 중 문제가 발생했어요.");
+      console.error(err);
+    }
+  }
+
+  async function handleUploadSave(fields) {
+    const ok = await handleSave(fields);
+    if (ok) {
+      setUploadState(null);
+      setShowUpload(false);
+    }
+    return ok;
+  }
+
+  async function handleStatusChange(record, status) {
+    setSavingStatusId(record.id);
+    const patch = { status };
+    if (record.is_new && status !== "접수") patch.is_new = false;
+    const { error } = await supabase.from("collection_requests").update(patch).eq("id", record.id);
+    setSavingStatusId(null);
+    if (error) {
+      alert("상태 변경 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setRecords((prev) => prev.map((r) => (r.id === record.id ? { ...r, ...patch } : r)));
+  }
+
+  function toggleSelected(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  const allPageSelected = pageItems.length > 0 && pageItems.every((r) => selectedIds.has(r.id));
+  function toggleSelectAllPage() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected) pageItems.forEach((r) => next.delete(r.id));
+      else pageItems.forEach((r) => next.add(r.id));
+      return next;
+    });
+  }
+
+  async function handleDeleteSelected() {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`선택한 ${selectedIds.size}건을 삭제할까요? 되돌릴 수 없어요.`)) return;
+    const ids = Array.from(selectedIds);
+    setDeletingSelected(true);
+    const { error } = await supabase.from("collection_requests").delete().in("id", ids);
+    setDeletingSelected(false);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setSelectedIds(new Set());
+    fetchRecords();
+  }
+
+  const tabs = [{ key: "all", label: "전체" }, ...COLLECTION_STATUSES.map((s) => ({ key: s, label: s }))];
+
+  return (
+    <div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>렌탈회수관리</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+        렌탈품목 회수 요청부터 회수완료까지 한 곳에서 관리해요. 진행상태는 목록에서 바로 바꿀 수 있어요.
+      </div>
+
+      {showForm && (
+        <CollectionRequestForm
+          initial={editingRecord}
+          isAdmin={isAdmin}
+          managerName={managerName}
+          onCancel={() => {
+            setShowForm(false);
+            setEditingRecord(null);
+          }}
+          onSave={handleSave}
+        />
+      )}
+
+      {showUpload && (
+        <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
+          <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>회수 지시서 엑셀로 등록</div>
+          <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+            회수 지시서(렌탈제품) 엑셀을 올리거나, 내용을 그대로 복사해서 붙여넣으면 아래 내용이 자동으로 채워져요. 등록 전에 꼭 확인·수정해주세요.
+          </div>
+          <div style={{ display: "flex", alignItems: "stretch", gap: 14, marginBottom: 16, flexWrap: "wrap" }}>
+            <CollectionUploadPasteBox onPasteText={processCollectionPastedText} hasData={!!uploadState} />
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: "0 0 auto", fontSize: 11.5, fontWeight: 700, color: C.muted, padding: "0 2px" }}>
+              또는
+            </div>
+            <CollectionUploadDropZone onFile={processCollectionFile} hasData={!!uploadState} />
+          </div>
+
+          {uploadState && (
+            <CollectionRequestForm
+              key={uploadKey}
+              initial={null}
+              prefill={uploadState}
+              isAdmin={isAdmin}
+              managerName={managerName}
+              onCancel={() => setUploadState(null)}
+              onSave={handleUploadSave}
+            />
+          )}
+
+          {!uploadState && (
+            <button onClick={() => setShowUpload(false)} style={ghostBtnStyle}>
+              닫기
+            </button>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setStatusFilter(t.key)}
+            style={{
+              ...miniBtnStyle,
+              background: statusFilter === t.key ? C.ink : "transparent",
+              color: statusFilter === t.key ? "#fff" : C.inkSoft,
+              borderColor: statusFilter === t.key ? C.ink : C.line,
+            }}
+          >
+            {t.label} ({counts[t.key] ?? 0})
+          </button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <input
+          placeholder="관리번호, 전표번호, 고객명, 주소, 회수품목 검색"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{ ...inputStyle, width: 260 }}
+        />
+        <button
+          onClick={() => {
+            setShowUpload((v) => !v);
+            setUploadState(null);
+          }}
+          style={ghostBtnStyle}
+        >
+          + 엑셀로 등록
+        </button>
+        <button onClick={openNew} style={primaryBtnStyle2}>+ 신규 등록</button>
+      </div>
+
+      {selectedIds.size > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+          <span style={{ fontSize: 12.5, color: C.inkSoft }}>{selectedIds.size}건 선택됨</span>
+          <button
+            onClick={handleDeleteSelected}
+            disabled={deletingSelected}
+            style={{ ...ghostBtnStyle, borderColor: C.brick, color: C.brick, padding: "5px 10px", fontSize: 12.5 }}
+          >
+            {deletingSelected ? "삭제 중…" : "선택 삭제"}
+          </button>
+        </div>
+      )}
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 980, width: "100%" }}>
+          <thead>
+            <tr style={{ background: C.bg, borderBottom: `1px solid ${C.line}` }}>
+              <th style={asTh}>
+                <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAllPage} />
+              </th>
+              <th style={asTh}>번호</th>
+              <th style={asTh}>고객명</th>
+              <th style={asTh}>담당자</th>
+              <th style={asTh}>회수일</th>
+              <th style={asTh}>주소</th>
+              <th style={{ ...asTh, minWidth: 220 }}>회수품목</th>
+              <th style={asTh}>작성자</th>
+              <th style={asTh}>작성일</th>
+              <th style={asTh}>진행상태</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr>
+                <td colSpan={10} style={{ ...asTd, textAlign: "center", color: C.muted, padding: 30 }}>불러오는 중…</td>
+              </tr>
+            )}
+            {!loading && pageItems.length === 0 && (
+              <tr>
+                <td colSpan={10} style={{ ...asTd, textAlign: "center", color: C.muted, padding: 30 }}>
+                  등록된 회수 내역이 없어요. "+ 신규 등록"으로 시작해보세요.
+                </td>
+              </tr>
+            )}
+            {!loading &&
+              pageItems.map((r, idx) => {
+                const st = COLLECTION_STATUS_STYLE[r.status] || COLLECTION_STATUS_STYLE["접수"];
+                return (
+                  <tr key={r.id} style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+                    <td style={asTd}>
+                      <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => toggleSelected(r.id)} />
+                    </td>
+                    <td style={asTd} title={r.management_no ? "회수 관리번호" : ""}>
+                      {r.management_no || filtered.length - ((pageSafe - 1) * COLLECTION_PAGE_SIZE + idx)}
+                    </td>
+                    <td style={asTd}>{r.customer_name || "-"}</td>
+                    <td style={asTd}>{r.contact || "-"}</td>
+                    <td style={asTd}>{r.collection_date || "-"}</td>
+                    <td style={asTd}>{r.address || "-"}</td>
+                    <td style={asTd}>
+                      <button
+                        onClick={() => openEdit(r)}
+                        style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 12.5, textAlign: "left" }}
+                      >
+                        {summarizeCollectionItems(r.items)}
+                      </button>
+                      {r.is_new && (
+                        <span
+                          title="새로 등록된 건이에요"
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: 15,
+                            height: 15,
+                            borderRadius: "50%",
+                            background: C.brick,
+                            color: "#fff",
+                            fontSize: 9.5,
+                            fontWeight: 700,
+                            marginLeft: 5,
+                          }}
+                        >
+                          N
+                        </span>
+                      )}
+                    </td>
+                    <td style={asTd}>{r.author || "-"}</td>
+                    <td style={asTd}>{fmtCollectionDate(r.created_at)}</td>
+                    <td style={asTd}>
+                      <select
+                        value={r.status}
+                        onChange={(e) => handleStatusChange(r, e.target.value)}
+                        disabled={savingStatusId === r.id}
+                        style={{ border: `1px solid ${st.color}`, background: st.bg, color: st.color, fontSize: 12, padding: "4px 6px", fontFamily: sans, fontWeight: 600 }}
+                      >
+                        {COLLECTION_STATUSES.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                  </tr>
+                );
+              })}
+          </tbody>
+        </table>
+      </div>
+
+      {totalPages > 1 && (
+        <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 16, flexWrap: "wrap" }}>
+          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={pageSafe === 1} style={miniBtnStyle}>
+            ‹
+          </button>
+          {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPage(p)}
+              style={{
+                ...miniBtnStyle,
+                background: p === pageSafe ? C.ink : "transparent",
+                color: p === pageSafe ? "#fff" : C.inkSoft,
+                borderColor: p === pageSafe ? C.ink : C.line,
+              }}
+            >
+              {p}
+            </button>
+          ))}
+          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={pageSafe === totalPages} style={miniBtnStyle}>
+            ›
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CollectionRequestForm({ initial, prefill, isAdmin, managerName, onCancel, onSave }) {
+  const [f, setF] = useState(
+    initial || {
+      management_no: "",
+      voucher_no: "",
+      request_type: "",
+      customer_name: "",
+      contact: "",
+      collection_date: "",
+      address: "",
+      phone: "",
+      original_courier: "",
+      author: isAdmin ? "" : managerName,
+      status: "접수",
+      items: [],
+      ...(prefill || {}),
+    }
+  );
+  const [saving, setSaving] = useState(false);
+  const update = (patch) => setF({ ...f, ...patch });
+
+  function updateItem(idx, patch) {
+    setF((prev) => ({ ...prev, items: (prev.items || []).map((it, i) => (i === idx ? { ...it, ...patch } : it)) }));
+  }
+  function addItemRow() {
+    setF((prev) => ({ ...prev, items: [...(prev.items || []), { item: "", spec: "", qty: 1 }] }));
+  }
+  function removeItemRow(idx) {
+    setF((prev) => ({ ...prev, items: (prev.items || []).filter((_, i) => i !== idx) }));
+  }
+
+  async function handleSubmit() {
+    if (!(f.customer_name || "").trim()) {
+      alert("상호(고객명)를 입력해주세요.");
+      return;
+    }
+    const cleanItems = (f.items || [])
+      .map((it) => ({ item: (it.item || "").trim(), spec: (it.spec || "").trim(), qty: Number(it.qty) || 0 }))
+      .filter((it) => it.item && it.qty > 0);
+    if (cleanItems.length === 0) {
+      alert("회수 품목을 하나 이상 입력해주세요.");
+      return;
+    }
+    setSaving(true);
+    await onSave({
+      management_no: (f.management_no || "").trim() || null,
+      voucher_no: (f.voucher_no || "").trim() || null,
+      request_type: (f.request_type || "").trim() || null,
+      customer_name: f.customer_name.trim(),
+      contact: (f.contact || "").trim() || null,
+      collection_date: (f.collection_date || "").trim() || null,
+      address: (f.address || "").trim() || null,
+      phone: (f.phone || "").trim() || null,
+      original_courier: (f.original_courier || "").trim() || null,
+      author: (f.author || "").trim() || null,
+      status: f.status || "접수",
+      items: cleanItems,
+    });
+    setSaving(false);
+  }
+
+  return (
+    <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 16 }}>
+        {initial ? "회수 내역 수정" : prefill ? "회수 지시서 확인" : "회수 신규 등록"}
+      </div>
+      {prefill && (
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>
+          엑셀에서 읽은 내용이에요. 등록 전에 내용을 확인·수정해주세요.
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+        <Field label="관리번호(NO.)">
+          <input style={inputStyle} value={f.management_no || ""} onChange={(e) => update({ management_no: e.target.value })} placeholder="예: 15159" />
+        </Field>
+        <Field label="전표번호">
+          <input style={inputStyle} value={f.voucher_no || ""} onChange={(e) => update({ voucher_no: e.target.value })} placeholder="예: 2609231" />
+        </Field>
+        <Field label="구분">
+          <input style={inputStyle} value={f.request_type || ""} onChange={(e) => update({ request_type: e.target.value })} placeholder="예: 전체회수 또는 일부회수" />
+        </Field>
+        <Field label="상호(고객명)">
+          <input style={inputStyle} value={f.customer_name || ""} onChange={(e) => update({ customer_name: e.target.value })} placeholder="예: 리마켓엔지니어링" />
+        </Field>
+        <Field label="담당자">
+          <input style={inputStyle} value={f.contact || ""} onChange={(e) => update({ contact: e.target.value })} placeholder="예: 박춘하 부장" />
+        </Field>
+        <Field label="TEL">
+          <input style={inputStyle} value={f.phone || ""} onChange={(e) => update({ phone: e.target.value })} placeholder="예: 010-1111-2222" />
+        </Field>
+        <Field label="회수일">
+          <input style={inputStyle} value={f.collection_date || ""} onChange={(e) => update({ collection_date: e.target.value })} placeholder="예: 2026-09-30(수)" />
+        </Field>
+        <Field label="최초배송자">
+          <input style={inputStyle} value={f.original_courier || ""} onChange={(e) => update({ original_courier: e.target.value })} />
+        </Field>
+        <Field label="작성자">
+          <input style={inputStyle} value={f.author || ""} onChange={(e) => update({ author: e.target.value })} placeholder="예: 신상헌" />
+        </Field>
+        <Field label="진행상태">
+          <select style={inputStyle} value={f.status || "접수"} onChange={(e) => update({ status: e.target.value })}>
+            {COLLECTION_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <Field label="주소">
+        <input style={inputStyle} value={f.address || ""} onChange={(e) => update({ address: e.target.value })} placeholder="예: 서울시 강남구 테헤란로 410, 19~21층" />
+      </Field>
+
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: C.inkSoft, margin: "10px 0 8px" }}>회수 품목</div>
+      <div style={{ border: `1px solid ${C.lineSoft}`, marginBottom: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px 32px", gap: 8, padding: "6px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
+          <div>품목</div>
+          <div>규격</div>
+          <div>수량</div>
+          <div></div>
+        </div>
+        {(f.items || []).map((it, idx) => (
+          <div
+            key={idx}
+            style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px 32px", gap: 8, padding: "6px 10px", alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}
+          >
+            <input style={smallInputStyle} value={it.item || ""} onChange={(e) => updateItem(idx, { item: e.target.value })} placeholder="품목명" />
+            <input style={smallInputStyle} value={it.spec || ""} onChange={(e) => updateItem(idx, { spec: e.target.value })} placeholder="규격" />
+            <input type="number" min={0} style={smallInputStyle} value={it.qty ?? ""} onChange={(e) => updateItem(idx, { qty: e.target.value })} />
+            <button
+              type="button"
+              onClick={() => removeItemRow(idx)}
+              title="이 품목 삭제"
+              aria-label="이 품목 삭제"
+              style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        {(f.items || []).length === 0 && (
+          <div style={{ padding: 14, textAlign: "center", color: C.muted, fontSize: 12.5 }}>회수 품목이 없어요. 아래에서 추가해주세요.</div>
+        )}
+      </div>
+      <div style={{ marginBottom: 16 }}>
+        <button type="button" onClick={addItemRow} style={ghostBtnStyle}>+ 품목 추가</button>
       </div>
 
       <div style={{ display: "flex", gap: 8 }}>
