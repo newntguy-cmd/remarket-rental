@@ -235,6 +235,29 @@ function addRecentValue(storageKey, value) {
   }
 }
 
+// ---------- "내 이름"(작성자 자동입력용) ----------
+// 관리자 계정을 여러 직원이 같이 쓰다 보니 로그인 정보만으로는 실제로 누가 쓰고 있는지 알 수 없어서,
+// 이 컴퓨터·이 브라우저에 "내 이름"을 한 번 저장해두면 A/S·회수 등록 시 작성자 칸에 자동으로 채워준다.
+const MY_NAME_STORAGE_KEY = "remarket_my_name";
+
+function getMyName() {
+  if (typeof window === "undefined") return "";
+  try {
+    return (window.localStorage.getItem(MY_NAME_STORAGE_KEY) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function setMyName(name) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(MY_NAME_STORAGE_KEY, (name || "").trim());
+  } catch {
+    // 프라이빗 모드 등 localStorage를 못 쓰는 환경이면 그냥 무시(다시 입력해야 할 뿐, 나머지는 정상 동작)
+  }
+}
+
 // ---------- "품목별 수량 데이터" 화면에서 숨긴 품목(이 화면에서만 안 보이게, 원본 렌탈 데이터는 그대로 둔다) ----------
 // 전표별로 구분해서 저장한다(다른 전표에 영향 없게). 브라우저(localStorage)에만 저장되므로 이 컴퓨터·이 브라우저에서만 유지된다.
 function hiddenItemStatsStorageKey(voucherKey) {
@@ -449,6 +472,14 @@ const STOP_NAMES = ["계", "합계(vat 포함)", "합계", "납품확인", "[조
 
 function cellText(v) {
   if (v === null || v === undefined) return "";
+  if (v instanceof Date) {
+    // 엑셀에서 "날짜" 서식으로 입력된 칸은 (아래 sheet_to_json에 cellDates:true를 줬기 때문에) 숫자가 아니라
+    // JS Date로 들어온다. 그대로 문자열로 바꾸면 시간대 때문에 하루가 밀릴 수 있어서 UTC 기준으로 맞춰 적는다.
+    const y = v.getUTCFullYear();
+    const m = String(v.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(v.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
   return String(v).trim();
 }
 
@@ -531,7 +562,7 @@ async function parseQuoteExcel(file) {
   });
   const firstSheetName = visibleSheetNames[0] || wb.SheetNames[0];
   const sheet = wb.Sheets[firstSheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true, cellDates: true });
   return parseQuoteRows(rows);
 }
 
@@ -1195,7 +1226,7 @@ async function parseAsRequestExcel(file) {
   });
   const firstSheetName = visibleSheetNames[0] || wb.SheetNames[0];
   const sheet = wb.Sheets[firstSheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true, cellDates: true });
   return parseAsRequestRows(rows);
 }
 
@@ -1346,7 +1377,7 @@ async function parseCollectionRequestExcel(file) {
   });
   const firstSheetName = visibleSheetNames[0] || wb.SheetNames[0];
   const sheet = wb.Sheets[firstSheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true, cellDates: true });
   return parseCollectionRequestRows(rows);
 }
 
@@ -1546,6 +1577,9 @@ function Dashboard({ profile, onLogout }) {
   const isSales = profile.role === "sales"; // 영업담당자 계정: 본인 담당자명과 일치하는 데이터만 보고 관리할 수 있음
   const isStaff = isAdmin || isSales; // 내부 직원(관리자+영업담당자)은 같은 화면 구성을 쓰고, 실제 데이터 범위는 DB 권한(RLS)이 갈라준다.
   const managerName = profile.manager_name || "";
+  // 관리자 계정을 여러 직원이 같이 쓰다 보니, "내 이름"을 이 브라우저에 저장해두면 A/S·회수 등록 시
+  // 작성자 칸에 자동으로 채워준다(로그인 계정과 별개로, 실제로 이 화면을 쓰고 있는 사람 이름).
+  const [myName, setMyNameState] = useState(() => getMyName());
   const [rentals, setRentals] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [shares, setShares] = useState([]);
@@ -1753,6 +1787,19 @@ function Dashboard({ profile, onLogout }) {
         <div style={{ maxWidth: 1600, margin: "0 auto", padding: "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ fontFamily: serif, fontSize: 20, letterSpacing: 0.2, color: C.ink }}>리마켓 렌탈장부</div>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            {isStaff && (
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 2 }}>내 이름 (작성자 자동입력)</div>
+                <input
+                  value={myName}
+                  onChange={(e) => setMyNameState(e.target.value)}
+                  onBlur={(e) => setMyName(e.target.value)}
+                  placeholder="예: 신상헌"
+                  title="여기 적어두면 A/S·회수 등록 시 작성자 칸에 자동으로 채워져요(이 컴퓨터·브라우저에만 저장돼요)"
+                  style={{ ...smallInputStyle, width: 110, textAlign: "right" }}
+                />
+              </div>
+            )}
             <div style={{ fontSize: 13, color: C.inkSoft, textAlign: "right" }}>
               <div style={{ color: C.ink, fontWeight: 600 }}>{profile.name}</div>
               <div style={{ fontSize: 11.5 }}>{isAdmin ? "관리자" : isSales ? `${managerName} 담당자` : `${profile.company} 담당자`}</div>
@@ -7301,6 +7348,16 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   const [deletingBook, setDeletingBook] = useState(false);
   const [selectedItemIds, setSelectedItemIds] = useState(() => new Set());
   const [deletingSelected, setDeletingSelected] = useState(false);
+  // 같은 품목인데 등록할 때 이름(품목/규격/색상)이 서로 다르게 적혀서 표에 따로따로 나오는 경우, 체크박스로
+  // 골라 하나로 합칠 수 있게 하는 기능. mergeKeepId는 합친 뒤 남길(이름을 그대로 쓸) 품목의 id.
+  const [mergingItems, setMergingItems] = useState(false);
+  const [mergeKeepId, setMergeKeepId] = useState(null);
+  const [savingMerge, setSavingMerge] = useState(false);
+  // 화면을 열 때 이름이 서로 다르게 적혔지만 사실상 같은 품목으로 보이는 것들을 자동으로 찾아서 제안해주는 기능.
+  // 실제 수량 기록을 지우는 작업이라 완전히 조용히 자동 실행하지는 않고, 배너로 보여준 뒤 한 번 눌러서 확인하게 한다.
+  // dismissedMergeSuggestions에 담긴 건 "아니에요"를 눌러서 이번 화면에서만 숨긴 것(다시 들어오면 또 보일 수 있음).
+  const [dismissedMergeSuggestions, setDismissedMergeSuggestions] = useState(() => new Set());
+  const [applyingSuggestion, setApplyingSuggestion] = useState(null);
   // "+ 전표 추가" 픽커에서 렌탈전표뿐 아니라 A/S장·회수장도 골라 넣을 수 있게 한 선택지.
   // 출고 탭은 렌탈전표/A·S장, 회수 탭은 회수장/A·S장 중에서 고른다.
   const [pickerSource, setPickerSource] = useState("rental"); // "rental" | "collection" | "as"
@@ -7376,6 +7433,46 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   }
 
   const sortedItems = useMemo(() => withLedgerRowSpans(sortLedgerItems(items)), [items]);
+
+  // 이름이 서로 다르게 적혀서 표에 따로 나오는 품목들을 자동으로 찾아낸다. 두 가지 규칙만 본다:
+  // (1) 품목·규격·색상이 공백/대소문자 차이만 있고 사실상 완전히 같은 경우.
+  // (2) 한 품목의 규격란 앞부분에 다른 품목의 "품목명"이 그대로 적혀 있고(예: "탑책상, W1600*D800"),
+  //     그 나머지 부분이 그 다른 품목의 규격과 정확히 같고 색상도 같은 경우 — 등록할 때 품목명을 규격에
+  //     같이 적어버린 전형적인 오기입 패턴. 둘 다 아주 구체적인 조건이라 서로 다른 품목이 우연히 걸릴 위험은
+  //     낮지만, 실제로 수량 기록을 지우는 작업이라 자동 실행은 하지 않고 화면에 제안만 띄워서 한 번 확인받는다.
+  const mergeSuggestions = useMemo(() => {
+    const norm = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
+    const list = [];
+    const seenPairs = new Set();
+    for (const a of items) {
+      for (const b of items) {
+        if (a.id === b.id) continue;
+        const pairKey = [a.id, b.id].sort().join("|");
+        if (seenPairs.has(pairKey)) continue;
+
+        if (norm(a.item) === norm(b.item) && norm(a.spec) === norm(b.spec) && norm(a.color) === norm(b.color)) {
+          seenPairs.add(pairKey);
+          list.push({ keepId: a.id, otherId: b.id, reason: "품목·규격·색상이 완전히 같아요" });
+          continue;
+        }
+
+        const aSpecNorm = norm(a.spec);
+        const bItemNorm = norm(b.item);
+        if (!bItemNorm || !aSpecNorm.startsWith(bItemNorm)) continue;
+        const rest = aSpecNorm.slice(bItemNorm.length).replace(/^[,·/]\s*/, "").trim();
+        if (rest && rest === norm(b.spec) && norm(a.color) === norm(b.color)) {
+          seenPairs.add(pairKey);
+          list.push({ keepId: b.id, otherId: a.id, reason: `"${a.item}"의 규격에 "${b.item}"이 그대로 적혀 있어요` });
+        }
+      }
+    }
+    return list;
+  }, [items]);
+  const visibleMergeSuggestions = useMemo(
+    () => mergeSuggestions.filter((s) => !dismissedMergeSuggestions.has(`${s.keepId}|${s.otherId}`)),
+    [mergeSuggestions, dismissedMergeSuggestions]
+  );
+
   const outVouchers = useMemo(() => vouchers.filter((v) => v.kind === "out").sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)), [vouchers]);
   const inVouchers = useMemo(() => vouchers.filter((v) => v.kind === "in").sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)), [vouchers]);
 
@@ -7766,6 +7863,86 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     fetchAll();
   }
 
+  // 품목 병합의 실제 DB 작업만 떼어낸 함수. keepId(남길 품목)의 품목명·규격·색상은 그대로 남고, otherIds
+  // 품목들의 출고/회수 수량은 전표별로 합산돼서 keepId 쪽으로 옮겨 붙는다(같은 전표에 둘 다 수량이 있으면
+  // 더해짐). 합쳐서 사라지는 품목들의 비고도, 남기는 품목에 비고가 비어있으면 옮겨 붙여준다.
+  // 수동 병합 패널과 자동 병합 제안 배너가 둘 다 이 함수를 그대로 쓴다.
+  async function mergeItemsInto(keepId, otherIds) {
+    const finalByVoucher = new Map(); // voucherId -> { id, qty }
+    for (const e of entries) {
+      if (e.ledger_item_id === keepId) finalByVoucher.set(e.ledger_voucher_id, { id: e.id, qty: Number(e.qty) || 0 });
+    }
+    const deleteIds = [];
+    for (const e of entries) {
+      if (!otherIds.includes(e.ledger_item_id)) continue;
+      const addQty = Number(e.qty) || 0;
+      const existing = finalByVoucher.get(e.ledger_voucher_id);
+      if (existing) {
+        existing.qty += addQty;
+        deleteIds.push(e.id);
+      } else {
+        finalByVoucher.set(e.ledger_voucher_id, { id: e.id, qty: addQty });
+      }
+    }
+
+    for (const v of finalByVoucher.values()) {
+      const { error } = await supabase.from("ledger_entries").update({ qty: v.qty, ledger_item_id: keepId }).eq("id", v.id);
+      if (error) return { error };
+    }
+    if (deleteIds.length > 0) {
+      const { error } = await supabase.from("ledger_entries").delete().in("id", deleteIds);
+      if (error) return { error };
+    }
+
+    const keepItem = items.find((it) => it.id === keepId);
+    if (!keepItem?.note) {
+      const otherNote = otherIds.map((id) => items.find((it) => it.id === id)?.note).find((n) => n && n.trim());
+      if (otherNote) await supabase.from("ledger_items").update({ note: otherNote }).eq("id", keepId);
+    }
+
+    const { error: delItemsErr } = await supabase.from("ledger_items").delete().in("id", otherIds);
+    if (delItemsErr) return { error: delItemsErr };
+    return { error: null };
+  }
+
+  // 체크한 품목들을 하나로 합친다(수동 병합 패널에서 "이 이름으로 병합하기"를 눌렀을 때).
+  async function handleMergeItems() {
+    if (!mergeKeepId || selectedItemIds.size < 2) return;
+    const keepId = mergeKeepId;
+    const otherIds = Array.from(selectedItemIds).filter((id) => id !== keepId);
+    if (otherIds.length === 0) return;
+    if (!confirm(`선택한 품목 ${selectedItemIds.size}개를 하나로 합칠까요?\n수량은 전표별로 자동 합산되고, 나머지 품목명은 사라져요. (전표 원본은 그대로 남아있어요)`)) return;
+    setSavingMerge(true);
+    const { error } = await mergeItemsInto(keepId, otherIds);
+    setSavingMerge(false);
+    if (error) {
+      alert("병합 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setMergingItems(false);
+    setMergeKeepId(null);
+    setSelectedItemIds(new Set());
+    fetchAll();
+  }
+
+  // 자동으로 찾아낸 병합 제안을 한 번 클릭으로 적용한다(체크박스 없이 바로).
+  async function handleApplyMergeSuggestion(s) {
+    const pairKey = `${s.keepId}|${s.otherId}`;
+    setApplyingSuggestion(pairKey);
+    const { error } = await mergeItemsInto(s.keepId, [s.otherId]);
+    setApplyingSuggestion(null);
+    if (error) {
+      alert("자동 병합 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    fetchAll();
+  }
+
+  // 자동 제안이 맞지 않을 때 이번 화면에서만 숨긴다(실제로 데이터를 지우지는 않음).
+  function handleDismissMergeSuggestion(s) {
+    setDismissedMergeSuggestions((prev) => new Set(prev).add(`${s.keepId}|${s.otherId}`));
+  }
+
   async function handleSaveNote(itemId, text) {
     const { error } = await supabase.from("ledger_items").update({ note: text }).eq("id", itemId);
     if (!error) setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, note: text } : it)));
@@ -7922,7 +8099,13 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   // 지금 화면에 보이는 표(출고 탭이면 출고내역, 회수 탭이면 출고합계·회수내역·미회수수량·비고까지)를 그대로 엑셀 파일로 내려받는다.
   async function handleExportExcel() {
     const XLSX = await import("xlsx");
-    let header, rows;
+    // 전표(출고/회수, A/S에서 넣은 것 포함) 중 이 품목의 수량이 있는 것만 골라 "전표번호 (날짜)" 줄로 나열한다.
+    const voucherBreakdown = (voucherList, itemId) =>
+      voucherList
+        .filter((v) => qtyFor(v.id, itemId) > 0)
+        .map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`)
+        .join("\n");
+    let header, rows, extraColWidths;
     if (subTab === "out") {
       header = ["품목", "규격", "색상", ...outVouchers.map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`), "출고합계"];
       rows = sortedItems.map((it) => [
@@ -7932,22 +8115,27 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
         ...outVouchers.map((v) => qtyFor(v.id, it.id) || ""),
         outTotalByItem.get(it.id) || 0,
       ]);
+      extraColWidths = header.slice(3).map(() => ({ wch: 13 }));
     } else {
       header = ["품목", "규격", "색상", "출고합계", ...inVouchers.map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`), "회수합계", "미회수수량", "비고"];
       rows = sortedItems.map((it) => {
         const outTotal = outTotalByItem.get(it.id) || 0;
         const inTotal = inTotalByItem.get(it.id) || 0;
+        // 출고합계·회수합계 칸에는 합계 숫자 아래에 실제로 그 수량이 나간/들어온 출고일·전표번호(A/S 전표 포함)를 같이 적어준다.
+        const outDetail = voucherBreakdown(outVouchers, it.id);
+        const inDetail = voucherBreakdown(inVouchers, it.id);
         return [
           it.item,
           it.spec || "",
           it.color || "",
-          outTotal,
+          outDetail ? `${outTotal}\n${outDetail}` : outTotal,
           ...inVouchers.map((v) => qtyFor(v.id, it.id) || ""),
-          inTotal,
+          inDetail ? `${inTotal}\n${inDetail}` : inTotal,
           outTotal - inTotal,
           it.note || "",
         ];
       });
+      extraColWidths = header.slice(3).map((h) => (h === "출고합계" || h === "회수합계" ? { wch: 26 } : { wch: 13 }));
     }
     const aoa = [
       ["렌탈품목 출고 및 회수 리스트"],
@@ -7957,7 +8145,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
       ...rows,
     ];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [{ wch: 16 }, { wch: 22 }, { wch: 12 }, ...header.slice(3).map(() => ({ wch: 13 }))];
+    ws["!cols"] = [{ wch: 16 }, { wch: 22 }, { wch: 12 }, ...extraColWidths];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, subTab === "out" ? "출고" : "회수 미회수");
     const safeName = (s) => (s || "").replace(/[\\/:*?"<>|]/g, "");
@@ -8007,7 +8195,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
           onClick={() => setSubTab("in")}
           style={{ ...miniBtnStyle, background: subTab === "in" ? C.ink : "transparent", color: subTab === "in" ? "#fff" : C.inkSoft, borderColor: subTab === "in" ? C.ink : C.line }}
         >
-          회수 · 미회수
+          렌탈잔량 최종
         </button>
       </div>
 
@@ -8341,16 +8529,101 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
           </div>
         </div>
 
+        {visibleMergeSuggestions.length > 0 && (
+          <div className="ledger-no-print" style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+            {visibleMergeSuggestions.map((s) => {
+              const a = items.find((it) => it.id === s.otherId);
+              const b = items.find((it) => it.id === s.keepId);
+              if (!a || !b) return null;
+              const pairKey = `${s.keepId}|${s.otherId}`;
+              return (
+                <div
+                  key={pairKey}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    flexWrap: "wrap",
+                    border: `1px solid ${C.amber}`,
+                    background: C.amberBg,
+                    borderRadius: 8,
+                    padding: "8px 12px",
+                    fontSize: 12.5,
+                  }}
+                >
+                  <span>
+                    <b>{a.item} · {a.spec || "-"} · {a.color || "-"}</b>와 <b>{b.item} · {b.spec || "-"} · {b.color || "-"}</b>는 같은 품목 같아요. ({s.reason})
+                  </span>
+                  <button
+                    onClick={() => handleApplyMergeSuggestion(s)}
+                    disabled={applyingSuggestion === pairKey}
+                    style={{ ...primaryBtnStyle2, padding: "4px 10px", fontSize: 12 }}
+                  >
+                    {applyingSuggestion === pairKey ? "병합 중…" : "병합하기"}
+                  </button>
+                  <button onClick={() => handleDismissMergeSuggestion(s)} style={{ ...ghostBtnStyle, padding: "4px 10px", fontSize: 12 }}>
+                    아니에요
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {selectedItemIds.size > 0 && (
-          <div className="ledger-no-print" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-            <span style={{ fontSize: 12.5, color: C.inkSoft }}>{selectedItemIds.size}개 선택됨</span>
-            <button
-              onClick={handleDeleteSelectedItems}
-              disabled={deletingSelected}
-              style={{ ...ghostBtnStyle, borderColor: C.brick, color: C.brick, padding: "5px 10px", fontSize: 12.5 }}
-            >
-              {deletingSelected ? "삭제 중…" : "선택 삭제"}
-            </button>
+          <div className="ledger-no-print" style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 12.5, color: C.inkSoft }}>{selectedItemIds.size}개 선택됨</span>
+              {selectedItemIds.size >= 2 && (
+                <button
+                  onClick={() => {
+                    setMergeKeepId(Array.from(selectedItemIds)[0]);
+                    setMergingItems(true);
+                  }}
+                  style={{ ...ghostBtnStyle, padding: "5px 10px", fontSize: 12.5 }}
+                >
+                  선택한 품목 병합
+                </button>
+              )}
+              <button
+                onClick={handleDeleteSelectedItems}
+                disabled={deletingSelected}
+                style={{ ...ghostBtnStyle, borderColor: C.brick, color: C.brick, padding: "5px 10px", fontSize: 12.5 }}
+              >
+                {deletingSelected ? "삭제 중…" : "선택 삭제"}
+              </button>
+            </div>
+            {mergingItems && (
+              <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, background: C.mutedBg, display: "flex", flexDirection: "column", gap: 6, maxWidth: 480 }}>
+                <div style={{ fontSize: 12, color: C.inkSoft }}>
+                  같은 품목인데 이름이 서로 다르게 등록돼서 표에 따로 나오는 경우, 하나로 합칠 수 있어요. 남길 품목명·규격·색상을 골라주세요 — 수량은 전표별로 자동 합산돼요.
+                </div>
+                {Array.from(selectedItemIds).map((id) => {
+                  const it = items.find((x) => x.id === id);
+                  if (!it) return null;
+                  return (
+                    <label key={id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                      <input type="radio" name="mergeKeep" checked={mergeKeepId === id} onChange={() => setMergeKeepId(id)} />
+                      <span>{it.item} · {it.spec || "-"} · {it.color || "-"}</span>
+                    </label>
+                  );
+                })}
+                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                  <button onClick={handleMergeItems} disabled={savingMerge} style={{ ...primaryBtnStyle2, padding: "5px 10px", fontSize: 12.5 }}>
+                    {savingMerge ? "병합 중…" : "이 이름으로 병합하기"}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setMergingItems(false);
+                      setMergeKeepId(null);
+                    }}
+                    style={{ ...ghostBtnStyle, padding: "5px 10px", fontSize: 12.5 }}
+                  >
+                    취소
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -8905,7 +9178,7 @@ function AsRequestForm({ initial, prefill, isAdmin, managerName, onCancel, onSav
       visit_date: "",
       address: "",
       content: "",
-      author: isAdmin ? "" : managerName,
+      author: getMyName() || (isAdmin ? "" : managerName), // 이 컴퓨터·브라우저에 저장해둔 "내 이름"이 있으면 그걸 우선 채움
       status: "접수",
       management_no: "",
       fault_dept: "",
@@ -9009,7 +9282,7 @@ function AsRequestForm({ initial, prefill, isAdmin, managerName, onCancel, onSav
           <input style={inputStyle} value={f.product_name || ""} onChange={(e) => update({ product_name: e.target.value })} placeholder="예: 접의자(밤색) 3ea" />
         </Field>
         <Field label="구입일">
-          <input style={inputStyle} value={f.purchase_date || ""} onChange={(e) => update({ purchase_date: e.target.value })} placeholder="예: 2025-09-15" />
+          <input type="date" style={inputStyle} value={f.purchase_date || ""} onChange={(e) => update({ purchase_date: e.target.value })} />
         </Field>
         <Field label="상품유형">
           <input style={inputStyle} value={f.product_type || ""} onChange={(e) => update({ product_type: e.target.value })} placeholder="예: 렌탈 또는 구매" />
@@ -9473,7 +9746,7 @@ function CollectionRequestForm({ initial, prefill, isAdmin, managerName, onCance
       address: "",
       phone: "",
       original_courier: "",
-      author: isAdmin ? "" : managerName,
+      author: getMyName() || (isAdmin ? "" : managerName), // 이 컴퓨터·브라우저에 저장해둔 "내 이름"이 있으면 그걸 우선 채움
       status: "접수",
       items: [],
       ...(prefill || {}),
