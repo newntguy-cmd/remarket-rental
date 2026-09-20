@@ -52,6 +52,14 @@ function addMonthsMinusDay(dateStr, months) {
 function daysBetween(a, b) {
   return Math.round((new Date(b) - new Date(a)) / 86400000);
 }
+// 회수일자·거래일자 같은 칸은 사람이 직접 "2026-09-30(수)"처럼 요일을 붙여 적을 수 있게 자유 텍스트로 열어뒀는데,
+// 이 값을 그대로 DB의 날짜(date) 칼럼에 넣으면 "invalid input syntax for type date" 오류가 난다.
+// 문자열 안에서 YYYY-MM-DD 형태만 뽑아 쓰고, 그런 형태가 없으면 null로(오류 대신 그냥 날짜 없이 저장되게) 처리한다.
+function extractIsoDate(s) {
+  if (!s) return null;
+  const m = String(s).match(/\d{4}-\d{2}-\d{2}/);
+  return m ? m[0] : null;
+}
 // 등록(오늘) 날짜 기준으로 "YYMMDD + 오늘 등록 순번" 형태의 전표번호를 자동 생성 (예: 오늘 첫 건 26091701, 두 번째 26091702 ...)
 // 배송일자와 무관하게 항상 "오늘" 기준으로 매겨서, 언제 등록했는지로 일련번호가 매겨지게 한다.
 function nextVoucherNo(rentals) {
@@ -7637,7 +7645,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
       source: "collection_request",
       sourceRef: record.id,
       voucherNo: record.voucher_no || (record.management_no ? `NO.${record.management_no}` : "(번호없음)"),
-      voucherDate: record.collection_date || null,
+      voucherDate: extractIsoDate(record.collection_date),
       rawItems: record.items || [],
     });
     setAddingCollectionKey(null);
@@ -7729,7 +7737,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
         ledger_book_id: bookId,
         kind: "out",
         voucher_no: group.voucherNo || "(번호없음)",
-        voucher_date: group.head.out_date || null,
+        voucher_date: extractIsoDate(group.head.out_date),
         source: "rental_voucher",
         rental_voucher_no: group.voucherNo || null,
         sort_order: nextSort,
@@ -8102,12 +8110,14 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   // 지금 화면에 보이는 표(출고 탭이면 출고내역, 회수 탭이면 출고합계·회수내역·미회수수량·비고까지)를 그대로 엑셀 파일로 내려받는다.
   async function handleExportExcel() {
     const XLSX = await import("xlsx");
-    // 전표번호 칸은 화면 표 헤더처럼 번호 위·날짜 아래 두 줄로 보이게 한다. A/S에서 들어온 전표번호는 이미
-    // "A/S#21048"처럼 #이 붙어 있으니 그대로 쓰고, 일반 전표번호(예: 2609231)에는 앞에 #을 붙여준다.
+    // 전표번호 칸에 번호와 날짜를 같이 적어준다. A/S에서 들어온 전표번호는 이미 "A/S#21048"처럼 #이
+    // 붙어 있으니 그대로 쓰고, 일반 전표번호(예: 2609231)에는 앞에 #을 붙여준다.
+    // (칸 안에 줄바꿈을 넣어 두 줄로 만들어봤는데, 프로그램에 따라 줄바꿈이 무시되고 좁은 칸 너비에 그대로
+    // 잘려서 보이는 경우가 있어서, 어떤 프로그램에서 열어도 안 잘리게 한 줄 + 넉넉한 칸 너비로 바꿨다.)
     const voucherHeaderLabel = (v) => {
       const no = v.voucher_no || "-";
       const withHash = no === "-" || no.includes("#") ? no : `#${no}`;
-      return `${withHash}\n(${v.voucher_date || "-"})`;
+      return `${withHash} (${v.voucher_date || "-"})`;
     };
     let header, rows, extraColWidths;
     if (subTab === "out") {
@@ -8119,7 +8129,8 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
         ...outVouchers.map((v) => qtyFor(v.id, it.id) || ""),
         outTotalByItem.get(it.id) || 0,
       ]);
-      extraColWidths = header.slice(3).map(() => ({ wch: 13 }));
+      // 전표번호+날짜를 한 줄로 적으니 칸이 좁으면 잘려 보여서, 전표 칸은 넉넉하게 잡는다.
+      extraColWidths = [...outVouchers.map(() => ({ wch: 22 })), { wch: 13 }];
     } else {
       // 화면(출고 탭)에 보이는 출고전표별 칸(A/S로 들어온 전표 포함)을 그대로, 회수전표별 칸 앞에도 같이 넣어서
       // 최종 엑셀 한 장에서 출고일/전표번호·회수일/전표번호가 각 전표 칸으로 그대로 다 보이게 한다.
@@ -8145,9 +8156,14 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
           it.note || "",
         ];
       });
-      extraColWidths = header.slice(3).map(() => ({ wch: 13 }));
+      // 전표번호+날짜가 한 줄인 칸(출고·회수 전표)은 넉넉하게, 합계/미회수수량/비고는 기존 너비로.
+      extraColWidths = [
+        ...outVouchers.map(() => ({ wch: 22 })),
+        { wch: 13 },
+        ...inVouchers.map(() => ({ wch: 22 })),
+        { wch: 13 }, { wch: 13 }, { wch: 18 },
+      ];
     }
-    const headerRowIdx = 3; // 제목, 거래처, 빈줄 다음이 헤더 행
     const aoa = [
       ["렌탈품목 출고 및 회수 리스트"],
       [`거래처: ${book.customer}${book.site_name ? " · 현장명: " + book.site_name : ""}`],
@@ -8157,9 +8173,6 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     ];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws["!cols"] = [{ wch: 16 }, { wch: 22 }, { wch: 12 }, ...extraColWidths];
-    // 전표번호/날짜 두 줄이 잘리지 않도록 헤더 행만 높이를 넉넉하게 준다.
-    ws["!rows"] = [];
-    ws["!rows"][headerRowIdx] = { hpx: 34 };
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, subTab === "out" ? "출고" : "회수 미회수");
     const safeName = (s) => (s || "").replace(/[\\/:*?"<>|]/g, "");
