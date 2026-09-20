@@ -8099,14 +8099,6 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   // 지금 화면에 보이는 표(출고 탭이면 출고내역, 회수 탭이면 출고합계·회수내역·미회수수량·비고까지)를 그대로 엑셀 파일로 내려받는다.
   async function handleExportExcel() {
     const XLSX = await import("xlsx");
-    // 전표(출고/회수, A/S에서 넣은 것 포함) 중 이 품목의 수량이 있는 것만 골라 "전표번호(날짜)"를 쉼표로 나열한다.
-    // (셀 안에 줄바꿈으로 넣으면 프로그램에 따라 줄바꿈이 무시되고 숫자·글자가 다 붙어서 보이는 경우가 있어서,
-    // 합계는 숫자 그대로 두고 전표 내역은 바로 옆에 별도 칸으로 뺐다.)
-    const voucherBreakdown = (voucherList, itemId) =>
-      voucherList
-        .filter((v) => qtyFor(v.id, itemId) > 0)
-        .map((v) => `${v.voucher_no || "-"}(${v.voucher_date || "-"})`)
-        .join(", ") || "-";
     let header, rows, extraColWidths;
     if (subTab === "out") {
       header = ["품목", "규격", "색상", ...outVouchers.map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`), "출고합계"];
@@ -8119,10 +8111,14 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
       ]);
       extraColWidths = header.slice(3).map(() => ({ wch: 13 }));
     } else {
+      // 화면(출고 탭)에 보이는 출고전표별 칸(A/S로 들어온 전표 포함)을 그대로, 회수전표별 칸 앞에도 같이 넣어서
+      // 최종 엑셀 한 장에서 출고일/전표번호·회수일/전표번호가 각 전표 칸으로 그대로 다 보이게 한다.
       header = [
-        "품목", "규격", "색상", "출고합계", "출고일/전표번호",
+        "품목", "규격", "색상",
+        ...outVouchers.map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`),
+        "출고합계",
         ...inVouchers.map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`),
-        "회수합계", "회수일/전표번호", "미회수수량", "비고",
+        "회수합계", "미회수수량", "비고",
       ];
       rows = sortedItems.map((it) => {
         const outTotal = outTotalByItem.get(it.id) || 0;
@@ -8131,16 +8127,15 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
           it.item,
           it.spec || "",
           it.color || "",
+          ...outVouchers.map((v) => qtyFor(v.id, it.id) || ""),
           outTotal,
-          voucherBreakdown(outVouchers, it.id),
           ...inVouchers.map((v) => qtyFor(v.id, it.id) || ""),
           inTotal,
-          voucherBreakdown(inVouchers, it.id),
           outTotal - inTotal,
           it.note || "",
         ];
       });
-      extraColWidths = header.slice(3).map((h) => (h === "출고일/전표번호" || h === "회수일/전표번호" ? { wch: 32 } : { wch: 13 }));
+      extraColWidths = header.slice(3).map(() => ({ wch: 13 }));
     }
     const aoa = [
       ["렌탈품목 출고 및 회수 리스트"],
@@ -8208,7 +8203,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
         <button onClick={() => setShowPicker((v) => !v)} style={primaryBtnStyle2}>+ 전표 추가</button>
         {subTab === "in" && <button onClick={openManualIn} style={ghostBtnStyle}>+ 회수 직접 입력</button>}
         {subTab === "in" && <button onClick={handlePrint} style={ghostBtnStyle}>인쇄 / PDF로 저장</button>}
-        <button onClick={handleExportExcel} style={ghostBtnStyle}>엑셀로 출력</button>
+        {subTab === "in" && <button onClick={handleExportExcel} style={ghostBtnStyle}>엑셀로 출력</button>}
       </div>
 
       {showPicker && (
