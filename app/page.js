@@ -6872,6 +6872,12 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
   const [creatingBook, setCreatingBook] = useState(false);
   const [selectedBookIds, setSelectedBookIds] = useState(() => new Set());
   const [deletingSelectedBooks, setDeletingSelectedBooks] = useState(false);
+  // 대장을 만든 뒤에도 현장명·담당자(필요하면 업체명까지)를 채우거나 고칠 수 있게 하는 목록 내 수정 상태.
+  const [editingBookId, setEditingBookId] = useState(null);
+  const [editCustomer, setEditCustomer] = useState("");
+  const [editSite, setEditSite] = useState("");
+  const [editManager, setEditManager] = useState("");
+  const [savingEditBook, setSavingEditBook] = useState(false);
   // 업체명/현장명 자동완성용으로 A/S내역도 가볍게 한 번만 불러온다(렌탈내역은 이미 props로 받아온 걸 그대로 쓴다).
   const [asRecordsLite, setAsRecordsLite] = useState([]);
 
@@ -6983,6 +6989,40 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
     fetchBooks();
   }
 
+  function startEditBook(b) {
+    setEditingBookId(b.id);
+    setEditCustomer(b.customer || "");
+    setEditSite(b.site_name || "");
+    setEditManager(b.manager || "");
+  }
+  function cancelEditBook() {
+    setEditingBookId(null);
+  }
+  async function handleSaveEditBook(bookId) {
+    if (!editCustomer.trim()) {
+      alert("업체명을 입력해주세요.");
+      return;
+    }
+    setSavingEditBook(true);
+    const { error } = await supabase
+      .from("ledger_books")
+      .update({
+        customer: editCustomer.trim(),
+        site_name: editSite.trim() || null,
+        manager: editManager.trim() || null,
+      })
+      .eq("id", bookId);
+    setSavingEditBook(false);
+    if (error) {
+      alert("저장하는 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    addRecentValue("remarket_recent_customer", editCustomer);
+    if (editSite.trim()) addRecentValue("remarket_recent_ledger_site", editSite);
+    setEditingBookId(null);
+    fetchBooks();
+  }
+
   if (selectedBookId) {
     return (
       <LedgerBookDetail
@@ -7061,32 +7101,58 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
       )}
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel }}>
-        <div style={{ display: "grid", gridTemplateColumns: "24px 1.5fr 1fr 1fr 1fr", gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, alignItems: "center" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "24px 1.3fr 1fr 1fr 1fr 118px", gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, alignItems: "center" }}>
           <input type="checkbox" checked={allBooksSelected} onChange={toggleSelectAllBooks} />
           <div>업체명</div>
           <div>현장명</div>
           <div>담당자</div>
           <div>만든 날짜</div>
+          <div></div>
         </div>
-        {filteredBooks.map((b) => (
-          <div
-            key={b.id}
-            style={{ display: "grid", gridTemplateColumns: "24px 1.5fr 1fr 1fr 1fr", gap: 8, padding: "12px 14px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center" }}
-          >
-            <input type="checkbox" checked={selectedBookIds.has(b.id)} onChange={() => toggleBookSelected(b.id)} />
-            <div>
-              <button
-                onClick={() => setSelectedBookId(b.id)}
-                style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
-              >
-                {b.customer}
-              </button>
+        {filteredBooks.map((b) => {
+          const isEditing = editingBookId === b.id;
+          return (
+            <div
+              key={b.id}
+              style={{ display: "grid", gridTemplateColumns: "24px 1.3fr 1fr 1fr 1fr 118px", gap: 8, padding: "12px 14px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center" }}
+            >
+              <input type="checkbox" checked={selectedBookIds.has(b.id)} onChange={() => toggleBookSelected(b.id)} />
+              {isEditing ? (
+                <input style={smallInputStyle} value={editCustomer} onChange={(e) => setEditCustomer(e.target.value)} placeholder="업체명" />
+              ) : (
+                <div>
+                  <button
+                    onClick={() => setSelectedBookId(b.id)}
+                    style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
+                  >
+                    {b.customer}
+                  </button>
+                </div>
+              )}
+              {isEditing ? (
+                <input style={smallInputStyle} value={editSite} onChange={(e) => setEditSite(e.target.value)} placeholder="현장명" />
+              ) : (
+                <div>{b.site_name || "-"}</div>
+              )}
+              {isEditing ? (
+                <input style={smallInputStyle} value={editManager} onChange={(e) => setEditManager(e.target.value)} placeholder="담당자" />
+              ) : (
+                <div>{b.manager || "-"}</div>
+              )}
+              <div style={{ fontSize: 12.5 }}>{(b.created_at || "").slice(0, 10)}</div>
+              {isEditing ? (
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => handleSaveEditBook(b.id)} disabled={savingEditBook} style={{ ...miniBtnStylePrimary, padding: "5px 8px", fontSize: 12 }}>
+                    {savingEditBook ? "저장 중…" : "저장"}
+                  </button>
+                  <button onClick={cancelEditBook} style={{ ...ghostBtnStyle, padding: "5px 8px", fontSize: 12 }}>취소</button>
+                </div>
+              ) : (
+                <button onClick={() => startEditBook(b)} style={{ ...ghostBtnStyle, padding: "5px 8px", fontSize: 12 }}>수정</button>
+              )}
             </div>
-            <div>{b.site_name || "-"}</div>
-            <div>{b.manager || "-"}</div>
-            <div style={{ fontSize: 12.5 }}>{(b.created_at || "").slice(0, 10)}</div>
-          </div>
-        ))}
+          );
+        })}
         {!loadingBooks && filteredBooks.length === 0 && (
           <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>등록된 대장이 없어요. "+ 새 대장 만들기"로 시작해보세요.</div>
         )}
