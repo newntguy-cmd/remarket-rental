@@ -7325,6 +7325,8 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   const [cellPadX, setCellPadX] = useState(8);
   // 전표 추가 픽커에서 전표번호를 누르면 그 전표에 어떤 품목이 들어있는지 펼쳐서 보여준다.
   const [expandedRentalKey, setExpandedRentalKey] = useState(null);
+  // A/S장 픽커에서도 마찬가지로, 목록 글자를 누르면 그 A/S건의 세부내역(연락처·주소·전체 내용 등)을 펼쳐서 보여준다.
+  const [expandedAsKey, setExpandedAsKey] = useState(null);
 
   useEffect(() => {
     fetchAll();
@@ -7346,6 +7348,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     setQtyEdits({});
     setSelectedQtyCells(new Set());
     setExpandedRentalKey(null);
+    setExpandedAsKey(null);
   }, [subTab]);
 
   async function fetchExternalSources() {
@@ -7916,6 +7919,52 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     setTimeout(restore, 2000);
   }
 
+  // 지금 화면에 보이는 표(출고 탭이면 출고내역, 회수 탭이면 출고합계·회수내역·미회수수량·비고까지)를 그대로 엑셀 파일로 내려받는다.
+  async function handleExportExcel() {
+    const XLSX = await import("xlsx");
+    let header, rows;
+    if (subTab === "out") {
+      header = ["품목", "규격", "색상", ...outVouchers.map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`), "출고합계"];
+      rows = sortedItems.map((it) => [
+        it.item,
+        it.spec || "",
+        it.color || "",
+        ...outVouchers.map((v) => qtyFor(v.id, it.id) || ""),
+        outTotalByItem.get(it.id) || 0,
+      ]);
+    } else {
+      header = ["품목", "규격", "색상", "출고합계", ...inVouchers.map((v) => `${v.voucher_no || "-"} (${v.voucher_date || "-"})`), "회수합계", "미회수수량", "비고"];
+      rows = sortedItems.map((it) => {
+        const outTotal = outTotalByItem.get(it.id) || 0;
+        const inTotal = inTotalByItem.get(it.id) || 0;
+        return [
+          it.item,
+          it.spec || "",
+          it.color || "",
+          outTotal,
+          ...inVouchers.map((v) => qtyFor(v.id, it.id) || ""),
+          inTotal,
+          outTotal - inTotal,
+          it.note || "",
+        ];
+      });
+    }
+    const aoa = [
+      ["렌탈품목 출고 및 회수 리스트"],
+      [`거래처: ${book.customer}${book.site_name ? " · 현장명: " + book.site_name : ""}`],
+      [],
+      header,
+      ...rows,
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 16 }, { wch: 22 }, { wch: 12 }, ...header.slice(3).map(() => ({ wch: 13 }))];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, subTab === "out" ? "출고" : "회수 미회수");
+    const safeName = (s) => (s || "").replace(/[\\/:*?"<>|]/g, "");
+    const fname = `${safeName(book.customer)}${book.site_name ? "_" + safeName(book.site_name) : ""}_렌탈잔량_${subTab === "out" ? "출고" : "회수"}.xlsx`;
+    XLSX.writeFile(wb, fname);
+  }
+
   if (loading || !book) {
     return <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>불러오는 중…</div>;
   }
@@ -7966,6 +8015,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
         <button onClick={() => setShowPicker((v) => !v)} style={primaryBtnStyle2}>+ 전표 추가</button>
         {subTab === "in" && <button onClick={openManualIn} style={ghostBtnStyle}>+ 회수 직접 입력</button>}
         {subTab === "in" && <button onClick={handlePrint} style={ghostBtnStyle}>인쇄 / PDF로 저장</button>}
+        <button onClick={handleExportExcel} style={ghostBtnStyle}>엑셀로 출력</button>
       </div>
 
       {showPicker && (
@@ -7979,6 +8029,8 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
                   setAsDraft(null);
                   setAsQueryInput("");
                   setAsSearchTerm("");
+                  setExpandedRentalKey(null);
+                  setExpandedAsKey(null);
                 }}
                 style={{
                   ...miniBtnStyle,
@@ -8109,19 +8161,47 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
             {pickerSource === "as" &&
               asPickerResults.map((r) => {
                 const already = vouchers.some((v) => v.kind === subTab && v.source === "as_request" && v.source_ref === r.id);
+                const expanded = expandedAsKey === r.id;
+                const statusStyle = AS_STATUS_STYLE[r.status] || AS_STATUS_STYLE["접수"];
                 return (
-                  <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: `1px solid ${C.lineSoft}`, fontSize: 13 }}>
-                    <div>
-                      <div>{r.management_no ? `NO.${r.management_no}` : "(번호없음)"} · {r.customer_name || "-"}</div>
-                      <div style={{ fontSize: 11.5, color: C.muted }}>{r.visit_date || "-"} · {r.content ? r.content.slice(0, 40) : "-"}</div>
+                  <div key={r.id} style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", fontSize: 13 }}>
+                      <div>
+                        <div
+                          onClick={() => setExpandedAsKey(expanded ? null : r.id)}
+                          title="눌러서 이 A/S건의 세부내역을 확인해보세요"
+                          style={{ cursor: "pointer", color: C.ink, textDecoration: "underline", textDecorationColor: C.lineSoft, textUnderlineOffset: 2, display: "inline-block" }}
+                        >
+                          {r.management_no ? `NO.${r.management_no}` : "(번호없음)"} · {r.customer_name || "-"}
+                        </div>
+                        <div style={{ fontSize: 11.5, color: C.muted }}>{r.visit_date || "-"} · {r.content ? r.content.slice(0, 40) : "-"}</div>
+                      </div>
+                      <button
+                        onClick={() => startAsDraft(r)}
+                        disabled={already}
+                        style={already ? { ...miniBtnStyle, opacity: 0.5 } : miniBtnStylePrimary}
+                      >
+                        {already ? "추가됨" : "선택"}
+                      </button>
                     </div>
-                    <button
-                      onClick={() => startAsDraft(r)}
-                      disabled={already}
-                      style={already ? { ...miniBtnStyle, opacity: 0.5 } : miniBtnStylePrimary}
-                    >
-                      {already ? "추가됨" : "선택"}
-                    </button>
+                    {expanded && (
+                      <div style={{ padding: "0 12px 12px 12px" }}>
+                        <div style={{ border: `1px solid ${C.lineSoft}`, background: C.bg, padding: 12, fontSize: 12.5 }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
+                            <div><span style={{ color: C.muted }}>연락처 </span>{r.contact || "-"}</div>
+                            <div><span style={{ color: C.muted }}>방문예정일 </span>{r.visit_date || "-"}</div>
+                            <div><span style={{ color: C.muted }}>주소 </span>{r.address || "-"}</div>
+                            <div><span style={{ color: C.muted }}>작성자 </span>{r.author || "-"} · {fmtAsDate(r.created_at)}</div>
+                          </div>
+                          <div style={{ marginBottom: 6 }}>
+                            <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 6px", borderRadius: 4, color: statusStyle.color, background: statusStyle.bg }}>
+                              {r.status || "접수"}
+                            </span>
+                          </div>
+                          <div style={{ whiteSpace: "pre-wrap" }}>{r.content || "-"}</div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -8676,7 +8756,6 @@ function AsBoardTab({ isAdmin, managerName }) {
         >
           + 엑셀로 등록
         </button>
-        <button onClick={openNew} style={primaryBtnStyle2}>+ 신규 등록</button>
       </div>
 
       {selectedIds.size > 0 && (
@@ -8719,7 +8798,7 @@ function AsBoardTab({ isAdmin, managerName }) {
             {!loading && pageItems.length === 0 && (
               <tr>
                 <td colSpan={10} style={{ ...asTd, textAlign: "center", color: C.muted, padding: 30 }}>
-                  등록된 A/S 내역이 없어요. "+ 신규 등록"으로 시작해보세요.
+                  등록된 A/S 내역이 없어요. "+ 엑셀로 등록"으로 시작해보세요.
                 </td>
               </tr>
             )}
