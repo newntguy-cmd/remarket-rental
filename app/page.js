@@ -7236,6 +7236,8 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   const [savingQtyEdits, setSavingQtyEdits] = useState(false);
   // 품목·규격·색상 칸의 좌우 여백(px). 내용이 길 때 넓히거나, 표를 좁게 보고 싶을 때 줄일 수 있다.
   const [cellPadX, setCellPadX] = useState(8);
+  // 전표 추가 픽커에서 전표번호를 누르면 그 전표에 어떤 품목이 들어있는지 펼쳐서 보여준다.
+  const [expandedRentalKey, setExpandedRentalKey] = useState(null);
 
   useEffect(() => {
     fetchAll();
@@ -7256,6 +7258,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     setEditingQtyKind(null);
     setQtyEdits({});
     setSelectedQtyCells(new Set());
+    setExpandedRentalKey(null);
   }, [subTab]);
 
   async function fetchExternalSources() {
@@ -7937,21 +7940,52 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
               subTab === "out" &&
               pickerResults.map((g) => {
                 const already = outVouchers.some((v) => v.rental_voucher_no === g.voucherNo);
+                const expanded = expandedRentalKey === g.key;
                 return (
-                  <div key={g.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: `1px solid ${C.lineSoft}`, fontSize: 13 }}>
-                    <div>
+                  <div key={g.key} style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", fontSize: 13 }}>
                       <div>
-                        {g.voucherNo || "(번호없음)"} · {g.head.customer || "-"} {g.head.site_name ? `· ${g.head.site_name}` : ""}
+                        <div
+                          onClick={() => setExpandedRentalKey(expanded ? null : g.key)}
+                          title="눌러서 이 전표에 들어있는 품목을 확인해보세요"
+                          style={{ cursor: "pointer", color: C.ink, textDecoration: "underline", textDecorationColor: C.lineSoft, textUnderlineOffset: 2, display: "inline-block" }}
+                        >
+                          {g.voucherNo || "(번호없음)"} · {g.head.customer || "-"} {g.head.site_name ? `· ${g.head.site_name}` : ""}
+                        </div>
+                        <div style={{ fontSize: 11.5, color: C.muted }}>{g.head.out_date || "-"} · 품목 {g.rows.length}건</div>
                       </div>
-                      <div style={{ fontSize: 11.5, color: C.muted }}>{g.head.out_date || "-"} · 품목 {g.rows.length}건</div>
+                      <button
+                        onClick={() => handleAddOutVoucher(g)}
+                        disabled={already || addingVoucherKey === g.key}
+                        style={already ? { ...miniBtnStyle, opacity: 0.5 } : miniBtnStylePrimary}
+                      >
+                        {already ? "추가됨" : addingVoucherKey === g.key ? "추가 중…" : "이 전표 추가"}
+                      </button>
                     </div>
-                    <button
-                      onClick={() => handleAddOutVoucher(g)}
-                      disabled={already || addingVoucherKey === g.key}
-                      style={already ? { ...miniBtnStyle, opacity: 0.5 } : miniBtnStylePrimary}
-                    >
-                      {already ? "추가됨" : addingVoucherKey === g.key ? "추가 중…" : "이 전표 추가"}
-                    </button>
+                    {expanded && (
+                      <div style={{ padding: "0 12px 10px 12px" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, background: C.bg }}>
+                          <thead>
+                            <tr>
+                              <th style={{ ...ledgerTh, padding: "5px 8px" }}>품목</th>
+                              <th style={{ ...ledgerTh, padding: "5px 8px" }}>규격</th>
+                              <th style={{ ...ledgerTh, padding: "5px 8px", textAlign: "right" }}>수량</th>
+                              <th style={{ ...ledgerTh, padding: "5px 8px", textAlign: "right" }}>금액</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {g.rows.map((r) => (
+                              <tr key={r.id}>
+                                <td style={{ ...ledgerTd, padding: "5px 8px" }}>{r.item || "-"}</td>
+                                <td style={{ ...ledgerTd, padding: "5px 8px" }}>{r.spec || "-"}</td>
+                                <td style={{ ...ledgerTd, padding: "5px 8px", textAlign: "right" }}>{Number(r.qty || 0).toLocaleString("ko-KR")}</td>
+                                <td style={{ ...ledgerTd, padding: "5px 8px", textAlign: "right" }}>{fmtWon(r.amount)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 );
               })}
