@@ -6877,6 +6877,7 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
   const [editCustomer, setEditCustomer] = useState("");
   const [editSite, setEditSite] = useState("");
   const [editManager, setEditManager] = useState("");
+  const [editNote, setEditNote] = useState("");
   const [savingEditBook, setSavingEditBook] = useState(false);
   // 업체명/현장명 자동완성용으로 A/S내역도 가볍게 한 번만 불러온다(렌탈내역은 이미 props로 받아온 걸 그대로 쓴다).
   const [asRecordsLite, setAsRecordsLite] = useState([]);
@@ -6928,7 +6929,7 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
   const filteredBooks = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return books;
-    return books.filter((b) => [b.customer, b.site_name, b.manager].filter(Boolean).join(" ").toLowerCase().includes(q));
+    return books.filter((b) => [b.customer, b.site_name, b.manager, b.note].filter(Boolean).join(" ").toLowerCase().includes(q));
   }, [books, query]);
 
   async function handleCreateBook() {
@@ -6994,6 +6995,7 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
     setEditCustomer(b.customer || "");
     setEditSite(b.site_name || "");
     setEditManager(b.manager || "");
+    setEditNote(b.note || "");
   }
   function cancelEditBook() {
     setEditingBookId(null);
@@ -7010,6 +7012,7 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
         customer: editCustomer.trim(),
         site_name: editSite.trim() || null,
         manager: editManager.trim() || null,
+        note: editNote.trim() || null,
       })
       .eq("id", bookId);
     setSavingEditBook(false);
@@ -7101,11 +7104,12 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
       )}
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel }}>
-        <div style={{ display: "grid", gridTemplateColumns: "24px 1.3fr 1fr 1fr 1fr 118px", gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, alignItems: "center" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "24px 1.1fr 0.9fr 0.9fr 1.5fr 0.9fr 118px", gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, alignItems: "center" }}>
           <input type="checkbox" checked={allBooksSelected} onChange={toggleSelectAllBooks} />
           <div>업체명</div>
           <div>현장명</div>
           <div>담당자</div>
+          <div>비고</div>
           <div>만든 날짜</div>
           <div></div>
         </div>
@@ -7114,7 +7118,7 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
           return (
             <div
               key={b.id}
-              style={{ display: "grid", gridTemplateColumns: "24px 1.3fr 1fr 1fr 1fr 118px", gap: 8, padding: "12px 14px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center" }}
+              style={{ display: "grid", gridTemplateColumns: "24px 1.1fr 0.9fr 0.9fr 1.5fr 0.9fr 118px", gap: 8, padding: "12px 14px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center" }}
             >
               <input type="checkbox" checked={selectedBookIds.has(b.id)} onChange={() => toggleBookSelected(b.id)} />
               {isEditing ? (
@@ -7138,6 +7142,11 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
                 <input style={smallInputStyle} value={editManager} onChange={(e) => setEditManager(e.target.value)} placeholder="담당자" />
               ) : (
                 <div>{b.manager || "-"}</div>
+              )}
+              {isEditing ? (
+                <input style={smallInputStyle} value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="자유롭게 메모를 적어주세요" />
+              ) : (
+                <div style={{ color: b.note ? C.ink : C.muted, whiteSpace: "pre-wrap" }}>{b.note || "-"}</div>
               )}
               <div style={{ fontSize: 12.5 }}>{(b.created_at || "").slice(0, 10)}</div>
               {isEditing ? (
