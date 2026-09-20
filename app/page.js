@@ -3038,6 +3038,15 @@ function truckOptionCost(rate, extra, transactionType) {
   return transactionType === "rental" ? oneWay * 2 : oneWay;
 }
 
+// "계산하기"로 나온 결과 화면에서 용차 한 줄 옆의 "x"를 눌렀을 때, 그 줄만 빼고 합계를 다시 계산한다.
+// result가 아직 없으면(계산 전) 그대로 둔다.
+function removeTruckDetailFromResult(result, key) {
+  if (!result) return result;
+  const remaining = result.truckDetails.filter((d) => d.key !== key);
+  const truckTotal = remaining.reduce((sum, d) => sum + d.cost, 0);
+  return { ...result, truckDetails: remaining, truckTotal, total: result.base + truckTotal };
+}
+
 function findZoneIndex(zones, address) {
   const a = address || "";
   const idx = zones.findIndex((z) =>
@@ -3281,9 +3290,16 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
       }
       const cost = truckOptionCost(rate, opt.extra, transactionType);
       truckTotal += cost;
-      truckDetails.push({ label: transactionType === "rental" ? `${opt.label} (왕복 ×2)` : opt.label, cost });
+      truckDetails.push({ key: opt.key, label: transactionType === "rental" ? `${opt.label} (왕복 ×2)` : opt.label, cost });
     }
     setResult({ base: base.amount, truckTotal, truckDetails, total: base.amount + truckTotal });
+  }
+
+  // 결과에 이미 추가된 용차 한 줄을 "x"로 바로 삭제한다. 체크박스도 같이 해제해서, 팝업을 다시 열었을 때도
+  // 지워진 상태 그대로 유지되게 한다(다시 "계산하기"를 누를 필요 없이 합계가 바로 갱신됨).
+  function removeTruckDetail(key) {
+    setChecked((p) => ({ ...p, [key]: false }));
+    setResult((prev) => removeTruckDetailFromResult(prev, key));
   }
 
   return (
@@ -3398,7 +3414,18 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
             <div style={{ borderTop: `1px solid ${C.lineSoft}`, paddingTop: 10, fontSize: 12.5 }}>
               <div>기본배송비: {fmtWon(result.base)}</div>
               {result.truckDetails.map((d, i) => (
-                <div key={i}>용차 · {d.label}: {fmtWon(d.cost)}</div>
+                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                  <span>용차 · {d.label}: {fmtWon(d.cost)}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeTruckDetail(d.key)}
+                    title="이 용차 삭제"
+                    aria-label="이 용차 삭제"
+                    style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}
+                  >
+                    ×
+                  </button>
+                </div>
               ))}
               <div style={{ marginTop: 6, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                 <span>
