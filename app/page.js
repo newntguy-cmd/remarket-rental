@@ -7190,6 +7190,10 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   // 품목/수량을 바로 등록하지 않고 이 임시 상태(초안)에 담아 등록 전에 확인·수정할 수 있게 한다.
   const [asDraft, setAsDraft] = useState(null); // { record, voucherLabel, voucherDate, items: [{item,spec,qty}] }
   const [savingAsDraft, setSavingAsDraft] = useState(false);
+  // A/S장 검색은 렌탈전표/회수장과 달리 입력하는 대로 바로 걸러지지 않고, "검색" 버튼을 눌러야(또는 Enter)
+  // 실제로 걸러진다. asQueryInput은 입력창에 지금 타이핑 중인 값(자동완성용), asSearchTerm은 검색이 실행된 값.
+  const [asQueryInput, setAsQueryInput] = useState("");
+  const [asSearchTerm, setAsSearchTerm] = useState("");
 
   useEffect(() => {
     fetchAll();
@@ -7204,6 +7208,8 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     setPickerSource(subTab === "out" ? "rental" : "collection");
     setShowPicker(false);
     setPickerQuery("");
+    setAsQueryInput("");
+    setAsSearchTerm("");
     setAsDraft(null);
   }, [subTab]);
 
@@ -7273,8 +7279,9 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
       .slice(0, 50);
   }, [rentalGroups, pickerQuery, book]);
 
+  // "검색" 버튼(또는 Enter)을 눌러 확정된 asSearchTerm 기준으로만 걸러진다(입력 중인 asQueryInput은 자동완성에만 쓰임).
   const asPickerResults = useMemo(() => {
-    const q = pickerQuery.trim().toLowerCase();
+    const q = asSearchTerm.trim().toLowerCase();
     if (!q) {
       const cust = (book?.customer || "").toLowerCase();
       return asRecords.filter((r) => (r.customer_name || "").toLowerCase().includes(cust)).slice(0, 50);
@@ -7282,7 +7289,17 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     return asRecords
       .filter((r) => [r.management_no, r.customer_name, r.address, r.content].filter(Boolean).join(" ").toLowerCase().includes(q))
       .slice(0, 50);
-  }, [asRecords, pickerQuery, book]);
+  }, [asRecords, asSearchTerm, book]);
+
+  // A/S 검색창 자동완성 후보: 관리번호(우선)와 거래처명을 모아 중복 없이 정렬해서 보여준다.
+  const asSearchSuggestions = useMemo(
+    () => dedupeSorted([...asRecords.map((r) => r.management_no), ...asRecords.map((r) => r.customer_name)]),
+    [asRecords]
+  );
+
+  function runAsSearch() {
+    setAsSearchTerm(asQueryInput);
+  }
 
   const collectionPickerResults = useMemo(() => {
     const q = pickerQuery.trim().toLowerCase();
@@ -7682,6 +7699,8 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
                 onClick={() => {
                   setPickerSource(key);
                   setAsDraft(null);
+                  setAsQueryInput("");
+                  setAsSearchTerm("");
                 }}
                 style={{
                   ...miniBtnStyle,
@@ -7694,18 +7713,37 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
               </button>
             ))}
           </div>
-          <input
-            placeholder={
-              pickerSource === "rental"
-                ? "전표번호, 거래처, 현장명 검색 (비워두면 이 업체 전표만 보여요)"
-                : pickerSource === "collection"
-                ? "관리번호, 전표번호, 거래처 검색 (비워두면 이 업체 회수장만 보여요)"
-                : "관리번호, 거래처, A/S내용 검색 (비워두면 이 업체 A/S만 보여요)"
-            }
-            value={pickerQuery}
-            onChange={(e) => setPickerQuery(e.target.value)}
-            style={{ ...inputStyle, marginBottom: 10 }}
-          />
+          {pickerSource === "as" ? (
+            <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "flex-start" }}>
+              <div style={{ flex: 1 }}>
+                <RecentValueInput
+                  storageKey="remarket_recent_as_picker_search"
+                  value={asQueryInput}
+                  onChange={setAsQueryInput}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      runAsSearch();
+                    }
+                  }}
+                  placeholder="A/S 관리번호로 검색 (거래처·A/S내용도 찾아요, 비워두면 이 업체 A/S만 보여요)"
+                  extraOptions={asSearchSuggestions}
+                />
+              </div>
+              <button type="button" onClick={runAsSearch} style={miniBtnStylePrimary}>검색</button>
+            </div>
+          ) : (
+            <input
+              placeholder={
+                pickerSource === "rental"
+                  ? "전표번호, 거래처, 현장명 검색 (비워두면 이 업체 전표만 보여요)"
+                  : "관리번호, 전표번호, 거래처 검색 (비워두면 이 업체 회수장만 보여요)"
+              }
+              value={pickerQuery}
+              onChange={(e) => setPickerQuery(e.target.value)}
+              style={{ ...inputStyle, marginBottom: 10 }}
+            />
+          )}
           <div style={{ maxHeight: 320, overflowY: "auto", border: `1px solid ${C.lineSoft}` }}>
             {pickerSource === "rental" &&
               subTab === "out" &&
