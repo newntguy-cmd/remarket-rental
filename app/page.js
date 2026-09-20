@@ -8191,10 +8191,27 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     <div>
       <style>{`
         @media print {
+          @page { size: landscape; margin: 10mm; }
           body * { visibility: hidden; }
           #ledger-print-area, #ledger-print-area * { visibility: visible; }
-          #ledger-print-area { position: absolute; top: 0; left: 0; width: 100%; padding: 24px; }
+          #ledger-print-area {
+            position: absolute; top: 0; left: 0; width: 100%; padding: 12px;
+            overflow: visible !important;
+          }
           .ledger-no-print { display: none !important; }
+          /* 전표 칸이 많아져서 표가 넓어져도, 화면처럼 가로 스크롤로 잘려 보이지 않고
+             한 페이지 너비에 맞춰 줄어들도록(칸이 좁으면 글자가 줄바꿈되게) 강제한다. */
+          .ledger-print-table {
+            width: 100% !important;
+            min-width: 0 !important;
+            table-layout: fixed;
+            font-size: 8.5px !important;
+          }
+          .ledger-print-table th, .ledger-print-table td {
+            padding: 3px 4px !important;
+            white-space: normal !important;
+            word-break: break-word;
+          }
         }
       `}</style>
 
@@ -8671,64 +8688,7 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
           </div>
         )}
 
-        {subTab === "out" && (
-          <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 600 }}>
-            <thead>
-              <tr>
-                <th rowSpan={2} className="ledger-no-print" style={ledgerTh}>
-                  <input type="checkbox" checked={allItemsSelected} onChange={toggleSelectAllItems} />
-                </th>
-                <th rowSpan={2} style={itemColThStyle}>품목</th>
-                <th rowSpan={2} style={itemColThStyle}>규격</th>
-                <th rowSpan={2} style={itemColThStyle}>색상</th>
-                {outVouchers.length > 0 && (
-                  <th colSpan={outVouchers.length} style={{ ...ledgerTh, background: C.amberBg }}>출고내역</th>
-                )}
-                <th rowSpan={2} style={{ ...ledgerTh, background: C.amberBg }}>출고합계</th>
-              </tr>
-              <tr>
-                {outVouchers.map((v) => (
-                  <th key={v.id} style={{ ...ledgerTh, fontWeight: 400 }}>
-                    <div>{v.voucher_no || "-"}</div>
-                    <div style={{ fontSize: 10.5, color: C.muted }}>{v.voucher_date || "-"}</div>
-                    <button
-                      className="ledger-no-print"
-                      onClick={() => handleDeleteVoucher(v.id)}
-                      disabled={deletingVoucherId === v.id}
-                      style={{ background: "none", border: "none", color: C.brick, cursor: "pointer", fontSize: 11 }}
-                    >
-                      삭제
-                    </button>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sortedItems.map((it) => (
-                <tr key={it.id}>
-                  <td className="ledger-no-print" style={ledgerTd}>
-                    <input type="checkbox" checked={selectedItemIds.has(it.id)} onChange={() => toggleItemSelected(it.id)} />
-                  </td>
-                  {it._rowSpan > 0 && (
-                    <td rowSpan={it._rowSpan} style={itemColTdStyle}>{it.item}</td>
-                  )}
-                  <td style={itemColTdStyle}>{it.spec || "-"}</td>
-                  <td style={itemColTdStyle}>{it.color || "-"}</td>
-                  {outVouchers.map((v) => renderQtyCell(v.id, it.id))}
-                  <td style={{ ...ledgerTd, textAlign: "right", fontWeight: 600 }}>{(outTotalByItem.get(it.id) || 0).toLocaleString("ko-KR")}</td>
-                </tr>
-              ))}
-              {sortedItems.length === 0 && (
-                <tr>
-                  <td colSpan={5} style={{ ...ledgerTd, textAlign: "center", color: C.muted }}>+ 전표 추가로 출고 전표를 등록해주세요.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        )}
-
-        {subTab === "in" && (
-          <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 600 }}>
+          <table className="ledger-print-table" style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 600 }}>
             <thead>
               <tr>
                 <th rowSpan={2} className="ledger-no-print" style={ledgerTh}>
@@ -8811,12 +8771,11 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
               })}
               {sortedItems.length === 0 && (
                 <tr>
-                  <td colSpan={8} style={{ ...ledgerTd, textAlign: "center", color: C.muted }}>먼저 출고 탭에서 전표를 추가해주세요.</td>
+                  <td colSpan={8} style={{ ...ledgerTd, textAlign: "center", color: C.muted }}>+ 전표 추가로 출고·회수 전표를 등록해주세요.</td>
                 </tr>
               )}
             </tbody>
           </table>
-        )}
       </div>
     </div>
   );
