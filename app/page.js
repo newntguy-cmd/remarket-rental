@@ -1808,7 +1808,9 @@ function Dashboard({ profile, onLogout }) {
                   whiteSpace: "nowrap",
                 }}
               >
-                {m.star && <span style={{ color: active ? "#fff" : C.amber, marginRight: 5 }}>★</span>}
+                <span style={{ display: "inline-block", width: 15, color: active ? "#fff" : "#000" }}>
+                  {m.star ? "★" : ""}
+                </span>
                 {m.label}
               </button>
             );
@@ -6907,10 +6909,14 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
   const [savingEditBook, setSavingEditBook] = useState(false);
   // 업체명/현장명 자동완성용으로 A/S내역도 가볍게 한 번만 불러온다(렌탈내역은 이미 props로 받아온 걸 그대로 쓴다).
   const [asRecordsLite, setAsRecordsLite] = useState([]);
+  // 렌탈종료일 임박 표시용으로, 전체 대장의 전표·수량을 가볍게 한 번 불러온다(대장별 미회수수량·연결된 렌탈전표 계산용).
+  const [auxVouchers, setAuxVouchers] = useState([]);
+  const [auxEntries, setAuxEntries] = useState([]);
 
   useEffect(() => {
     fetchBooks();
     fetchAsRecordsLite();
+    fetchLedgerAux();
   }, []);
 
   async function fetchBooks() {
@@ -6925,6 +6931,65 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
     if (!error) setAsRecordsLite(data || []);
     // as_requests 테이블이 아직 없거나 조회 권한이 없어도(마이그레이션 전) 자동완성 후보가 조금 줄어들 뿐,
     // 조용히 무시하고 나머지 자동완성(거래처 목록, 렌탈내역)은 그대로 동작한다.
+  }
+
+  async function fetchLedgerAux() {
+    const [{ data: vc }, { data: en }] = await Promise.all([
+      supabase.from("ledger_vouchers").select("id, ledger_book_id, kind, source, rental_voucher_no"),
+      supabase.from("ledger_entries").select("ledger_voucher_id, qty"),
+    ]);
+    setAuxVouchers(vc || []);
+    setAuxEntries(en || []);
+  }
+
+  // 렌탈내역의 전표번호별 렌탈만료일(같은 전표번호 안에 여러 줄이 있으면 그중 가장 빠른 날짜) 맵.
+  const rentalDueByVoucherNo = useMemo(() => {
+    const m = new Map();
+    for (const r of rentals || []) {
+      if (!r.voucher_no || !r.due_date) continue;
+      const cur = m.get(r.voucher_no);
+      if (!cur || r.due_date < cur) m.set(r.voucher_no, r.due_date);
+    }
+    return m;
+  }, [rentals]);
+
+  // 대장별 미회수수량 합계(출고 수량 - 회수 수량). 0 이하면 다 회수된 거라 임박 표시가 필요 없다.
+  const bookRemainMap = useMemo(() => {
+    const voucherInfo = new Map(auxVouchers.map((v) => [v.id, v]));
+    const m = new Map();
+    for (const e of auxEntries) {
+      const v = voucherInfo.get(e.ledger_voucher_id);
+      if (!v) continue;
+      const sign = v.kind === "out" ? 1 : -1;
+      m.set(v.ledger_book_id, (m.get(v.ledger_book_id) || 0) + sign * (Number(e.qty) || 0));
+    }
+    return m;
+  }, [auxVouchers, auxEntries]);
+
+  // 대장별로, 렌탈전표로 추가된 출고전표들 중 가장 빠른(=가장 임박한) 렌탈만료일.
+  const bookDueMap = useMemo(() => {
+    const m = new Map();
+    for (const v of auxVouchers) {
+      if (v.kind !== "out" || v.source !== "rental_voucher" || !v.rental_voucher_no) continue;
+      const due = rentalDueByVoucherNo.get(v.rental_voucher_no);
+      if (!due) continue;
+      const cur = m.get(v.ledger_book_id);
+      if (!cur || due < cur) m.set(v.ledger_book_id, due);
+    }
+    return m;
+  }, [auxVouchers, rentalDueByVoucherNo]);
+
+  // 대장의 렌탈종료일 임박 배지: 아직 회수 안 된(미회수수량>0) 대장에, 연결된 렌탈전표의 만료일이
+  // 30일 이내(연체 포함)일 때만 보여준다. diff는 정렬에도 쓴다(작을수록=더 급함, 위로).
+  function ledgerDueBadge(bookId) {
+    const remain = bookRemainMap.get(bookId) || 0;
+    if (remain <= 0) return null;
+    const due = bookDueMap.get(bookId);
+    if (!due) return null;
+    const diff = daysBetween(todayISO(), due);
+    if (diff > 30) return null;
+    if (diff < 0) return { label: `연체 ${Math.abs(diff)}일`, fg: C.brick, bg: C.brickBg, diff };
+    return { label: diff === 0 ? "오늘 만료" : `D-${diff}`, fg: C.amber, bg: C.amberBg, diff };
   }
 
   // 업체명 자동완성 후보: 거래처 목록(customers) + 렌탈내역 + A/S내역에 이미 등장한 이름을 모두 모아 중복 없이 정렬.
@@ -6954,9 +7019,20 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
 
   const filteredBooks = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return books;
-    return books.filter((b) => [b.customer, b.site_name, b.manager, b.note].filter(Boolean).join(" ").toLowerCase().includes(q));
-  }, [books, query]);
+    const list = q
+      ? books.filter((b) => [b.customer, b.site_name, b.manager, b.note].filter(Boolean).join(" ").toLowerCase().includes(q))
+      : books;
+    // 렌탈종료일이 임박(연체 포함)한 대장을 위로, 그 중에서도 더 급한 순서로 정렬한다.
+    // 배지가 없는 대장들끼리는 원래 순서(최근 만든 순)를 그대로 유지한다.
+    return [...list].sort((a, b) => {
+      const da = ledgerDueBadge(a.id);
+      const db = ledgerDueBadge(b.id);
+      if (da && db) return da.diff - db.diff;
+      if (da) return -1;
+      if (db) return 1;
+      return 0;
+    });
+  }, [books, query, bookRemainMap, bookDueMap]);
 
   async function handleCreateBook() {
     if (!newBookCustomer.trim()) {
@@ -7070,6 +7146,7 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>현장별 렌탈잔량</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         업체(현장)별로 대장을 만들어두면, 전표가 새로 생길 때마다 계속 추가해서 출고·회수·미회수 수량을 관리할 수 있어요.
+        아직 회수 안 된 렌탈의 렌탈종료일이 30일 이내로 다가오면 업체명 옆에 배지로 표시되고, 그런 대장이 목록 위쪽으로 올라와요.
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
@@ -7150,13 +7227,22 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
               {isEditing ? (
                 <input style={smallInputStyle} value={editCustomer} onChange={(e) => setEditCustomer(e.target.value)} placeholder="업체명" />
               ) : (
-                <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                   <button
                     onClick={() => setSelectedBookId(b.id)}
                     style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
                   >
                     {b.customer}
                   </button>
+                  {(() => {
+                    const badge = ledgerDueBadge(b.id);
+                    if (!badge) return null;
+                    return (
+                      <span style={{ fontSize: 11, fontWeight: 600, color: badge.fg, background: badge.bg, borderRadius: 4, padding: "2px 6px", whiteSpace: "nowrap" }}>
+                        {badge.label}
+                      </span>
+                    );
+                  })()}
                 </div>
               )}
               {isEditing ? (
