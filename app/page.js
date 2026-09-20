@@ -7558,6 +7558,16 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
     const { error: eErr } = await supabase.from("ledger_entries").insert(entryRows);
     setAddingVoucherKey(null);
     if (eErr) alert("수량을 채우는 중 오류가 발생했어요: " + eErr.message);
+
+    // 이 대장에 현장명·비고가 아직 비어있으면, 방금 전표번호로 추가한 렌탈전표의 현장명과 전표번호로
+    // 자동으로 채워준다(렌탈내역에는 있지만 대장을 만들 때 직접 입력하지 않았을 수 있는 정보라서).
+    const bookPatch = {};
+    if (!book.site_name && group.head.site_name) bookPatch.site_name = group.head.site_name;
+    if (!book.note && group.voucherNo) bookPatch.note = `대표 전표번호 ${group.voucherNo} 외`;
+    if (Object.keys(bookPatch).length > 0) {
+      await supabase.from("ledger_books").update(bookPatch).eq("id", bookId);
+    }
+
     setShowPicker(false);
     setPickerQuery("");
     fetchAll();
