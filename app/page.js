@@ -2505,6 +2505,27 @@ function withComputedTons(items, customOverrides) {
   });
 }
 
+// 카드②(톤수 계산) 표를 품목/규격/수량/톤수 기준으로 정렬한다. rows는 {it, idx} 쌍의 배열
+// (idx는 원본 items 배열 인덱스 — 체크박스·직접입력·저장 버튼이 이 idx로 동작하므로 정렬해도 그대로 맞는다).
+// sortKey가 null이면(기본값) 정렬하지 않고 붙여넣은 원본 순서 그대로 반환한다.
+function sortVisibleRows(rows, sortKey, sortDir) {
+  if (!sortKey) return rows;
+  const dir = sortDir === "asc" ? 1 : -1;
+  const sorted = [...rows];
+  sorted.sort((a, b) => {
+    if (sortKey === "qty") return ((Number(a.it.qty) || 0) - (Number(b.it.qty) || 0)) * dir;
+    if (sortKey === "ton") {
+      const av = a.it.ton == null ? -Infinity : Number(a.it.ton);
+      const bv = b.it.ton == null ? -Infinity : Number(b.it.ton);
+      return (av - bv) * dir;
+    }
+    const av = sortKey === "item" ? a.it.item : a.it.spec;
+    const bv = sortKey === "item" ? b.it.item : b.it.spec;
+    return (av || "").localeCompare(bv || "", "ko") * dir;
+  });
+  return sorted;
+}
+
 // 품목명+규격별로 수량을 합산해서 "현장에 총 몇 개인지" 보여주는 품목별 데이터 집계.
 // 배송비/설치비 등 요금성 품목(withComputedTons가 이미 tonExcluded로 표시해둔 것)은 물리적 수량이 아니므로 자동으로 뺀다.
 // excludedIdxs에 들어있는 행(사용자가 직접 선택삭제한 행)도 함께 뺀다.
@@ -3479,6 +3500,29 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
     setCheckedRowIdxs(new Set());
   }, [rawItems]);
   const visibleRowIdxs = items.map((_, idx) => idx).filter((idx) => !excludedIdxs.has(idx));
+
+  // 카드② 톤수 계산: 품목/규격/수량/톤수 머리글을 눌러 정렬할 수 있다. 정렬은 화면에 보여주는 순서만 바꾸고,
+  // 칸 안의 체크박스·직접입력·저장 버튼은 전부 원본 items 배열의 idx를 그대로 쓰니 정렬해도 정상 동작한다.
+  // 기본값(rowSortKey=null)은 붙여넣은 원본 순서 그대로이고, 같은 머리글을 세 번째 누르면 다시 원본 순서로 돌아간다.
+  const [rowSortKey, setRowSortKey] = useState(null); // null | "item" | "spec" | "qty" | "ton"
+  const [rowSortDir, setRowSortDir] = useState("asc");
+  function toggleRowSort(key) {
+    if (rowSortKey === key) {
+      if (rowSortDir === "asc") {
+        setRowSortDir("desc");
+      } else {
+        setRowSortKey(null);
+        setRowSortDir("asc");
+      }
+    } else {
+      setRowSortKey(key);
+      setRowSortDir("asc");
+    }
+  }
+  const visibleRows = useMemo(() => {
+    const rows = items.map((it, idx) => ({ it, idx })).filter(({ idx }) => !excludedIdxs.has(idx));
+    return sortVisibleRows(rows, rowSortKey, rowSortDir);
+  }, [items, excludedIdxs, rowSortKey, rowSortDir]);
   function toggleRowChecked(idx) {
     setCheckedRowIdxs((prev) => {
       const next = new Set(prev);
@@ -3771,16 +3815,25 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
             <div style={{ border: `1px solid ${C.lineSoft}`, overflowX: "auto" }}>
               <div style={{ display: "grid", gridTemplateColumns: rowGridTemplate, gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center", minWidth: "max-content" }}>
                 <input type="checkbox" checked={visibleRowIdxs.length > 0 && checkedRowIdxs.size === visibleRowIdxs.length} onChange={toggleRowCheckedAll} />
-                {["품목", "규격", "수량", "톤수"].map((label, i) => (
-                  <div key={label} style={{ position: "relative" }}>
-                    {label}
+                {[
+                  { label: "품목", key: "item" },
+                  { label: "규격", key: "spec" },
+                  { label: "수량", key: "qty" },
+                  { label: "톤수", key: "ton" },
+                ].map((h, i) => (
+                  <div
+                    key={h.key}
+                    onClick={() => toggleRowSort(h.key)}
+                    style={{ position: "relative", cursor: "pointer", userSelect: "none" }}
+                  >
+                    {h.label}
+                    {rowSortKey === h.key ? (rowSortDir === "asc" ? " ▲" : " ▼") : ""}
                     <ColResizeHandle onMouseDown={startRowResize(i)} />
                   </div>
                 ))}
               </div>
               <div style={{ maxHeight: 260, overflow: "auto" }}>
-                {items.map((it, idx) =>
-                  excludedIdxs.has(idx) ? null : (
+                {visibleRows.map(({ it, idx }) => (
                     <div key={idx} style={{ display: "grid", gridTemplateColumns: rowGridTemplate, gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content" }}>
                       <input type="checkbox" checked={checkedRowIdxs.has(idx)} onChange={() => toggleRowChecked(idx)} />
                       <div>{it.item}</div>
