@@ -8737,6 +8737,9 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
                 <th rowSpan={2} style={itemColThStyle}>품목</th>
                 <th rowSpan={2} style={itemColThStyle}>규격</th>
                 <th rowSpan={2} style={itemColThStyle}>색상</th>
+                {outVouchers.length > 0 && (
+                  <th colSpan={outVouchers.length} style={{ ...ledgerTh, background: C.amberBg }}>출고내역</th>
+                )}
                 <th rowSpan={2} style={{ ...ledgerTh, background: C.amberBg }}>출고합계</th>
                 {inVouchers.length > 0 && (
                   <th colSpan={inVouchers.length} style={{ ...ledgerTh, background: C.greenBg }}>회수내역</th>
@@ -8746,6 +8749,20 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
                 <th rowSpan={2} style={ledgerTh}>비고</th>
               </tr>
               <tr>
+                {outVouchers.map((v) => (
+                  <th key={v.id} style={{ ...ledgerTh, fontWeight: 400 }}>
+                    <div>{v.voucher_no || "-"}</div>
+                    <div style={{ fontSize: 10.5, color: C.muted }}>{v.voucher_date || "-"}</div>
+                    <button
+                      className="ledger-no-print"
+                      onClick={() => handleDeleteVoucher(v.id)}
+                      disabled={deletingVoucherId === v.id}
+                      style={{ background: "none", border: "none", color: C.brick, cursor: "pointer", fontSize: 11 }}
+                    >
+                      삭제
+                    </button>
+                  </th>
+                ))}
                 {inVouchers.map((v) => (
                   <th key={v.id} style={{ ...ledgerTh, fontWeight: 400 }}>
                     <div>{v.voucher_no || "-"}</div>
@@ -8777,7 +8794,8 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
                     )}
                     <td style={itemColTdStyle}>{it.spec || "-"}</td>
                     <td style={itemColTdStyle}>{it.color || "-"}</td>
-                    <td style={{ ...ledgerTd, textAlign: "right" }}>{outTotal.toLocaleString("ko-KR")}</td>
+                    {outVouchers.map((v) => renderQtyCell(v.id, it.id))}
+                    <td style={{ ...ledgerTd, textAlign: "right", fontWeight: 600 }}>{outTotal.toLocaleString("ko-KR")}</td>
                     {inVouchers.map((v) => renderQtyCell(v.id, it.id))}
                     <td style={{ ...ledgerTd, textAlign: "right", fontWeight: 600 }}>{inTotal.toLocaleString("ko-KR")}</td>
                     <td style={{ ...ledgerTd, textAlign: "right", fontWeight: 700, color: remain > 0 ? C.brick : C.inkSoft }}>{remain.toLocaleString("ko-KR")}</td>
