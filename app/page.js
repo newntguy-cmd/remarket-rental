@@ -1083,6 +1083,136 @@ async function parseQuotePdf(file) {
   };
 }
 
+// ---------- A/S 접수 및 처리보고서 엑셀 파싱 ----------
+// 이 양식은 품목표처럼 행이 반복되는 표가 아니라, "라벨 칸 + 값 칸"이 나란히 있는 1장짜리 양식이다(예:
+// "고 객 명" 칸 바로 오른쪽에 실제 고객명이 적힌 칸이 옴). 그래서 견적서 파싱과 달리, 각 행을 훑으면서
+// 라벨 칸을 찾으면 그 오른쪽에서 처음 만나는 비어있지 않은 칸을 값으로 삼는 방식으로 읽는다.
+// 라벨 사이에 공백/줄바꿈이 들어가 있어도(예: "고 객 명", "귀책사유\n발생시점") 비교 전에 모두 지워서 맞춘다.
+function normalizeLabel(s) {
+  return (s || "").replace(/\s/g, "");
+}
+
+const AS_FORM_LABELS = [
+  { key: "faultDept", label: "귀책사유부서" },
+  { key: "customerName", label: "고객명" },
+  { key: "contact", label: "전화번호" },
+  { key: "address", label: "주소" },
+  { key: "shipmentPlace", label: "출하장소" },
+  { key: "productName", label: "제품명" },
+  { key: "purchaseDate", label: "구입일" },
+  { key: "productType", label: "상품유형" },
+  { key: "seller", label: "판매자" },
+  { key: "courier", label: "배송자" },
+  { key: "visitDate", label: "방문일" },
+  { key: "receiver", label: "접수자" },
+  { key: "issueType", label: "유형" },
+  { key: "content", label: "A/S원인및상담내용" },
+  { key: "faultPoint", label: "귀책사유발생시점" },
+];
+const AS_FORM_LABEL_SET = new Set(AS_FORM_LABELS.map((f) => normalizeLabel(f.label)));
+// "귀책사유부서" 칸 바로 옆에는 우리가 읽지 않는 결재란("결재/담당/팀장/본부장/대표이사")이 붙어있는 양식이 많아,
+// 그 칸들이 비어있는 값 칸으로 잘못 읽히지 않도록 값 찾기에서 함께 건너뛴다.
+const AS_FORM_NONVALUE_TOKENS = new Set(["결재", "담당", "팀장", "본부장", "대표이사"].map(normalizeLabel));
+
+// NO.(관리번호)는 양식 맨 위쪽에 "NO. 21048"처럼 라벨과 숫자가 한 칸에 같이 적혀 있는 경우가 많아
+// 위쪽 몇 줄만 따로 훑어서 찾는다(ECOUNT 등 기존 시스템의 A/S 관리번호와 그대로 연결하기 위한 값).
+function extractAsManagementNo(rows) {
+  const topRows = rows.slice(0, 5);
+  for (const row of topRows) {
+    for (const cell of row || []) {
+      const t = cellText(cell);
+      const m = t.match(/NO\.?\s*[:.]?\s*(\d{3,10})/i);
+      if (m) return m[1];
+    }
+  }
+  return "";
+}
+
+function parseAsRequestRows(rows) {
+  const result = {
+    managementNo: extractAsManagementNo(rows),
+    faultDept: "",
+    customerName: "",
+    contact: "",
+    address: "",
+    shipmentPlace: "",
+    productName: "",
+    purchaseDate: "",
+    productType: "",
+    seller: "",
+    courier: "",
+    visitDate: "",
+    receiver: "",
+    issueType: "",
+    content: "",
+    faultPoint: "",
+  };
+
+  for (const row of rows) {
+    const cells = (row || []).map(cellText);
+    for (let i = 0; i < cells.length; i++) {
+      const norm = normalizeLabel(cells[i]);
+      if (!norm) continue;
+      const field = AS_FORM_LABELS.find((f) => normalizeLabel(f.label) === norm);
+      if (!field || result[field.key]) continue; // 라벨 칸 자체는 값이 아니고, 이미 채워진 항목은 건드리지 않는다(첫 값 우선).
+      for (let j = i + 1; j < cells.length; j++) {
+        if (!cells[j].trim()) continue; // 빈 칸은 건너뛴다
+        // 다음으로 만난 비어있지 않은 칸이 또 다른 라벨이면(예: "귀책사유부서" 칸이 비어있고 바로 옆이 "결재"
+        // 칸인 경우), 그 라벨을 값으로 잘못 채우지 않도록 이 라벨의 값은 못 찾은 것으로 남겨둔다.
+        const jNorm = normalizeLabel(cells[j]);
+        if (AS_FORM_LABEL_SET.has(jNorm) || AS_FORM_NONVALUE_TOKENS.has(jNorm)) break;
+        result[field.key] = cells[j].trim();
+        break;
+      }
+    }
+  }
+
+  return result;
+}
+
+async function parseAsRequestExcel(file) {
+  const XLSX = await import("xlsx");
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
+  const visibleSheetNames = wb.SheetNames.filter((name) => {
+    const meta = (wb.Workbook?.Sheets || []).find((s) => s.name === name);
+    return !meta || !meta.Hidden;
+  });
+  const firstSheetName = visibleSheetNames[0] || wb.SheetNames[0];
+  const sheet = wb.Sheets[firstSheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+  return parseAsRequestRows(rows);
+}
+
+// 엑셀에서 긁어 붙여넣은 텍스트도(클립보드에 탭/줄바꿈으로 구분된 TSV로 담기므로) 파일 업로드와 같은 방식으로 읽는다.
+function parseAsRequestPastedText(text) {
+  const rows = parsePastedTable(text);
+  return parseAsRequestRows(rows);
+}
+
+// 파싱 결과(camelCase)를 as_requests 테이블 컬럼(snake_case)으로 옮긴다.
+function asParsedToDbFields(parsed) {
+  return {
+    management_no: parsed.managementNo || null,
+    fault_dept: parsed.faultDept || null,
+    customer_name: parsed.customerName || "",
+    contact: parsed.contact || null,
+    address: parsed.address || null,
+    shipment_place: parsed.shipmentPlace || null,
+    product_name: parsed.productName || null,
+    purchase_date: parsed.purchaseDate || null,
+    product_type: parsed.productType || null,
+    seller: parsed.seller || null,
+    courier: parsed.courier || null,
+    visit_date: parsed.visitDate || null,
+    receiver: parsed.receiver || null,
+    issue_type: parsed.issueType || null,
+    content: parsed.content || "",
+    fault_point: parsed.faultPoint || null,
+    status: "접수",
+  };
+}
+
 // ---------- 메인 ----------
 export default function Home() {
   const [loading, setLoading] = useState(true);
@@ -1938,6 +2068,114 @@ function QuoteDropZone({ onFile, hasData }) {
             <div style={{ fontSize: 22, marginBottom: 6 }}>⬆️</div>
             <div style={{ fontSize: 13.5, color: C.ink, marginBottom: 4 }}>파일을 끌어다 놓으세요</div>
             <div style={{ fontSize: 11.5, color: C.muted }}>또는 클릭해서 파일 선택 (.xlsx, .xls, .pdf)</div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// A/S 접수 및 처리보고서 업로드용 붙여넣기 상자. QuotePasteBox와 같은 구조를 A/S 문구로 바꿔 그대로 재사용한다.
+function AsUploadPasteBox({ onPasteText, hasData }) {
+  const [text, setText] = useState("");
+  const [focused, setFocused] = useState(false);
+  function handleChange(e) {
+    const v = e.target.value;
+    setText(v);
+    if (v.trim()) onPasteText && onPasteText(v);
+  }
+  const active = focused || text.trim().length > 0;
+  return (
+    <div
+      style={{
+        flex: "1 1 320px",
+        minWidth: 260,
+        border: `1px solid ${active ? C.green : C.line}`,
+        borderTop: `3px solid ${C.green}`,
+        background: C.panel,
+        padding: 16,
+      }}
+    >
+      <InputCardHeader title="① 엑셀에서 긁어서 붙여넣기" desc="A/S 접수 및 처리보고서 내용을 그대로 복사해서 여기에 붙여넣으세요" />
+      <textarea
+        value={text}
+        onChange={handleChange}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        placeholder="A/S 접수 및 처리보고서 시트를 통째로 긁어서 여기에 Ctrl+V로 붙여넣으세요"
+        style={{
+          width: "100%",
+          minHeight: hasData ? 64 : 96,
+          boxSizing: "border-box",
+          border: `1px solid ${C.lineSoft}`,
+          padding: 10,
+          fontSize: 12.5,
+          fontFamily: sans,
+          resize: "vertical",
+        }}
+      />
+    </div>
+  );
+}
+
+// A/S 접수 및 처리보고서 업로드용 드롭존. QuoteDropZone과 같은 구조이되 PDF는 받지 않고 엑셀만 받는다.
+function AsUploadDropZone({ onFile, hasData }) {
+  const inputRef = useRef(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  function handleDrop(e) {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) onFile(file);
+  }
+
+  return (
+    <div
+      style={{
+        flex: "1 1 320px",
+        minWidth: 260,
+        border: `1px solid ${dragOver ? C.purple : C.line}`,
+        borderTop: `3px solid ${C.purple}`,
+        background: C.panel,
+        padding: 16,
+      }}
+    >
+      <InputCardHeader title="② A/S 접수 및 처리보고서 파일 올리기" desc="엑셀(.xlsx) 파일을 그대로 업로드해요" />
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+        onClick={() => inputRef.current?.click()}
+        style={{
+          border: `2px dashed ${dragOver ? C.purple : C.lineSoft}`,
+          background: dragOver ? C.purpleBg : C.bg,
+          padding: hasData ? 14 : 26,
+          textAlign: "center",
+          cursor: "pointer",
+        }}
+      >
+        <input
+          type="file"
+          accept=".xlsx,.xls"
+          ref={inputRef}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) onFile(file);
+          }}
+          style={{ display: "none" }}
+        />
+        {hasData ? (
+          <div style={{ fontSize: 12.5, color: C.inkSoft }}>다른 파일로 다시 채우려면 여기로 새 파일을 드래그하거나 클릭하세요</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 22, marginBottom: 6 }}>⬆️</div>
+            <div style={{ fontSize: 13.5, color: C.ink, marginBottom: 4 }}>파일을 끌어다 놓으세요</div>
+            <div style={{ fontSize: 11.5, color: C.muted }}>또는 클릭해서 파일 선택 (.xlsx, .xls)</div>
           </>
         )}
       </div>
@@ -7105,6 +7343,10 @@ function AsBoardTab({ isAdmin, managerName }) {
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [deletingSelected, setDeletingSelected] = useState(false);
   const [savingStatusId, setSavingStatusId] = useState(null);
+  // 엑셀 업로드(A/S 접수 및 처리보고서) 관련 상태. uploadState가 채워지면 확인 화면(AsRequestForm의 prefill 모드)을 보여준다.
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadState, setUploadState] = useState(null);
+  const [uploadKey, setUploadKey] = useState(0); // 새 파일/붙여넣기로 다시 채울 때마다 확인 폼을 강제로 새로 마운트시키는 키
 
   useEffect(() => {
     fetchRecords();
@@ -7129,7 +7371,7 @@ function AsBoardTab({ isAdmin, managerName }) {
     const q = query.trim().toLowerCase();
     if (q) {
       list = list.filter((r) =>
-        [r.customer_name, r.contact, r.address, r.content, r.author].filter(Boolean).join(" ").toLowerCase().includes(q)
+        [r.customer_name, r.contact, r.address, r.content, r.author, r.management_no].filter(Boolean).join(" ").toLowerCase().includes(q)
       );
     }
     return list;
@@ -7170,6 +7412,41 @@ function AsBoardTab({ isAdmin, managerName }) {
     setEditingRecord(null);
     await fetchRecords();
     return true;
+  }
+
+  // A/S 접수 및 처리보고서 엑셀/붙여넣기를 읽어서 확인 화면(prefill 모드의 AsRequestForm)에 채운다.
+  // 실제 등록은 그 화면에서 "등록"을 눌러야 이뤄진다(바로 저장하지 않고, 내용을 확인·수정할 기회를 준다).
+  async function processAsFile(file) {
+    if (!file) return;
+    try {
+      const parsed = await parseAsRequestExcel(file);
+      setUploadState(asParsedToDbFields(parsed));
+      setUploadKey((k) => k + 1);
+    } catch (err) {
+      alert("엑셀 파일을 읽는 중 문제가 발생했어요. 형식을 확인해주세요.");
+      console.error(err);
+    }
+  }
+
+  function processAsPastedText(text) {
+    if (!text || !text.trim()) return;
+    try {
+      const parsed = parseAsRequestPastedText(text);
+      setUploadState(asParsedToDbFields(parsed));
+      setUploadKey((k) => k + 1);
+    } catch (err) {
+      alert("붙여넣은 내용을 읽는 중 문제가 발생했어요.");
+      console.error(err);
+    }
+  }
+
+  async function handleUploadSave(fields) {
+    const ok = await handleSave(fields);
+    if (ok) {
+      setUploadState(null);
+      setShowUpload(false);
+    }
+    return ok;
   }
 
   // 진행상태는 목록 화면에서 바로 바꿀 수 있게 한다(수정 화면을 매번 열지 않아도 되도록).
@@ -7242,6 +7519,40 @@ function AsBoardTab({ isAdmin, managerName }) {
         />
       )}
 
+      {showUpload && (
+        <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
+          <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>A/S 엑셀로 등록</div>
+          <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+            A/S 접수 및 처리보고서 엑셀을 올리거나, 내용을 그대로 복사해서 붙여넣으면 아래 내용이 자동으로 채워져요. 등록 전에 꼭 확인·수정해주세요.
+          </div>
+          <div style={{ display: "flex", alignItems: "stretch", gap: 14, marginBottom: 16, flexWrap: "wrap" }}>
+            <AsUploadPasteBox onPasteText={processAsPastedText} hasData={!!uploadState} />
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: "0 0 auto", fontSize: 11.5, fontWeight: 700, color: C.muted, padding: "0 2px" }}>
+              또는
+            </div>
+            <AsUploadDropZone onFile={processAsFile} hasData={!!uploadState} />
+          </div>
+
+          {uploadState && (
+            <AsRequestForm
+              key={uploadKey}
+              initial={null}
+              prefill={uploadState}
+              isAdmin={isAdmin}
+              managerName={managerName}
+              onCancel={() => setUploadState(null)}
+              onSave={handleUploadSave}
+            />
+          )}
+
+          {!uploadState && (
+            <button onClick={() => setShowUpload(false)} style={ghostBtnStyle}>
+              닫기
+            </button>
+          )}
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
         {tabs.map((t) => (
           <button
@@ -7259,11 +7570,20 @@ function AsBoardTab({ isAdmin, managerName }) {
         ))}
         <div style={{ flex: 1 }} />
         <input
-          placeholder="고객명, 주소, A/S내용, 작성자 검색"
+          placeholder="관리번호, 고객명, 주소, A/S내용, 작성자 검색"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           style={{ ...inputStyle, width: 260 }}
         />
+        <button
+          onClick={() => {
+            setShowUpload((v) => !v);
+            setUploadState(null);
+          }}
+          style={ghostBtnStyle}
+        >
+          + 엑셀로 등록
+        </button>
         <button onClick={openNew} style={primaryBtnStyle2}>+ 신규 등록</button>
       </div>
 
@@ -7319,7 +7639,9 @@ function AsBoardTab({ isAdmin, managerName }) {
                     <td style={asTd}>
                       <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => toggleSelected(r.id)} />
                     </td>
-                    <td style={asTd}>{filtered.length - ((pageSafe - 1) * AS_PAGE_SIZE + idx)}</td>
+                    <td style={asTd} title={r.management_no ? "A/S 관리번호" : ""}>
+                      {r.management_no || filtered.length - ((pageSafe - 1) * AS_PAGE_SIZE + idx)}
+                    </td>
                     <td style={asTd}>{r.customer_name || "-"}</td>
                     <td style={asTd}>{r.contact || "-"}</td>
                     <td style={asTd}>{r.visit_date || "-"}</td>
@@ -7403,7 +7725,8 @@ function AsBoardTab({ isAdmin, managerName }) {
   );
 }
 
-function AsRequestForm({ initial, isAdmin, managerName, onCancel, onSave }) {
+// prefill: 엑셀/붙여넣기로 읽어들인 값을 새 등록 폼에 미리 채워 넣을 때만 쓴다(수정 화면에서는 initial을 그대로 씀).
+function AsRequestForm({ initial, prefill, isAdmin, managerName, onCancel, onSave }) {
   const [f, setF] = useState(
     initial || {
       customer_name: "",
@@ -7413,6 +7736,17 @@ function AsRequestForm({ initial, isAdmin, managerName, onCancel, onSave }) {
       content: "",
       author: isAdmin ? "" : managerName,
       status: "접수",
+      management_no: "",
+      fault_dept: "",
+      product_name: "",
+      purchase_date: "",
+      product_type: "",
+      seller: "",
+      courier: "",
+      receiver: "",
+      issue_type: "",
+      fault_point: "",
+      ...(prefill || {}),
     }
   );
   const [saving, setSaving] = useState(false);
@@ -7436,14 +7770,34 @@ function AsRequestForm({ initial, isAdmin, managerName, onCancel, onSave }) {
       content: f.content.trim(),
       author: (f.author || "").trim() || null,
       status: f.status || "접수",
+      management_no: (f.management_no || "").trim() || null,
+      fault_dept: (f.fault_dept || "").trim() || null,
+      product_name: (f.product_name || "").trim() || null,
+      purchase_date: (f.purchase_date || "").trim() || null,
+      product_type: (f.product_type || "").trim() || null,
+      seller: (f.seller || "").trim() || null,
+      courier: (f.courier || "").trim() || null,
+      receiver: (f.receiver || "").trim() || null,
+      issue_type: (f.issue_type || "").trim() || null,
+      fault_point: (f.fault_point || "").trim() || null,
     });
     setSaving(false);
   }
 
   return (
     <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 16 }}>{initial ? "A/S 내역 수정" : "A/S 신규 등록"}</div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 16 }}>
+        {initial ? "A/S 내역 수정" : prefill ? "A/S 접수 및 처리보고서 확인" : "A/S 신규 등록"}
+      </div>
+      {prefill && (
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>
+          엑셀에서 읽은 내용이에요. 등록 전에 내용을 확인·수정해주세요.
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+        <Field label="관리번호">
+          <input style={inputStyle} value={f.management_no || ""} onChange={(e) => update({ management_no: e.target.value })} placeholder="예: 21048" />
+        </Field>
         <Field label="고객명">
           <input style={inputStyle} value={f.customer_name || ""} onChange={(e) => update({ customer_name: e.target.value })} placeholder="예: 한우리건설" />
         </Field>
@@ -7477,6 +7831,38 @@ function AsRequestForm({ initial, isAdmin, managerName, onCancel, onSave }) {
           style={{ ...inputStyle, minHeight: 70, resize: "vertical" }}
         />
       </Field>
+
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: C.inkSoft, margin: "6px 0 10px" }}>접수 및 처리보고서 상세 (선택 입력)</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+        <Field label="제품명">
+          <input style={inputStyle} value={f.product_name || ""} onChange={(e) => update({ product_name: e.target.value })} placeholder="예: 접의자(밤색) 3ea" />
+        </Field>
+        <Field label="구입일">
+          <input style={inputStyle} value={f.purchase_date || ""} onChange={(e) => update({ purchase_date: e.target.value })} placeholder="예: 2025-09-15" />
+        </Field>
+        <Field label="상품유형">
+          <input style={inputStyle} value={f.product_type || ""} onChange={(e) => update({ product_type: e.target.value })} placeholder="예: 렌탈 또는 구매" />
+        </Field>
+        <Field label="판매자">
+          <input style={inputStyle} value={f.seller || ""} onChange={(e) => update({ seller: e.target.value })} placeholder="예: 신상헌" />
+        </Field>
+        <Field label="배송자">
+          <input style={inputStyle} value={f.courier || ""} onChange={(e) => update({ courier: e.target.value })} />
+        </Field>
+        <Field label="접수자">
+          <input style={inputStyle} value={f.receiver || ""} onChange={(e) => update({ receiver: e.target.value })} placeholder="예: 신상헌" />
+        </Field>
+        <Field label="유형">
+          <input style={inputStyle} value={f.issue_type || ""} onChange={(e) => update({ issue_type: e.target.value })} placeholder="예: 접의자(밤색) 3ea 외" />
+        </Field>
+        <Field label="귀책사유부서">
+          <input style={inputStyle} value={f.fault_dept || ""} onChange={(e) => update({ fault_dept: e.target.value })} />
+        </Field>
+        <Field label="귀책사유 발생시점">
+          <input style={inputStyle} value={f.fault_point || ""} onChange={(e) => update({ fault_point: e.target.value })} />
+        </Field>
+      </div>
+
       <div style={{ display: "flex", gap: 8 }}>
         <button onClick={handleSubmit} disabled={saving} style={primaryBtnStyle2}>
           {saving ? "저장 중…" : initial ? "저장" : "등록"}
