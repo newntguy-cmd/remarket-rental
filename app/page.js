@@ -1563,6 +1563,8 @@ function Dashboard({ profile, onLogout }) {
   const [salesResetKey, setSalesResetKey] = useState(0);
   // 출고/회수 내역서도 대장 상세화면에 들어갈 수 있으니, 메뉴를 다시 눌렀을 때 항상 대장 목록으로 되돌아가게 한다.
   const [ledgerResetKey, setLedgerResetKey] = useState(0);
+  // 현장별 렌탈잔량(자동등록)도 같은 이유로 리셋 키를 따로 둔다.
+  const [ledgerAutoResetKey, setLedgerAutoResetKey] = useState(0);
   const [asboardResetKey, setAsboardResetKey] = useState(0);
   const [collectionboardResetKey, setCollectionboardResetKey] = useState(0);
   const [loadingData, setLoadingData] = useState(true);
@@ -1740,7 +1742,8 @@ function Dashboard({ profile, onLogout }) {
     ...(isStaff ? [{ key: "customerData", label: "업체별데이터" }] : []),
     ...(isStaff ? [{ key: "asboard", label: "A/S관리대장" }] : []),
     ...(isStaff ? [{ key: "collectionboard", label: "렌탈회수관리" }] : []),
-    ...(isStaff ? [{ key: "ledger", label: "현장별 렌탈잔량", star: true }] : []),
+    ...(isStaff ? [{ key: "ledger", label: "현장별 렌탈잔량(수동등록)", star: true }] : []),
+    ...(isStaff ? [{ key: "ledgerAuto", label: "현장별 렌탈잔량(자동등록)", star: true }] : []),
   ];
 
   return (
@@ -1805,6 +1808,7 @@ function Dashboard({ profile, onLogout }) {
                   if (m.key === "purchases") setPurchasesResetKey((k) => k + 1); // 구매내역도 눌릴 때마다 목록 화면으로 리셋
                   if (m.key === "sales") setSalesResetKey((k) => k + 1); // 판매현황도 눌릴 때마다 검색 화면으로 리셋
                   if (m.key === "ledger") setLedgerResetKey((k) => k + 1); // 출고/회수 내역서도 눌릴 때마다 대장 목록으로 리셋
+                  if (m.key === "ledgerAuto") setLedgerAutoResetKey((k) => k + 1); // 현장별 렌탈잔량(자동등록)도 눌릴 때마다 목록으로 리셋
                   if (m.key === "asboard") setAsboardResetKey((k) => k + 1); // A/S관리대장도 눌릴 때마다 목록 화면으로 리셋
                   if (m.key === "collectionboard") setCollectionboardResetKey((k) => k + 1); // 렌탈회수관리도 눌릴 때마다 목록 화면으로 리셋
                 }}
@@ -1876,6 +1880,10 @@ function Dashboard({ profile, onLogout }) {
 
         {activeTab === "ledger" && isStaff && (
           <LedgerTab key={ledgerResetKey} rentals={rentals} customers={customers} isAdmin={isAdmin} managerName={managerName} />
+        )}
+
+        {activeTab === "ledgerAuto" && isStaff && (
+          <LedgerAutoSummaryTab key={ledgerAutoResetKey} rentals={rentals} />
         )}
 
         {activeTab === "asboard" && isStaff && (
@@ -6962,10 +6970,12 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
 
   return (
     <div>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>현장별 렌탈잔량</div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>현장별 렌탈잔량(수동등록)</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         업체(현장)별로 대장을 만들어두면, 전표가 새로 생길 때마다 계속 추가해서 출고·회수·미회수 수량을 관리할 수 있어요.
         아직 회수 안 된 렌탈의 렌탈종료일이 30일 이내로 다가오면 업체명 옆에 배지로 표시되고, 그런 대장이 목록 위쪽으로 올라와요.
+        업체에 보여줄 정식 출고·회수 내역서가 필요할 때 이 화면에서 대장을 만들어 관리해주세요. 지금까지 만든 대장을 한 번에
+        모아서 미회수 잔량만 훑어보고 싶으면 옆 메뉴의 "현장별 렌탈잔량(자동등록)"을 이용하세요.
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
@@ -7095,6 +7105,129 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
         })}
         {!loadingBooks && filteredBooks.length === 0 && (
           <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>등록된 대장이 없어요. "+ 새 대장 만들기"로 시작해보세요.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- 현장별 렌탈잔량(자동등록) ----------
+// 위 LedgerTab(수동등록)처럼 대장을 따로 만들 필요 없이, 등록된 렌탈전표(구매 제외)를 자동으로 전부 모아
+// 품목 단위 한 표로 보여준다. 대장 안 만든 현장도 렌탈전표만 등록돼 있으면 빠짐없이 다 잡힌다. 화면에서
+// 잔량까지 계산해주진 않고, 엑셀로 통째로 내려받아서 직접 걸러 쓰는 용도다.
+const autoLedgerGrid = "110px 130px 130px 90px 100px 100px 1fr 140px 70px 110px";
+function LedgerAutoSummaryTab({ rentals }) {
+  const [query, setQuery] = useState("");
+  const [colWidths, startResize] = useResizableColumns([110, 130, 130, 90, 100, 100, 200, 140, 70, 110]);
+
+  // 렌탈전표만(구매 제외) 모은다. transaction_type이 비어있는 옛 데이터는 렌탈로 취급한다(다른 화면들과 동일한 규칙).
+  const rentalRows = useMemo(() => (rentals || []).filter((r) => (r.transaction_type || "rental") !== "purchase"), [rentals]);
+
+  const sortedRows = useMemo(() => {
+    const list = [...rentalRows];
+    list.sort(
+      (a, b) =>
+        (a.site_name || "").localeCompare(b.site_name || "", "ko") ||
+        (a.customer || "").localeCompare(b.customer || "", "ko") ||
+        (a.out_date || "").localeCompare(b.out_date || "")
+    );
+    return list;
+  }, [rentalRows]);
+
+  const filteredRows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return sortedRows;
+    return sortedRows.filter((r) =>
+      [r.voucher_no, r.customer, r.site_name, r.manager, r.item, r.spec].filter(Boolean).join(" ").toLowerCase().includes(q)
+    );
+  }, [sortedRows, query]);
+
+  const totalQty = filteredRows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  const gridTemplate = colWidths.map((w) => `${w}px`).join(" ");
+
+  async function handleExportExcel() {
+    const XLSX = await import("xlsx");
+    const header = ["전표번호", "거래처", "현장명", "담당자", "배송일자", "렌탈종료일자", "품목", "규격", "수량", "금액"];
+    const rows = filteredRows.map((r) => [
+      r.voucher_no || "",
+      r.customer || "",
+      r.site_name || "",
+      r.manager || "",
+      (r.out_date || "").slice(0, 10),
+      (r.due_date || "").slice(0, 10),
+      r.item || "",
+      r.spec || "",
+      Number(r.qty) || 0,
+      Number(r.amount) || 0,
+    ]);
+    const aoa = [["현장별 렌탈잔량(자동등록) — 전체 렌탈 통합"], [`추출일: ${todayISO()}`], [], header, ...rows];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 22 }, { wch: 16 }, { wch: 8 }, { wch: 13 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "렌탈 통합");
+    XLSX.writeFile(wb, `렌탈잔량_전체통합_${todayISO()}.xlsx`);
+  }
+
+  return (
+    <div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>현장별 렌탈잔량(자동등록)</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+        대장을 따로 만들지 않아도, 구매 건을 뺀 렌탈전표 전체를 자동으로 모아 품목 단위로 보여줘요. 현장명 → 업체명 → 배송일자 순으로
+        정렬돼 있어요. "엑셀로 다운로드"로 통째로 받아서 원하는 대로 걸러 쓰시면 돼요.
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+        <input
+          placeholder="전표번호, 거래처, 현장명, 담당자, 품목 검색"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{ ...inputStyle, width: 320 }}
+        />
+        <button onClick={handleExportExcel} style={ghostBtnStyle}>엑셀로 다운로드</button>
+        <div style={{ fontSize: 12.5, color: C.inkSoft }}>
+          {filteredRows.length}건 · 수량 합계 {totalQty.toLocaleString("ko-KR")}개
+        </div>
+      </div>
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: gridTemplate,
+            gap: 8,
+            padding: "10px 14px",
+            fontSize: 11.5,
+            color: C.muted,
+            borderBottom: `1px solid ${C.line}`,
+            minWidth: 1100,
+          }}
+        >
+          {["전표번호", "거래처", "현장명", "담당자", "배송일자", "렌탈종료일자", "품목", "규격", "수량", "금액"].map((label, i) => (
+            <div key={label} style={{ position: "relative" }}>
+              {label}
+              <ColResizeHandle onMouseDown={startResize(i)} />
+            </div>
+          ))}
+        </div>
+        {filteredRows.map((r) => (
+          <div
+            key={r.id}
+            style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 8, padding: "12px 14px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}`, minWidth: 1100, alignItems: "center" }}
+          >
+            <div>{r.voucher_no || "-"}</div>
+            <div>{r.customer || "-"}</div>
+            <div>{r.site_name || "-"}</div>
+            <div>{r.manager || "-"}</div>
+            <div>{(r.out_date || "").slice(0, 10) || "-"}</div>
+            <div>{(r.due_date || "").slice(0, 10) || "-"}</div>
+            <div>{r.item || "-"}</div>
+            <div>{r.spec || "-"}</div>
+            <div>{(Number(r.qty) || 0).toLocaleString("ko-KR")}</div>
+            <div>{fmtWon(r.amount)}</div>
+          </div>
+        ))}
+        {filteredRows.length === 0 && (
+          <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>조건에 맞는 렌탈전표가 없어요.</div>
         )}
       </div>
     </div>
