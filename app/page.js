@@ -670,7 +670,7 @@ function parseQuoteRows(rows) {
 
       // "렌탈 10개월"뿐 아니라 "10개월 렌탈기준"처럼 순서가 반대인 표기도 인식한다.
       m = cell.match(/(\d+)\s*개월/);
-      if (m && (cell.includes("렌탈") || rowHasRentalLabel)) {
+      if (m && !periodMonths && (cell.includes("렌탈") || rowHasRentalLabel)) {
         transactionType = "rental";
         periodMonths = Number(m[1]);
         periodDays = Number(m[1]) * 30;
@@ -714,9 +714,49 @@ function parseQuoteRows(rows) {
   // 품목 표 시작 행 + 실제 열 위치 찾기 (양식마다 B열부터 시작하거나 C열부터 시작할 수 있음)
   const detected = detectColumns(rows);
   const headerRowIdx = detected ? detected.headerRowIdx : 13;
-  const cols = detected ? detected.cols : { item: 2, spec: 3, qty: 4, price: 5, amount: 6, note: 7 };
-  const specCol = cols.spec ?? cols.item + 1;
-  const noteCol = cols.note ?? cols.amount + 1;
+  let cols = detected ? detected.cols : { item: 2, spec: 3, qty: 4, price: 5, amount: 6, note: 7 };
+  let specCol = cols.spec ?? cols.item + 1;
+  let noteCol = cols.note ?? cols.amount + 1;
+
+  // 보통은 품목표 헤더 다음 "행"부터 품목이 하나씩 이어지지만, 엑셀에서 복사(Ctrl+C)한 내용을 그대로
+  // 붙여넣었을 때 행 구분(줄바꿈)이 통째로 사라지고 탭만 남아서 표 전체가 첫 번째 행 하나에 다 들어있는
+  // 경우가 실제로 있다(복사한 프로그램/환경에 따라 발생). 이러면 rows.length가 사실상 1이라 아래 for문이
+  // 한 번도 안 돌아서 품목을 하나도 못 찾는다. 품목~비고 칸이 한 행 안에서 서로 일정한 간격으로 발견되면,
+  // 그 간격(폭)만큼씩 끊어 읽어서 "가상의 품목 행"들을 다시 만들어준다.
+  let itemSource = rows;
+  let startIdx = headerRowIdx + 1;
+  const colVals = [cols.item, specCol, cols.qty, cols.price, cols.amount, noteCol].filter((v) => v !== undefined && v !== null);
+  const headerRow = rows[headerRowIdx] || [];
+  const flatWidth = colVals.length === 6 ? Math.max(...colVals) - Math.min(...colVals) + 1 : 0;
+  const isFlattenedSingleRow = rows.length <= headerRowIdx + 2 && flatWidth > 0 && headerRow.length > Math.max(...colVals) + flatWidth;
+  if (isFlattenedSingleRow) {
+    // 중간에 빈 칸("소계" 위 여백 줄 등)이 섞여 있어도 그 뒤에 진짜 품목(배송비 등)이 더 있을 수 있으므로,
+    // 빈 chunk를 만나도 멈추지 않고 끝까지(또는 STOP_NAMES를 만날 때까지, 아래 소비 루프에서 처리) 자른다.
+    const base = Math.min(...colVals);
+    const chunks = [];
+    for (let p = base + flatWidth; p < headerRow.length; p += flatWidth) {
+      chunks.push(headerRow.slice(p, p + flatWidth));
+    }
+    // chunk 안에서 품목/규격/수량/단가/금액/비고가 원래 칸 순서 그대로 오도록, 감지된 칸 위치 순서로
+    // chunk 안 상대 위치(0~5)를 다시 매긴다(양식마다 칸 순서가 다를 수 있어도 안전하게 대응).
+    const order = [
+      ["item", cols.item],
+      ["spec", specCol],
+      ["qty", cols.qty],
+      ["price", cols.price],
+      ["amount", cols.amount],
+      ["note", noteCol],
+    ].sort((a, b) => a[1] - b[1]);
+    const relCols = {};
+    order.forEach(([key], idx) => {
+      relCols[key] = idx;
+    });
+    cols = { item: relCols.item, qty: relCols.qty, price: relCols.price, amount: relCols.amount, note: relCols.note };
+    specCol = relCols.spec;
+    noteCol = relCols.note;
+    itemSource = chunks;
+    startIdx = 0;
+  }
 
   const items = [];
   let currentItem = "";
@@ -724,8 +764,8 @@ function parseQuoteRows(rows) {
   // 텍스트만 그대로 쓴다. 배송지 주소를 섞어 넣지 않는다(주소는 상단 "배송지 주소"에 별도로 있음).
   let currentSite = "";
 
-  for (let i = headerRowIdx + 1; i < rows.length; i++) {
-    const row = rows[i] || [];
+  for (let i = startIdx; i < itemSource.length; i++) {
+    const row = itemSource[i] || [];
     const itemCell = cellText(row[cols.item]);
     const specCell = cellText(row[specCol]);
     const qtyRaw = row[cols.qty];
@@ -956,7 +996,7 @@ async function parseQuotePdf(file) {
 
       // "렌탈 10개월"뿐 아니라 "10개월 렌탈기준"처럼 순서가 반대인 표기도 인식한다.
       m = cell.match(/(\d+)\s*개월/);
-      if (m && (cell.includes("렌탈") || rowHasRentalLabel)) {
+      if (m && !periodMonths && (cell.includes("렌탈") || rowHasRentalLabel)) {
         transactionType = "rental";
         periodMonths = Number(m[1]);
         periodDays = Number(m[1]) * 30;
