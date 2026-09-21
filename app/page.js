@@ -99,45 +99,6 @@ function fmtWonShort(n) {
   return String(n);
 }
 
-// 최근 6개월 월별 매출 (렌탈+구매 합산, out_date 기준)
-function computeMonthlyRevenue(rentals) {
-  const months = [];
-  const now = new Date();
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
-  }
-  const byMonth = Object.fromEntries(months.map((m) => [m, 0]));
-  for (const r of rentals) {
-    if (!r.out_date) continue;
-    const key = r.out_date.slice(0, 7);
-    if (key in byMonth) byMonth[key] += Number(r.amount) || 0;
-  }
-  return months.map((m) => ({ month: m.slice(5) + "월", amount: byMonth[m] }));
-}
-
-// 반납예정 타임라인: 회수 안 된 렌탈 건을 임박도 구간으로 분류
-function computeReturnBuckets(rentals) {
-  const buckets = [
-    { key: "overdue", label: "연체", color: C.brick, count: 0 },
-    { key: "d30", label: "~30일", color: C.amber, count: 0 },
-    { key: "d60", label: "31~60일", color: "#6B8CAE", count: 0 },
-    { key: "d90", label: "61~90일", color: "#8B93A6", count: 0 },
-    { key: "later", label: "90일+", color: C.muted, count: 0 },
-  ];
-  const map = Object.fromEntries(buckets.map((b) => [b.key, b]));
-  for (const r of rentals) {
-    if (r.transaction_type !== "rental" || r.collected || !r.due_date) continue;
-    const diff = daysBetween(todayISO(), r.due_date);
-    if (diff < 0) map.overdue.count++;
-    else if (diff <= 30) map.d30.count++;
-    else if (diff <= 60) map.d60.count++;
-    else if (diff <= 90) map.d90.count++;
-    else map.later.count++;
-  }
-  return buckets;
-}
-
 function getStatus(item) {
   if (item.transaction_type === "purchase") return "purchase";
   if (item.collected) return "collected";
@@ -1549,16 +1510,6 @@ function LoginScreen() {
   );
 }
 
-function rowGrid(isAdmin) {
-  return {
-    display: "grid",
-    gridTemplateColumns: isAdmin
-      ? "24px 100px 120px 1fr 55px 100px 110px 190px"
-      : "120px 1fr 55px 100px 110px",
-    gap: 10,
-  };
-}
-
 function StatCell({ label, value, color, active, onClick, last }) {
   return (
     <button
@@ -1932,298 +1883,6 @@ function Dashboard({ profile, onLogout }) {
           </div>
         )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function StatementTab({ rentals }) {
-  const [voucherQuery, setVoucherQuery] = useState("");
-  const [selectedVoucher, setSelectedVoucher] = useState(null);
-
-  const voucherList = useMemo(() => {
-    const set = new Set();
-    rentals.forEach((r) => {
-      if (r.voucher_no) set.add(r.voucher_no);
-    });
-    return Array.from(set).sort().reverse();
-  }, [rentals]);
-
-  const filteredVouchers = useMemo(() => {
-    const q = voucherQuery.trim().toLowerCase();
-    if (!q) return voucherList;
-    return voucherList.filter((v) => v.toLowerCase().includes(q));
-  }, [voucherList, voucherQuery]);
-
-  const items = useMemo(() => {
-    if (!selectedVoucher) return [];
-    return rentals.filter((r) => r.voucher_no === selectedVoucher);
-  }, [rentals, selectedVoucher]);
-
-  const totalAmount = items.reduce((s, r) => s + (Number(r.amount) || 0), 0);
-  const head = items[0];
-
-  return (
-    <div>
-      <style>{`
-        @media print {
-          body * { visibility: hidden; }
-          #statement-print-area, #statement-print-area * { visibility: visible; }
-          #statement-print-area { position: absolute; top: 0; left: 0; width: 100%; padding: 24px; }
-          .statement-no-print { display: none !important; }
-        }
-      `}</style>
-
-      <div className="statement-no-print">
-        <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>거래명세서</div>
-        <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
-          전표번호를 선택하면 인쇄용 거래명세서를 미리보고 출력할 수 있어요. (신규 등록·엑셀 업로드 시 입력한 전표번호 기준)
-        </div>
-        <input
-          placeholder="전표번호 검색"
-          value={voucherQuery}
-          onChange={(e) => setVoucherQuery(e.target.value)}
-          style={{ ...inputStyle, maxWidth: 260, marginBottom: 14 }}
-        />
-        {voucherList.length === 0 ? (
-          <div style={{ color: C.muted, fontSize: 13, marginBottom: 20 }}>
-            아직 전표번호가 입력된 건이 없습니다. 납품내역의 신규 등록/엑셀 업로드에서 전표번호를 입력해주세요.
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
-            {filteredVouchers.map((v) => (
-              <button
-                key={v}
-                onClick={() => setSelectedVoucher(v)}
-                style={{
-                  ...ghostBtnStyle,
-                  background: selectedVoucher === v ? C.bg : "transparent",
-                  borderColor: selectedVoucher === v ? C.ink : C.line,
-                  color: selectedVoucher === v ? C.ink : C.inkSoft,
-                }}
-              >
-                {v}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {selectedVoucher && items.length > 0 && (
-        <>
-          <div className="statement-no-print" style={{ marginBottom: 16 }}>
-            <button onClick={() => window.print()} style={primaryBtnStyle2}>인쇄 / PDF로 저장</button>
-          </div>
-
-          <div id="statement-print-area" style={{ border: `1px solid ${C.line}`, background: "#fff", padding: 32 }}>
-            <div style={{ textAlign: "center", marginBottom: 24 }}>
-              <div style={{ fontFamily: serif, fontSize: 22 }}>거 래 명 세 서</div>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 20 }}>
-              <div>
-                <div>거래처: {head.customer}</div>
-                <div>현장/구역: {head.site || "-"}</div>
-                <div>담당자: {head.manager || "-"}</div>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <div>전표번호: {selectedVoucher}</div>
-                <div>거래일자: {head.out_date}</div>
-                <div>공급자: 리마켓</div>
-              </div>
-            </div>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr>
-                  {["품목", "규격", "수량", "단가", "금액", "비고"].map((h) => (
-                    <th
-                      key={h}
-                      style={{
-                        border: `1px solid ${C.line}`,
-                        padding: "8px 10px",
-                        background: C.bg,
-                        textAlign: h === "품목" || h === "규격" || h === "비고" ? "left" : "right",
-                      }}
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((r) => (
-                  <tr key={r.id}>
-                    <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.item}</td>
-                    <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.spec || "-"}</td>
-                    <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{r.qty}</td>
-                    <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>
-                      {r.unit_price != null ? Number(r.unit_price).toLocaleString("ko-KR") : "-"}
-                    </td>
-                    <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{fmtWon(r.amount)}</td>
-                    <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.note || "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td colSpan={4} style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
-                    합계
-                  </td>
-                  <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>{fmtWon(totalAmount)}</td>
-                  <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}></td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function CustomerDetailPanel({ customerName, rentals, customers, isAdmin, onClose, onSaved }) {
-  const existing = customers.find((c) => c.name === customerName);
-  const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({
-    contact_name: existing?.contact_name || "",
-    phone: existing?.phone || "",
-    email: existing?.email || "",
-    note: existing?.note || "",
-  });
-  const [saving, setSaving] = useState(false);
-  const [periodStart, setPeriodStart] = useState("");
-  const [periodEnd, setPeriodEnd] = useState("");
-
-  useEffect(() => {
-    setForm({
-      contact_name: existing?.contact_name || "",
-      phone: existing?.phone || "",
-      email: existing?.email || "",
-      note: existing?.note || "",
-    });
-    setEditing(false);
-  }, [customerName, existing?.contact_name, existing?.phone, existing?.email, existing?.note]);
-
-  const items = useMemo(() => {
-    let list = rentals.filter((r) => r.customer === customerName);
-    if (periodStart) list = list.filter((r) => r.out_date && r.out_date >= periodStart);
-    if (periodEnd) list = list.filter((r) => r.out_date && r.out_date <= periodEnd);
-    return list;
-  }, [rentals, customerName, periodStart, periodEnd]);
-
-  const bySite = useMemo(() => {
-    const map = {};
-    for (const r of items) {
-      const key = r.site || "(현장 미지정)";
-      if (!map[key]) map[key] = { site: key, amount: 0, itemCount: 0, normal: 0, soon: 0, overdue: 0, collected: 0, purchase: 0 };
-      map[key].amount += Number(r.amount) || 0;
-      map[key].itemCount += Number(r.qty) || 0;
-      map[key][getStatus(r)]++;
-    }
-    return Object.values(map).sort((a, b) => b.amount - a.amount);
-  }, [items]);
-
-  const totalAmount = items.reduce((s, r) => s + (Number(r.amount) || 0), 0);
-
-  async function save() {
-    setSaving(true);
-    const { error } = await supabase.from("customers").upsert({ name: customerName, ...form }, { onConflict: "name" });
-    setSaving(false);
-    if (error) {
-      alert("저장 중 오류가 발생했어요: " + error.message);
-      return;
-    }
-    setEditing(false);
-    onSaved();
-  }
-
-  return (
-    <div style={{ border: `1px solid ${C.purple}`, background: C.panel, padding: 20, marginBottom: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-        <div>
-          <div style={{ fontFamily: serif, fontSize: 18 }}>{customerName}</div>
-          <div style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>총 {fmtWon(totalAmount)} · 현장 {bySite.length}곳 · 품목 {items.reduce((s, r) => s + (Number(r.qty) || 0), 0)}개</div>
-        </div>
-        <button onClick={onClose} style={ghostBtnStyle}>닫기</button>
-      </div>
-
-      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginBottom: 18, flexWrap: "wrap" }}>
-        <div>
-          <label style={{ display: "block", fontSize: 11.5, color: C.inkSoft, marginBottom: 6 }}>기간 시작 (출고일 기준)</label>
-          <input type="date" style={smallInputStyle} value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
-        </div>
-        <div>
-          <label style={{ display: "block", fontSize: 11.5, color: C.inkSoft, marginBottom: 6 }}>기간 종료</label>
-          <input type="date" style={smallInputStyle} value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} />
-        </div>
-        {(periodStart || periodEnd) && (
-          <button onClick={() => { setPeriodStart(""); setPeriodEnd(""); }} style={miniBtnStyle}>전체 기간</button>
-        )}
-        <div style={{ fontSize: 12, color: C.muted }}>
-          {periodStart || periodEnd ? "선택한 기간의 매출입니다." : "전체 기간 매출입니다."}
-        </div>
-      </div>
-
-      <div style={{ border: `1px solid ${C.lineSoft}`, padding: 16, marginBottom: 18 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: editing ? 12 : 0 }}>
-          <div style={{ fontSize: 13, color: C.inkSoft }}>담당자 정보</div>
-          {isAdmin && !editing && (
-            <button onClick={() => setEditing(true)} style={miniBtnStyle}>수정</button>
-          )}
-        </div>
-        {!editing && (
-          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", fontSize: 13.5, marginTop: 8 }}>
-            <div>담당자: {form.contact_name || "-"}</div>
-            <div>연락처: {form.phone || "-"}</div>
-            <div>이메일: {form.email || "-"}</div>
-            {form.note && <div>비고: {form.note}</div>}
-          </div>
-        )}
-        {editing && (
-          <>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-              <Field label="담당자명">
-                <input style={smallInputStyle} value={form.contact_name} onChange={(e) => setForm({ ...form, contact_name: e.target.value })} />
-              </Field>
-              <Field label="연락처">
-                <input style={smallInputStyle} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-              </Field>
-              <Field label="이메일">
-                <input style={smallInputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-              </Field>
-            </div>
-            <Field label="비고">
-              <input style={smallInputStyle} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
-            </Field>
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <button onClick={save} disabled={saving} style={primaryBtnStyle2}>{saving ? "저장 중…" : "저장"}</button>
-              <button onClick={() => setEditing(false)} style={ghostBtnStyle}>취소</button>
-            </div>
-          </>
-        )}
-      </div>
-
-      <div style={{ fontSize: 13, color: C.inkSoft, marginBottom: 8 }}>현장별 현황</div>
-      <div style={{ border: `1px solid ${C.lineSoft}` }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 90px 1fr", gap: 8, padding: "8px 12px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}` }}>
-          <div>현장/구역</div>
-          <div>금액</div>
-          <div>품목수</div>
-          <div>상태</div>
-        </div>
-        {bySite.map((s, idx) => (
-          <div key={s.site} style={{ display: "grid", gridTemplateColumns: "1fr 110px 90px 1fr", gap: 8, padding: "8px 12px", fontSize: 13, alignItems: "center", borderBottom: idx === bySite.length - 1 ? "none" : `1px solid ${C.lineSoft}` }}>
-            <div>{s.site}</div>
-            <div>{fmtWon(s.amount)}</div>
-            <div>{s.itemCount}개</div>
-            <div style={{ fontSize: 11.5, color: C.muted }}>
-              {s.normal > 0 && `정상 ${s.normal} `}
-              {s.soon > 0 && `임박 ${s.soon} `}
-              {s.overdue > 0 && `연체 ${s.overdue} `}
-              {s.collected > 0 && `회수완료 ${s.collected} `}
-              {s.purchase > 0 && `구매 ${s.purchase}`}
-            </div>
-          </div>
-        ))}
       </div>
     </div>
   );
@@ -4751,116 +4410,6 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOve
   );
 }
 
-function RentalForm({ initial, onCancel, onSubmit }) {
-  const [f, setF] = useState(
-    initial || {
-      id: null,
-      transaction_type: "rental",
-      customer: "",
-      site: "",
-      item: "",
-      spec: "",
-      qty: 1,
-      unit_price: null,
-      amount: null,
-      out_date: todayISO(),
-      period_days: 30,
-      due_date: addDays(todayISO(), 30),
-      collected: false,
-      collect_date: null,
-      manager: "",
-      voucher_no: "",
-      note: "",
-    }
-  );
-
-  const update = (patch) => {
-    const next = { ...f, ...patch };
-    if (next.transaction_type === "rental" && (patch.out_date || patch.period_days)) {
-      next.due_date = addDays(next.out_date, next.period_days || 30);
-    }
-    if (patch.qty !== undefined || patch.unit_price !== undefined) {
-      const qty = patch.qty !== undefined ? patch.qty : next.qty;
-      const unitPrice = patch.unit_price !== undefined ? patch.unit_price : next.unit_price;
-      if (unitPrice != null) next.amount = qty * unitPrice;
-    }
-    setF(next);
-  };
-
-  const isRental = f.transaction_type === "rental";
-
-  return (
-    <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 16 }}>{initial ? "정보 수정" : "신규 등록"}</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
-        <Field label="거래유형">
-          <select style={inputStyle} value={f.transaction_type} onChange={(e) => update({ transaction_type: e.target.value })}>
-            <option value="rental">렌탈</option>
-            <option value="purchase">구매</option>
-          </select>
-        </Field>
-        <Field label="고객사">
-          <input style={inputStyle} value={f.customer} onChange={(e) => update({ customer: e.target.value })} placeholder="예: 한우리건설" />
-        </Field>
-        <Field label="현장/구역">
-          <input style={inputStyle} value={f.site || ""} onChange={(e) => update({ site: e.target.value })} placeholder="예: 청도현장" />
-        </Field>
-        <Field label="담당자">
-          <input style={inputStyle} value={f.manager} onChange={(e) => update({ manager: e.target.value })} placeholder="예: 김영업" />
-        </Field>
-        <Field label="전표번호">
-          <input style={inputStyle} value={f.voucher_no || ""} onChange={(e) => update({ voucher_no: e.target.value })} placeholder="예: RT-2026-0001" />
-        </Field>
-        <Field label="품목명">
-          <input style={inputStyle} value={f.item} onChange={(e) => update({ item: e.target.value })} placeholder="예: 노트북 (LG 그램)" />
-        </Field>
-        <Field label="규격">
-          <input style={inputStyle} value={f.spec || ""} onChange={(e) => update({ spec: e.target.value })} placeholder="예: W1800*D800, 월넛" />
-        </Field>
-        <Field label="수량">
-          <input type="number" min={1} style={inputStyle} value={f.qty} onChange={(e) => update({ qty: Number(e.target.value) })} />
-        </Field>
-        <Field label="단가">
-          <NumberInput style={inputStyle} value={f.unit_price} onChange={(v) => update({ unit_price: v })} />
-        </Field>
-        <Field label="금액">
-          <NumberInput style={inputStyle} value={f.amount} onChange={(v) => setF({ ...f, amount: v })} />
-        </Field>
-        <Field label={isRental ? "출고일" : "발행일"}>
-          <input type="date" style={inputStyle} value={f.out_date} onChange={(e) => update({ out_date: e.target.value })} />
-        </Field>
-        {isRental && (
-          <>
-            <Field label="렌탈기간(일)">
-              <input type="number" min={1} style={inputStyle} value={f.period_days || ""} onChange={(e) => update({ period_days: Number(e.target.value) })} />
-            </Field>
-            <Field label="반납예정일 (자동계산, 직접 수정 가능)">
-              <input type="date" style={inputStyle} value={f.due_date || ""} onChange={(e) => setF({ ...f, due_date: e.target.value })} />
-            </Field>
-          </>
-        )}
-        <div style={{ gridColumn: "span 2" }}>
-          <Field label="비고">
-            <input style={inputStyle} value={f.note || ""} onChange={(e) => update({ note: e.target.value })} placeholder="선택 입력" />
-          </Field>
-        </div>
-      </div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button
-          onClick={() => {
-            if (!f.customer || !f.item) return;
-            onSubmit(f);
-          }}
-          style={primaryBtnStyle2}
-        >
-          저장
-        </button>
-        <button onClick={onCancel} style={ghostBtnStyle}>취소</button>
-      </div>
-    </div>
-  );
-}
-
 // ---------- 렌탈내역 (목록 + 상세) ----------
 const emptyAdvSearch = {
   fromDate: "",
@@ -6082,9 +5631,8 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
   );
 }
 
+// 업체별데이터 목록에서 쓰는 칸 너비(판매현황은 칸 너비를 드래그로 조절할 수 있게 따로 관리한다).
 const salesListGrid = "120px 130px 90px 60px 100px 70px 120px 100px 120px";
-// 판매현황 목록에만 렌탈종료일자 칸이 하나 더 있다(업체별데이터 목록은 salesListGrid를 그대로 씀).
-const salesListGridWithDue = "120px 130px 90px 60px 100px 100px 70px 120px 100px 120px";
 
 function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }) {
   const [selectedVoucherKey, setSelectedVoucherKey] = useState(null);
@@ -6464,10 +6012,14 @@ function CustomerDataTab({ rentals, onRefresh }) {
   // 입력창에 타이핑하는 값(초안)과 실제로 검색에 적용된 값을 분리해서, "검색" 버튼을 눌러야 결과에 반영되게 한다.
   // 기본 조회 기간은 이번달 1일 ~ 말일(월 전체)로 잡는다.
   const [customerInput, setCustomerInput] = useState("");
+  const [siteInput, setSiteInput] = useState(""); // 현장명(선택) — 같은 업체 안에서도 특정 현장만 좁혀 볼 때
+  const [itemInput, setItemInput] = useState(""); // 품목명(선택) — 예: "냉난방기"만 몇 개 나갔는지
   const [fromDateInput, setFromDateInput] = useState(monthStart);
   const [toDateInput, setToDateInput] = useState(monthEnd);
 
   const [customerQuery, setCustomerQuery] = useState("");
+  const [siteQuery, setSiteQuery] = useState("");
+  const [itemQuery, setItemQuery] = useState("");
   const [fromDate, setFromDate] = useState(monthStart);
   const [toDate, setToDate] = useState(monthEnd);
   const [hasSearched, setHasSearched] = useState(false); // 검색을 눌러야 결과가 나오게(false면 안내문구만 보여줌)
@@ -6477,6 +6029,8 @@ function CustomerDataTab({ rentals, onRefresh }) {
   function runSearch() {
     addRecentValue("remarket_recent_customer", customerInput);
     setCustomerQuery(customerInput);
+    setSiteQuery(siteInput);
+    setItemQuery(itemInput);
     setFromDate(fromDateInput);
     setToDate(toDateInput);
     setHasSearched(true);
@@ -6485,9 +6039,13 @@ function CustomerDataTab({ rentals, onRefresh }) {
 
   function resetFilters() {
     setCustomerInput("");
+    setSiteInput("");
+    setItemInput("");
     setFromDateInput(monthStart);
     setToDateInput(monthEnd);
     setCustomerQuery("");
+    setSiteQuery("");
+    setItemQuery("");
     setFromDate(monthStart);
     setToDate(monthEnd);
     setHasSearched(false);
@@ -6505,6 +6063,24 @@ function CustomerDataTab({ rentals, onRefresh }) {
     for (const r of rentals || []) {
       const c = (r.customer || "").trim();
       if (c) set.add(c);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "ko"));
+  }, [rentals]);
+
+  // 현장명·품목명도 업체명처럼 실제 등록된 값 목록을 자동완성 후보로 보여준다.
+  const siteOptions = useMemo(() => {
+    const set = new Set();
+    for (const r of rentals || []) {
+      const v = (r.site_name || "").trim();
+      if (v) set.add(v);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "ko"));
+  }, [rentals]);
+  const itemOptions = useMemo(() => {
+    const set = new Set();
+    for (const r of rentals || []) {
+      const v = (r.item || "").trim();
+      if (v) set.add(v);
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b, "ko"));
   }, [rentals]);
@@ -6537,17 +6113,41 @@ function CustomerDataTab({ rentals, onRefresh }) {
   const filteredRows = useMemo(() => {
     if (!searched) return [];
     const q = customerQuery.trim().toLowerCase();
+    const siteQ = siteQuery.trim().toLowerCase();
+    const itemQ = itemQuery.trim().toLowerCase();
     return (rentals || []).filter((r) => {
       if (!(r.customer || "").toLowerCase().includes(q)) return false;
+      if (siteQ && !(r.site_name || "").toLowerCase().includes(siteQ)) return false;
+      if (itemQ && !(r.item || "").toLowerCase().includes(itemQ)) return false;
       const d = (r.out_date || "").slice(0, 10);
       if (!d || d < fromDate || d > toDate) return false;
       return true;
     });
-  }, [rentals, customerQuery, fromDate, toDate, searched]);
+  }, [rentals, customerQuery, siteQuery, itemQuery, fromDate, toDate, searched]);
 
   const totalSupply = filteredRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
   const totalVat = Math.round(totalSupply * 0.1);
   const totalWithVat = totalSupply + totalVat;
+
+  // 품목명으로 좁혀 찾을 때("A현장에 냉난방기 몇 개 나갔는지" 같은 질문)를 위해, 검색된 결과 전체(전표 여러 장에
+  // 걸쳐 있어도 상관없이)를 품목+규격별로 합산한 수량 표. 업체별데이터 화면 전체 기준이라 "품목별 수량 데이터"
+  // 탭(전표 한 장만 보는 화면)과는 별개다.
+  const itemTotals = useMemo(() => {
+    const map = new Map();
+    for (const r of filteredRows) {
+      const itemName = (r.item || "").trim() || "(품목명 없음)";
+      const specName = (r.spec || "").trim();
+      const key = `${itemName}〓${specName}`;
+      if (!map.has(key)) map.set(key, { key, item: itemName, spec: specName, qty: 0, count: 0 });
+      const e = map.get(key);
+      e.qty += Number(r.qty) || 0;
+      e.count += 1;
+    }
+    return Array.from(map.values()).sort((a, b) => b.qty - a.qty);
+  }, [filteredRows]);
+  const itemTotalsGrandQty = itemTotals.reduce((s, r) => s + r.qty, 0);
+  const [itemTotalsColWidths, startItemTotalsResize] = useResizableColumns([260, 260, 100, 90]);
+  const itemTotalsGridTemplate = itemTotalsColWidths.map((w) => `${w}px`).join(" ");
 
   const chartData = useMemo(() => {
     const byMonth = Object.fromEntries(monthKeys.map((k) => [k, 0]));
@@ -6682,21 +6282,40 @@ function CustomerDataTab({ rentals, onRefresh }) {
       `}</style>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>업체별 데이터</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
-        업체명과 기간을 입력하면 그 기간 동안의 매출 합계와 월별 추이를 볼 수 있어요. (예: 무영씨엠 · 2026-08-01 ~ 2026-09-16)
+        업체명과 기간을 입력하면 그 기간 동안의 매출 합계와 월별 추이를 볼 수 있어요. 현장명·품목명을 같이 입력하면 "A현장에 냉난방기만 몇 개 나갔는지"처럼 더 좁혀서 볼 수 있어요.
       </div>
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr", gap: 14 }}>
           <Field label="업체명">
             <RecentValueInput
               storageKey="remarket_recent_customer"
               value={customerInput}
               onChange={setCustomerInput}
               onKeyDown={handleSearchKeyDown}
-              placeholder="예: 무영씨엠"
               extraOptions={customerOptions}
             />
           </Field>
+          <Field label="현장명 (선택)">
+            <RecentValueInput
+              storageKey="remarket_recent_site"
+              value={siteInput}
+              onChange={setSiteInput}
+              onKeyDown={handleSearchKeyDown}
+              extraOptions={siteOptions}
+            />
+          </Field>
+          <Field label="품목명 (선택)">
+            <RecentValueInput
+              storageKey="remarket_recent_item"
+              value={itemInput}
+              onChange={setItemInput}
+              onKeyDown={handleSearchKeyDown}
+              extraOptions={itemOptions}
+            />
+          </Field>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 14 }}>
           <Field label="기간(시작일)">
             <input type="date" style={inputStyle} value={fromDateInput} onChange={(e) => setFromDateInput(e.target.value)} />
           </Field>
@@ -6749,8 +6368,43 @@ function CustomerDataTab({ rentals, onRefresh }) {
                 <StatCell label="건수" value={`${groups.length}건`} />
                 <StatCell label="공급가액 합계" value={fmtWon(totalSupply)} />
                 <StatCell label="부가세 합계" value={fmtWon(totalVat)} />
-                <StatCell label="합계(VAT포함)" value={fmtWon(totalWithVat)} color={C.green} last />
+                <StatCell label="합계(VAT포함)" value={fmtWon(totalWithVat)} color={C.green} last={!itemQuery.trim()} />
+                {itemQuery.trim() && (
+                  <StatCell label={`"${itemQuery.trim()}" 총 수량`} value={`${itemTotalsGrandQty.toLocaleString("ko-KR")}개`} color={C.amber} last />
+                )}
               </div>
+
+              {itemTotals.length > 0 && (
+                <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginBottom: 16, overflowX: "auto" }}>
+                  <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>
+                    품목별 합계{itemQuery.trim() ? ` ("${itemQuery.trim()}" 검색 결과)` : ""} — 칸 경계를 드래그하면 너비를 조절할 수 있어요.
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: itemTotalsGridTemplate, gap: 8, padding: "6px 4px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: "max-content" }}>
+                    {["품목", "규격", "수량", "건수"].map((label, i) => (
+                      <div key={label} style={{ position: "relative", textAlign: i >= 2 ? "right" : "left" }}>
+                        {label}
+                        <ColResizeHandle onMouseDown={startItemTotalsResize(i)} />
+                      </div>
+                    ))}
+                  </div>
+                  {itemTotals.map((r) => (
+                    <div
+                      key={r.key}
+                      style={{ display: "grid", gridTemplateColumns: itemTotalsGridTemplate, gap: 8, padding: "6px 4px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content" }}
+                    >
+                      <div>{r.item}</div>
+                      <div>{r.spec || "-"}</div>
+                      <div style={{ textAlign: "right", fontWeight: 600 }}>{r.qty.toLocaleString("ko-KR")}</div>
+                      <div style={{ textAlign: "right", color: C.muted }}>{r.count}건</div>
+                    </div>
+                  ))}
+                  <div style={{ display: "grid", gridTemplateColumns: itemTotalsGridTemplate, gap: 8, padding: "8px 4px", fontSize: 13, fontWeight: 700, background: C.bg, minWidth: "max-content" }}>
+                    <div style={{ gridColumn: "span 2", textAlign: "right" }}>합계</div>
+                    <div style={{ textAlign: "right" }}>{itemTotalsGrandQty.toLocaleString("ko-KR")}</div>
+                    <div />
+                  </div>
+                </div>
+              )}
 
               <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: "20px 18px 8px", marginBottom: 16 }}>
                 <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>월별 매출 추이</div>
@@ -7415,11 +7069,6 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
   const [showPicker, setShowPicker] = useState(false);
   const [pickerQuery, setPickerQuery] = useState("");
   const [addingVoucherKey, setAddingVoucherKey] = useState(null);
-  const [showManualIn, setShowManualIn] = useState(false);
-  const [manualInDate, setManualInDate] = useState(todayISO());
-  const [manualInLabel, setManualInLabel] = useState("");
-  const [manualInQtys, setManualInQtys] = useState({});
-  const [savingManualIn, setSavingManualIn] = useState(false);
   const [deletingVoucherId, setDeletingVoucherId] = useState(null);
   const [deletingBook, setDeletingBook] = useState(false);
   const [selectedItemIds, setSelectedItemIds] = useState(() => new Set());
@@ -7851,58 +7500,6 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
       alert("삭제 중 오류가 발생했어요: " + error.message);
       return;
     }
-    fetchAll();
-  }
-
-  function openManualIn() {
-    if (items.length === 0) {
-      alert("먼저 출고 탭에서 전표를 추가해 품목을 등록해주세요.");
-      return;
-    }
-    setManualInDate(todayISO());
-    setManualInLabel("");
-    setManualInQtys({});
-    setShowManualIn(true);
-  }
-
-  async function handleSaveManualIn() {
-    const qtyEntries = Object.entries(manualInQtys).filter(([, v]) => Number(v) > 0);
-    if (qtyEntries.length === 0) {
-      alert("회수 수량을 하나 이상 입력해주세요.");
-      return;
-    }
-    setSavingManualIn(true);
-    const nextSort = inVouchers.length > 0 ? Math.max(...inVouchers.map((v) => v.sort_order || 0)) + 1 : 0;
-    const { data: newVoucher, error: vErr } = await supabase
-      .from("ledger_vouchers")
-      .insert({
-        ledger_book_id: bookId,
-        kind: "in",
-        voucher_no: manualInLabel.trim() || null,
-        voucher_date: manualInDate || null,
-        source: "manual",
-        sort_order: nextSort,
-      })
-      .select()
-      .single();
-    if (vErr) {
-      setSavingManualIn(false);
-      alert("회수 내역을 추가하는 중 오류가 발생했어요: " + vErr.message);
-      return;
-    }
-    const entryRows = qtyEntries.map(([itemId, v]) => ({
-      ledger_book_id: bookId,
-      ledger_voucher_id: newVoucher.id,
-      ledger_item_id: itemId,
-      qty: Number(v),
-    }));
-    const { error: eErr } = await supabase.from("ledger_entries").insert(entryRows);
-    setSavingManualIn(false);
-    if (eErr) {
-      alert("수량을 저장하는 중 오류가 발생했어요: " + eErr.message);
-      return;
-    }
-    setShowManualIn(false);
     fetchAll();
   }
 
@@ -8575,45 +8172,6 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {subTab === "in" && showManualIn && (
-        <div className="ledger-no-print" style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 10 }}>
-            <Field label="회수일자">
-              <input type="date" style={inputStyle} value={manualInDate} onChange={(e) => setManualInDate(e.target.value)} />
-            </Field>
-            <Field label="회수전표번호/메모 (선택, 예: A/S장 20682)">
-              <input style={inputStyle} value={manualInLabel} onChange={(e) => setManualInLabel(e.target.value)} />
-            </Field>
-          </div>
-          <div style={{ maxHeight: 320, overflowY: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
-            {sortedItems.map((it) => (
-              <div
-                key={it.id}
-                style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 100px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}` }}
-              >
-                <div>{it.item}</div>
-                <div>{it.spec || "-"}</div>
-                <div>{it.color || "-"}</div>
-                <input
-                  type="number"
-                  min={0}
-                  style={smallInputStyle}
-                  placeholder="0"
-                  value={manualInQtys[it.id] ?? ""}
-                  onChange={(e) => setManualInQtys((prev) => ({ ...prev, [it.id]: e.target.value }))}
-                />
-              </div>
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={handleSaveManualIn} disabled={savingManualIn} style={primaryBtnStyle2}>
-              {savingManualIn ? "저장 중…" : "저장"}
-            </button>
-            <button onClick={() => setShowManualIn(false)} style={ghostBtnStyle}>취소</button>
-          </div>
         </div>
       )}
 
