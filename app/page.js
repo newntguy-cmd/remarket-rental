@@ -1883,7 +1883,7 @@ function Dashboard({ profile, onLogout }) {
         )}
 
         {activeTab === "ledgerAuto" && isStaff && (
-          <LedgerAutoSummaryTab key={ledgerAutoResetKey} rentals={rentals} />
+          <LedgerAutoSummaryTab key={ledgerAutoResetKey} rentals={rentals} onRefresh={fetchRentals} />
         )}
 
         {activeTab === "asboard" && isStaff && (
@@ -7115,13 +7115,19 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
 // 위 LedgerTab(심화관리)처럼 대장을 따로 만들 필요 없이, 등록된 렌탈전표(구매 제외)를 자동으로 전부 모아
 // 품목 단위 한 표로 보여준다. 대장 안 만든 현장도 렌탈전표만 등록돼 있으면 빠짐없이 다 잡힌다. 화면에서
 // 잔량까지 계산해주진 않고, 엑셀로 통째로 내려받아서 직접 걸러 쓰는 용도다.
-const autoLedgerGrid = "110px 130px 130px 90px 100px 100px 1fr 140px 70px 110px";
-function LedgerAutoSummaryTab({ rentals }) {
-  const [query, setQuery] = useState("");
+function LedgerAutoSummaryTab({ rentals, onRefresh }) {
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [voucherQuery, setVoucherQuery] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [checkedIds, setCheckedIds] = useState(() => new Set());
+  const [deletingSelected, setDeletingSelected] = useState(false);
   const [colWidths, startResize] = useResizableColumns([110, 130, 130, 90, 100, 100, 200, 140, 70, 110]);
 
   // 렌탈전표만(구매 제외) 모은다. transaction_type이 비어있는 옛 데이터는 렌탈로 취급한다(다른 화면들과 동일한 규칙).
   const rentalRows = useMemo(() => (rentals || []).filter((r) => (r.transaction_type || "rental") !== "purchase"), [rentals]);
+
+  const customerSuggestions = useMemo(() => dedupeSorted(rentalRows.map((r) => r.customer)), [rentalRows]);
 
   const sortedRows = useMemo(() => {
     const list = [...rentalRows];
@@ -7135,15 +7141,68 @@ function LedgerAutoSummaryTab({ rentals }) {
   }, [rentalRows]);
 
   const filteredRows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return sortedRows;
-    return sortedRows.filter((r) =>
-      [r.voucher_no, r.customer, r.site_name, r.manager, r.item, r.spec].filter(Boolean).join(" ").toLowerCase().includes(q)
-    );
-  }, [sortedRows, query]);
+    const cq = customerQuery.trim().toLowerCase();
+    const vq = voucherQuery.trim().toLowerCase();
+    return sortedRows.filter((r) => {
+      const d = (r.out_date || "").slice(0, 10);
+      if (fromDate && (!d || d < fromDate)) return false;
+      if (toDate && (!d || d > toDate)) return false;
+      if (cq && !(r.customer || "").toLowerCase().includes(cq)) return false;
+      if (vq && !(r.voucher_no || "").toLowerCase().includes(vq)) return false;
+      return true;
+    });
+  }, [sortedRows, customerQuery, voucherQuery, fromDate, toDate]);
+
+  const filtersActive = customerQuery.trim() || voucherQuery.trim() || fromDate || toDate;
+  const resetFilters = () => {
+    setCustomerQuery("");
+    setVoucherQuery("");
+    setFromDate("");
+    setToDate("");
+  };
 
   const totalQty = filteredRows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
-  const gridTemplate = colWidths.map((w) => `${w}px`).join(" ");
+  const gridTemplate = "32px " + colWidths.map((w) => `${w}px`).join(" ");
+
+  const visibleIds = filteredRows.map((r) => r.id);
+  const allChecked = visibleIds.length > 0 && visibleIds.every((id) => checkedIds.has(id));
+  const someChecked = visibleIds.some((id) => checkedIds.has(id));
+  const selectAllRef = useRef(null);
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someChecked && !allChecked;
+  }, [someChecked, allChecked]);
+
+  const toggleChecked = (id) => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleCheckedAll = () => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (allChecked) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+
+  async function handleDeleteSelected() {
+    if (checkedIds.size === 0) return;
+    if (!confirm(`선택한 품목 ${checkedIds.size}건을 삭제할까요? 되돌릴 수 없어요. (같은 전표의 다른 품목은 그대로 남아요)`)) return;
+    setDeletingSelected(true);
+    const { error } = await supabase.from("rentals").delete().in("id", Array.from(checkedIds));
+    setDeletingSelected(false);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setCheckedIds(new Set());
+    onRefresh && onRefresh();
+  }
 
   async function handleExportExcel() {
     const XLSX = await import("xlsx");
@@ -7176,18 +7235,44 @@ function LedgerAutoSummaryTab({ rentals }) {
         정렬돼 있어요. "엑셀로 다운로드"로 통째로 받아서 원하는 대로 걸러 쓰시면 돼요.
       </div>
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
-        <input
-          placeholder="전표번호, 거래처, 현장명, 담당자, 품목 검색"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          style={{ ...inputStyle, width: 320 }}
-        />
-        <button onClick={handleExportExcel} style={ghostBtnStyle}>엑셀로 다운로드</button>
-        <div style={{ fontSize: 12.5, color: C.inkSoft }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 14, flexWrap: "wrap" }}>
+        <Field label="업체명">
+          <div style={{ width: 220 }}>
+            <RecentValueInput
+              storageKey="remarket_recent_customer"
+              value={customerQuery}
+              onChange={setCustomerQuery}
+              extraOptions={customerSuggestions}
+            />
+          </div>
+        </Field>
+        <Field label="전표번호">
+          <input value={voucherQuery} onChange={(e) => setVoucherQuery(e.target.value)} style={{ ...inputStyle, width: 150 }} />
+        </Field>
+        <Field label="배송일자(시작)">
+          <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} style={{ ...inputStyle, width: 150 }} />
+        </Field>
+        <Field label="배송일자(종료)">
+          <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} style={{ ...inputStyle, width: 150 }} />
+        </Field>
+        {filtersActive && (
+          <button onClick={resetFilters} style={{ ...ghostBtnStyle, marginBottom: 1 }}>초기화</button>
+        )}
+        <button onClick={handleExportExcel} style={{ ...ghostBtnStyle, marginBottom: 1 }}>엑셀로 다운로드</button>
+        <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 9 }}>
           {filteredRows.length}건 · 수량 합계 {totalQty.toLocaleString("ko-KR")}개
         </div>
       </div>
+
+      {checkedIds.size > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 12px", background: C.amberBg, fontSize: 12.5 }}>
+          <div>{checkedIds.size}건 선택됨</div>
+          <button onClick={handleDeleteSelected} disabled={deletingSelected} style={{ ...miniBtnStyle, borderColor: C.brick, color: C.brick }}>
+            {deletingSelected ? "삭제 중…" : "선택 삭제"}
+          </button>
+          <button onClick={() => setCheckedIds(new Set())} style={miniBtnStyle}>선택 해제</button>
+        </div>
+      )}
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
         <div
@@ -7199,9 +7284,12 @@ function LedgerAutoSummaryTab({ rentals }) {
             fontSize: 11.5,
             color: C.muted,
             borderBottom: `1px solid ${C.line}`,
-            minWidth: 1100,
+            minWidth: 1130,
           }}
         >
+          <div>
+            <input ref={selectAllRef} type="checkbox" checked={allChecked} onChange={toggleCheckedAll} />
+          </div>
           {["전표번호", "거래처", "현장명", "담당자", "배송일자", "렌탈종료일자", "품목", "규격", "수량", "금액"].map((label, i) => (
             <div key={label} style={{ position: "relative" }}>
               {label}
@@ -7212,8 +7300,11 @@ function LedgerAutoSummaryTab({ rentals }) {
         {filteredRows.map((r) => (
           <div
             key={r.id}
-            style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 8, padding: "12px 14px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}`, minWidth: 1100, alignItems: "center" }}
+            style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 8, padding: "12px 14px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}`, minWidth: 1130, alignItems: "center" }}
           >
+            <div>
+              <input type="checkbox" checked={checkedIds.has(r.id)} onChange={() => toggleChecked(r.id)} />
+            </div>
             <div>{r.voucher_no || "-"}</div>
             <div>{r.customer || "-"}</div>
             <div>{r.site_name || "-"}</div>
