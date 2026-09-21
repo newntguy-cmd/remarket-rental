@@ -1530,8 +1530,6 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
-  const isMobile = useIsMobile();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -1641,6 +1639,9 @@ function Dashboard({ profile, onLogout }) {
   const isSales = profile.role === "sales"; // 영업담당자 계정: 본인 담당자명과 일치하는 데이터만 보고 관리할 수 있음
   const isStaff = isAdmin || isSales; // 내부 직원(관리자+영업담당자)은 같은 화면 구성을 쓰고, 실제 데이터 범위는 DB 권한(RLS)이 갈라준다.
   const managerName = profile.manager_name || "";
+  // 실제로 사이드바·헤더를 그리는 게 이 컴포넌트라 핸드폰 화면 감지도 여기서 해야 한다(Home이 아니라).
+  const isMobile = useIsMobile();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   // 관리자 계정을 여러 직원이 같이 쓰다 보니, "내 이름"을 이 브라우저에 저장해두면 A/S·회수 등록 시
   // 작성자 칸에 자동으로 채워준다(로그인 계정과 별개로, 실제로 이 화면을 쓰고 있는 사람 이름).
   const [myName, setMyNameState] = useState(() => getMyName());
