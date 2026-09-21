@@ -1512,10 +1512,26 @@ function parseAsContentItems(text) {
 }
 
 // ---------- 메인 ----------
+// 핸드폰처럼 좁은 화면(768px 이하)인지 감지한다. 화면 회전·창 크기 변경에도 실시간으로 반영되도록
+// resize 이벤트를 듣는다. 서버 렌더링 시점에는 window가 없어 일단 false(PC 기준)로 시작하고,
+// 화면에 붙은 뒤(useEffect) 실제 폭을 읽어온다.
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth <= 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+  return isMobile;
+}
+
 export default function Home() {
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
+  const isMobile = useIsMobile();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -1854,6 +1870,52 @@ function Dashboard({ profile, onLogout }) {
     ...(isStaff ? [{ key: "ledger", label: "현장별 렌탈잔량(심화관리)", star: true, starColor: "#FF1E1E" }] : []),
   ];
 
+  // 데스크톱 사이드바와 핸드폰 슬라이드 메뉴 둘 다 같은 메뉴 버튼 목록을 그대로 재사용한다
+  // (핸드폰에서는 메뉴를 고르면 바로 닫히도록 mobileMenuOpen을 같이 꺼준다).
+  const menuButtonsJsx = menuItems.map((m) => {
+    const active = activeTab === m.key;
+    return (
+      <button
+        key={m.key}
+        className={`rm-menu-btn${active ? "" : " is-inactive"}`}
+        onClick={() => {
+          setMobileMenuOpen(false);
+          setActiveTab(m.key);
+          if (m.key === "shares") setSharesResetKey((k) => k + 1); // 지분관리는 눌릴 때마다 목록 화면으로 리셋
+          if (m.key === "rentals") setRentalsResetKey((k) => k + 1); // 렌탈내역도 눌릴 때마다 목록 화면으로 리셋
+          if (m.key === "purchases") setPurchasesResetKey((k) => k + 1); // 구매내역도 눌릴 때마다 목록 화면으로 리셋
+          if (m.key === "sales") setSalesResetKey((k) => k + 1); // 판매현황도 눌릴 때마다 검색 화면으로 리셋
+          if (m.key === "ledger") setLedgerResetKey((k) => k + 1); // 출고/회수 내역서도 눌릴 때마다 대장 목록으로 리셋
+          if (m.key === "ledgerAuto") setLedgerAutoResetKey((k) => k + 1); // 현장별 렌탈잔량(자동등록)도 눌릴 때마다 목록으로 리셋
+          if (m.key === "asboard") setAsboardResetKey((k) => k + 1); // A/S관리대장도 눌릴 때마다 목록 화면으로 리셋
+          if (m.key === "collectionboard") setCollectionboardResetKey((k) => k + 1); // 렌탈회수관리도 눌릴 때마다 목록 화면으로 리셋
+        }}
+        style={{
+          display: "block",
+          width: "100%",
+          textAlign: "left",
+          padding: "13px 12px",
+          marginBottom: 2,
+          borderRadius: 5,
+          background: active ? C.ink : "transparent",
+          border: "none",
+          color: active ? "#fff" : C.inkSoft,
+          fontSize: 14,
+          fontWeight: active ? 600 : 500,
+          cursor: "pointer",
+          fontFamily: sans,
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span style={{ display: "inline-block", width: 15, color: m.starColor || (active ? "#fff" : "#000") }}>
+          {m.star ? "★" : ""}
+        </span>
+        {m.label}
+      </button>
+    );
+  });
+  const activeMenuItem = menuItems.find((m) => m.key === activeTab);
+
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: sans, color: C.ink }}>
       <style>{`
@@ -1862,11 +1924,30 @@ function Dashboard({ profile, onLogout }) {
         .rm-logout-btn:hover { background: ${C.bg}; border-color: ${C.ink}; color: ${C.ink}; }
         .col-resize-bar { background: #C7CDD6; transition: background 0.12s ease, width 0.12s ease; }
         .col-resize-handle:hover .col-resize-bar { background: ${C.ink}; width: 4px; }
+        /* 핸드폰(768px 이하)에서 입력칸 글씨가 16px보다 작으면 아이폰 사파리가 탭할 때마다 화면을
+           자동으로 확대해버려서 계속 다시 축소해야 하는 게 제일 불편했던 부분이라, 여기서만 강제로 16px로 키운다.
+           나머지 화면은 원래 디자인 그대로 유지된다. */
+        @media (max-width: 768px) {
+          input, select, textarea { font-size: 16px !important; }
+        }
       `}</style>
       <div style={{ borderBottom: `1px solid ${C.line}`, background: C.panel }}>
-        <div style={{ maxWidth: 1600, margin: "0 auto", padding: "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ fontFamily: serif, fontSize: 20, letterSpacing: 0.2, color: C.ink }}>리마켓 영업관리 시스템</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ maxWidth: 1600, margin: "0 auto", padding: isMobile ? "12px 14px" : "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+            {isMobile && (
+              <button
+                onClick={() => setMobileMenuOpen(true)}
+                aria-label="메뉴 열기"
+                style={{ flexShrink: 0, width: 38, height: 38, border: `1px solid ${C.line}`, background: "transparent", borderRadius: 6, fontSize: 17, color: C.ink, cursor: "pointer" }}
+              >
+                ☰
+              </button>
+            )}
+            <div style={{ fontFamily: serif, fontSize: isMobile ? 16.5 : 20, letterSpacing: 0.2, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              리마켓 영업관리 시스템
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
             {isStaff && (
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 2 }}>내 이름 (작성자 자동입력)</div>
@@ -1889,64 +1970,60 @@ function Dashboard({ profile, onLogout }) {
         </div>
       </div>
 
-      <div style={{ maxWidth: 1600, margin: "0 auto", padding: "28px 24px 60px", display: "flex", gap: 24, alignItems: "flex-start" }}>
-        <aside
-          style={{
-            width: 232,
-            flexShrink: 0,
-            border: `1px solid ${C.line}`,
-            borderRadius: 6,
-            background: C.panel,
-            padding: 6,
-            position: "sticky",
-            top: 20,
-          }}
-        >
-          <div style={{ padding: "10px 12px 8px", fontSize: 10.5, color: C.muted, letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
-          {menuItems.map((m) => {
-            const active = activeTab === m.key;
-            return (
-              <button
-                key={m.key}
-                className={`rm-menu-btn${active ? "" : " is-inactive"}`}
-                onClick={() => {
-                  setActiveTab(m.key);
-                  if (m.key === "shares") setSharesResetKey((k) => k + 1); // 지분관리는 눌릴 때마다 목록 화면으로 리셋
-                  if (m.key === "rentals") setRentalsResetKey((k) => k + 1); // 렌탈내역도 눌릴 때마다 목록 화면으로 리셋
-                  if (m.key === "purchases") setPurchasesResetKey((k) => k + 1); // 구매내역도 눌릴 때마다 목록 화면으로 리셋
-                  if (m.key === "sales") setSalesResetKey((k) => k + 1); // 판매현황도 눌릴 때마다 검색 화면으로 리셋
-                  if (m.key === "ledger") setLedgerResetKey((k) => k + 1); // 출고/회수 내역서도 눌릴 때마다 대장 목록으로 리셋
-                  if (m.key === "ledgerAuto") setLedgerAutoResetKey((k) => k + 1); // 현장별 렌탈잔량(자동등록)도 눌릴 때마다 목록으로 리셋
-                  if (m.key === "asboard") setAsboardResetKey((k) => k + 1); // A/S관리대장도 눌릴 때마다 목록 화면으로 리셋
-                  if (m.key === "collectionboard") setCollectionboardResetKey((k) => k + 1); // 렌탈회수관리도 눌릴 때마다 목록 화면으로 리셋
-                }}
-                style={{
-                  display: "block",
-                  width: "100%",
-                  textAlign: "left",
-                  padding: "11px 12px",
-                  marginBottom: 2,
-                  borderRadius: 5,
-                  background: active ? C.ink : "transparent",
-                  border: "none",
-                  color: active ? "#fff" : C.inkSoft,
-                  fontSize: 13.5,
-                  fontWeight: active ? 600 : 500,
-                  cursor: "pointer",
-                  fontFamily: sans,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <span style={{ display: "inline-block", width: 15, color: m.starColor || (active ? "#fff" : "#000") }}>
-                  {m.star ? "★" : ""}
-                </span>
-                {m.label}
-              </button>
-            );
-          })}
-        </aside>
+      <div style={{ maxWidth: 1600, margin: "0 auto", padding: isMobile ? "14px 12px 50px" : "28px 24px 60px", display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 10 : 24, alignItems: "flex-start" }}>
+        {!isMobile && (
+          <aside
+            style={{
+              width: 232,
+              flexShrink: 0,
+              border: `1px solid ${C.line}`,
+              borderRadius: 6,
+              background: C.panel,
+              padding: 6,
+              position: "sticky",
+              top: 20,
+            }}
+          >
+            <div style={{ padding: "10px 12px 8px", fontSize: 10.5, color: C.muted, letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
+            {menuButtonsJsx}
+          </aside>
+        )}
 
-        <div style={{ flex: 1, minWidth: 0 }}>
+        {isMobile && (
+          <button
+            onClick={() => setMobileMenuOpen(true)}
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "12px 14px", border: `1px solid ${C.line}`, borderRadius: 6, background: C.panel, color: C.ink, fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}
+          >
+            <span>{activeMenuItem?.star ? "★ " : ""}{activeMenuItem?.label || "메뉴"}</span>
+            <span style={{ color: C.muted, fontSize: 12, fontWeight: 500 }}>메뉴 ▾</span>
+          </button>
+        )}
+
+        {isMobile && mobileMenuOpen && (
+          <div
+            onClick={() => setMobileMenuOpen(false)}
+            style={{ position: "fixed", inset: 0, background: "rgba(20,20,20,0.45)", zIndex: 60, display: "flex" }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ width: "80vw", maxWidth: 300, height: "100%", background: C.panel, padding: 6, overflowY: "auto", boxShadow: "2px 0 14px rgba(0,0,0,0.18)" }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 8px 8px 12px" }}>
+                <div style={{ fontSize: 10.5, color: C.muted, letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
+                <button
+                  onClick={() => setMobileMenuOpen(false)}
+                  aria-label="메뉴 닫기"
+                  style={{ border: "none", background: "transparent", fontSize: 22, lineHeight: 1, color: C.muted, cursor: "pointer", padding: 4 }}
+                >
+                  ×
+                </button>
+              </div>
+              {menuButtonsJsx}
+            </div>
+          </div>
+        )}
+
+        <div style={{ flex: 1, minWidth: 0, width: "100%" }}>
         {activeTab === "quote" && isStaff && (
           <QuoteUploadPanel
             importState={importState}
