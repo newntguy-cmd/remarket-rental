@@ -6510,7 +6510,9 @@ function CustomerDataTab({ rentals, onRefresh }) {
     return (rentals || []).filter((r) => {
       if (!(r.customer || "").toLowerCase().includes(q)) return false;
       if (siteQ && !(r.site_name || "").toLowerCase().includes(siteQ)) return false;
-      if (itemQ && !(r.item || "").toLowerCase().includes(itemQ)) return false;
+      // "품목명" 검색창은 품목 이름뿐 아니라 규격 글자도 같이 뒤져서 찾는다. 규격에 적힌 문구(예: "접탁자,
+      // W1200*D450, 연체리"의 "접탁")만 알고 정확한 품목명은 기억 안 나는 경우에도 찾을 수 있어야 하기 때문.
+      if (itemQ && !(r.item || "").toLowerCase().includes(itemQ) && !(r.spec || "").toLowerCase().includes(itemQ)) return false;
       const d = (r.out_date || "").slice(0, 10);
       if (!d || d < fromDate || d > toDate) return false;
       return true;
@@ -7458,6 +7460,13 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
 // 품목 단위 한 표로 보여준다. 대장 안 만든 현장도 렌탈전표만 등록돼 있으면 빠짐없이 다 잡힌다. 화면에서
 // 잔량까지 계산해주진 않고, 엑셀로 통째로 내려받아서 직접 걸러 쓰는 용도다.
 function LedgerAutoSummaryTab({ rentals, onRefresh }) {
+  // 입력창에 타이핑하는 값(초안)과 실제로 검색에 적용된 값을 분리해서, "검색" 버튼을 눌러야(또는 Enter)
+  // 결과에 반영되게 한다(업체별데이터 화면과 같은 방식).
+  const [customerInput, setCustomerInput] = useState("");
+  const [voucherInput, setVoucherInput] = useState("");
+  const [fromDateInput, setFromDateInput] = useState("");
+  const [toDateInput, setToDateInput] = useState("");
+
   const [customerQuery, setCustomerQuery] = useState("");
   const [voucherQuery, setVoucherQuery] = useState("");
   const [fromDate, setFromDate] = useState("");
@@ -7496,11 +7505,24 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
   }, [sortedRows, customerQuery, voucherQuery, fromDate, toDate]);
 
   const filtersActive = customerQuery.trim() || voucherQuery.trim() || fromDate || toDate;
+  const runSearch = () => {
+    setCustomerQuery(customerInput);
+    setVoucherQuery(voucherInput);
+    setFromDate(fromDateInput);
+    setToDate(toDateInput);
+  };
   const resetFilters = () => {
+    setCustomerInput("");
+    setVoucherInput("");
+    setFromDateInput("");
+    setToDateInput("");
     setCustomerQuery("");
     setVoucherQuery("");
     setFromDate("");
     setToDate("");
+  };
+  const handleSearchKeyDown = (e) => {
+    if (e.key === "Enter") runSearch();
   };
 
   const totalQty = filteredRows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
@@ -7582,21 +7604,28 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
           <div style={{ width: 220 }}>
             <RecentValueInput
               storageKey="remarket_recent_customer"
-              value={customerQuery}
-              onChange={setCustomerQuery}
+              value={customerInput}
+              onChange={setCustomerInput}
+              onKeyDown={handleSearchKeyDown}
               extraOptions={customerSuggestions}
             />
           </div>
         </Field>
         <Field label="전표번호">
-          <input value={voucherQuery} onChange={(e) => setVoucherQuery(e.target.value)} style={{ ...inputStyle, width: 150 }} />
+          <input
+            value={voucherInput}
+            onChange={(e) => setVoucherInput(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            style={{ ...inputStyle, width: 150 }}
+          />
         </Field>
         <Field label="배송일자(시작)">
-          <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} style={{ ...inputStyle, width: 150 }} />
+          <input type="date" value={fromDateInput} onChange={(e) => setFromDateInput(e.target.value)} style={{ ...inputStyle, width: 150 }} />
         </Field>
         <Field label="배송일자(종료)">
-          <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} style={{ ...inputStyle, width: 150 }} />
+          <input type="date" value={toDateInput} onChange={(e) => setToDateInput(e.target.value)} style={{ ...inputStyle, width: 150 }} />
         </Field>
+        <button onClick={runSearch} style={{ ...primaryBtnStyle2, marginBottom: 1 }}>검색</button>
         {filtersActive && (
           <button onClick={resetFilters} style={{ ...ghostBtnStyle, marginBottom: 1 }}>초기화</button>
         )}
