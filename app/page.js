@@ -1591,7 +1591,7 @@ function LoginScreen() {
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: sans, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div style={{ width: 380, maxWidth: "100%" }}>
         <div style={{ marginBottom: 32 }}>
-          <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>리마켓 영업관리 시스템</div>
+          <div style={{ fontFamily: serif, fontSize: 31, fontWeight: 800, letterSpacing: "-0.02em", color: C.ink }}>리마켓 영업관리 시스템</div>
           <div style={{ fontSize: 13.5, color: C.inkSoft, marginTop: 6, lineHeight: 1.5 }}>
             출고부터 회수까지, 렌탈·구매 현황을 한 곳에서 확인합니다.
           </div>
@@ -1944,7 +1944,7 @@ function Dashboard({ profile, onLogout }) {
                 ☰
               </button>
             )}
-            <div style={{ fontFamily: serif, fontSize: isMobile ? 16.5 : 20, letterSpacing: 0.2, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <div style={{ fontFamily: serif, fontSize: isMobile ? 17.5 : 21.5, fontWeight: 800, letterSpacing: "-0.02em", color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               리마켓 영업관리 시스템
             </div>
           </div>
