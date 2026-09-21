@@ -628,6 +628,11 @@ function parseQuoteRows(rows) {
         if (split.siteName) siteName = split.siteName;
       }
 
+      // "수신" 칸에 거래처명만 적고 현장명은 "현장명 : ..."처럼 별도 칸에 딱 밝혀 적는 양식도 있다.
+      // 이렇게 명시적으로 라벨이 붙은 값은 "수신" 칸에서 하이픈으로 추측해 떼어낸 값보다 확실하므로 항상 우선한다.
+      m = cell.match(/현장명\s*[:：]\s*([^\n]+)/);
+      if (m) siteName = m[1].trim();
+
       m = cell.match(/배송지\s*[:：]\s*([^\n]+)/);
       if (m) site = m[1].trim();
 
@@ -959,6 +964,10 @@ async function parseQuotePdf(file) {
         customer = split.customer;
         if (split.siteName) siteName = split.siteName;
       }
+
+      // "수신" 칸과 별도로 "현장명 : ..."처럼 명시적으로 적힌 양식은 그 값을 그대로 우선 사용한다.
+      m = cell.match(/현장명\s*[:：]\s*([^\n]+)/);
+      if (m) siteName = m[1].trim();
 
       m = cell.match(/배송지\s*[:：]\s*([^\n]+)/);
       if (m) site = m[1].trim();
@@ -3237,15 +3246,12 @@ function extractPastedCustomerInfo(text) {
       const raw = cellText(cell);
       let m = raw.match(/수\s*신\s*[:：]\s*([^\n]+)/);
       if (m) {
-        const v = m[1].trim();
-        if (v.includes(" - ")) {
-          const [c, s] = v.split(" - ");
-          customer = c.trim();
-          siteName = s.trim();
-        } else {
-          customer = v;
-        }
+        const split = splitCustomerAndSite(m[1]);
+        customer = split.customer;
+        if (split.siteName) siteName = split.siteName;
       }
+      m = raw.match(/현장명\s*[:：]\s*([^\n]+)/);
+      if (m) siteName = m[1].trim();
       m = raw.match(/담당자\s*[:：]\s*([^\/\n]+)/);
       if (m) manager = m[1].trim();
     }
@@ -4505,6 +4511,38 @@ const importPreviewCols = ["품목", "규격", "수량", "단가", "금액", "�
 const importPreviewInitialWidths = [170, 190, 55, 100, 100, 95, 180];
 
 function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOverrides, onTonOverrideSaved }) {
+  // 견적서 양식마다 소계·안내문구 같은 줄이 품목으로 잘못 딸려 들어오는 경우가 있어, 모든 양식을
+  // 완벽하게 자동으로 걸러내려 하기보다 체크박스로 필요없는 줄을 직접 골라 지울 수 있게 한다.
+  const [selected, setSelected] = useState(() => new Set());
+  // 줄을 지우거나 하면 인덱스가 바뀌므로, 남아있는 품목 수보다 큰(유효하지 않은) 선택은 안전하게 정리한다.
+  useEffect(() => {
+    setSelected((prev) => {
+      let changed = false;
+      const next = new Set();
+      prev.forEach((i) => {
+        if (i < state.items.length) next.add(i);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [state.items.length]);
+  const toggleSelected = (idx) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
+  const allSelected = state.items.length > 0 && selected.size === state.items.length;
+  const toggleSelectAll = () => setSelected(allSelected ? new Set() : new Set(state.items.map((_, i) => i)));
+  const deleteSelected = () => {
+    if (selected.size === 0) return;
+    const items = state.items.filter((_, i) => !selected.has(i));
+    setState({ ...state, items });
+    setSelected(new Set());
+  };
+
   const updateItem = (idx, patch) => {
     const items = [...state.items];
     items[idx] = { ...items[idx], ...patch };
@@ -4559,23 +4597,51 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOve
   return (
     <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>품목 내역</div>
-      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>
         총 {state.items.length}개 품목이 인식됐어요. 등록 전에 내용을 확인·수정해주세요. (칸 경계를 드래그하면 너비를 늘이고 줄일 수 있어요)
         톤수는 기준표에서 자동으로 채워져요. 노란 칸은 비슷한 품목조차 없어 직접 입력이 필요한 경우인데, 입력 후 "저장"을 누르면 다음부터는 이 품목도 자동으로 채워져요.
-        DC·설치비·배송비 등 요금성 품목은 톤수 계산에서 자동으로 제외돼요.
+        DC·설치비·배송비 등 요금성 품목은 톤수 계산에서 자동으로 제외돼요. 소계·안내문구처럼 품목이 아닌 줄이 잘못 섞여 들어왔으면
+        왼쪽 체크박스로 골라서 지워주세요.
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <button
+          type="button"
+          onClick={deleteSelected}
+          disabled={selected.size === 0}
+          style={{ ...ghostBtnStyle, opacity: selected.size === 0 ? 0.4 : 1, cursor: selected.size === 0 ? "not-allowed" : "pointer" }}
+        >
+          선택 삭제{selected.size > 0 ? ` (${selected.size}건)` : ""}
+        </button>
       </div>
 
       <div style={{ maxHeight: 360, overflow: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 8, padding: "8px 10px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.lineSoft}`, position: "sticky", top: 0, background: C.panel, minWidth: "max-content" }}>
-          {importPreviewCols.map((label, i) => (
-            <div key={label} style={{ position: "relative" }}>
-              {label}
-              {i < importPreviewCols.length - 1 && <ColResizeHandle onMouseDown={startResize(i)} />}
-            </div>
-          ))}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderBottom: `1px solid ${C.lineSoft}`, position: "sticky", top: 0, background: C.panel, minWidth: "max-content", zIndex: 1 }}>
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={toggleSelectAll}
+            title="전체 선택/해제"
+            style={{ flex: "0 0 auto", width: 15, height: 15, cursor: "pointer" }}
+          />
+          <div style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 8, fontSize: 11.5, color: C.muted, flex: 1 }}>
+            {importPreviewCols.map((label, i) => (
+              <div key={label} style={{ position: "relative" }}>
+                {label}
+                {i < importPreviewCols.length - 1 && <ColResizeHandle onMouseDown={startResize(i)} />}
+              </div>
+            ))}
+          </div>
         </div>
         {state.items.map((it, idx) => (
-          <div key={idx} style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content" }}>
+          <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content", background: selected.has(idx) ? "#FDECEC" : "transparent" }}>
+            <input
+              type="checkbox"
+              checked={selected.has(idx)}
+              onChange={() => toggleSelected(idx)}
+              style={{ flex: "0 0 auto", width: 15, height: 15, cursor: "pointer" }}
+            />
+            <div style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 8, fontSize: 12.5, alignItems: "center", flex: 1 }}>
             <input style={smallInputStyle} value={it.item || ""} onChange={(e) => updateItem(idx, { item: e.target.value })} />
             <input style={smallInputStyle} value={it.spec || ""} onChange={(e) => updateItem(idx, { spec: e.target.value })} />
             <input type="number" style={smallInputStyle} value={it.qty ?? ""} onChange={(e) => updateItem(idx, { qty: Number(e.target.value) })} />
@@ -4608,6 +4674,7 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOve
               </div>
             )}
             <input style={smallInputStyle} value={it.note || ""} onChange={(e) => updateItem(idx, { note: e.target.value })} />
+            </div>
           </div>
         ))}
       </div>
