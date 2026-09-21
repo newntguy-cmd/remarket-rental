@@ -6106,6 +6106,10 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
   const [dealType, setDealType] = useState(""); // "" | "rental" | "purchase" — 버튼이라 클릭 즉시 적용
   const [applied, setApplied] = useState(defaultFilters);
   const [hasSearched, setHasSearched] = useState(false); // 검색을 눌러야 결과가 나오게(false면 목록을 아예 안 보여줌)
+  // 목록에서 체크박스로 골라 한번에 삭제하는 기능. 칸 너비도 렌탈내역 등 다른 표처럼 드래그로 조절할 수 있게 한다.
+  const [checkedKeys, setCheckedKeys] = useState(() => new Set());
+  const [deletingSelected, setDeletingSelected] = useState(false);
+  const [colWidths, startResize] = useResizableColumns([120, 130, 90, 60, 100, 100, 70, 120, 100, 120]);
 
   // 실제 등록된 전표들에 있는 업체명 전체 목록(중복 제거) — 이름 중간 글자만 쳐도 자동완성 후보로 바로 뜨게 한다.
   const customerOptions = useMemo(() => {
@@ -6139,6 +6143,24 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
     setDealType("");
     setApplied(defaultFilters);
     setHasSearched(false);
+    setCheckedKeys(new Set());
+  }
+
+  async function handleDeleteSelected() {
+    const chosen = groups.filter((g) => checkedKeys.has(g.key));
+    if (chosen.length === 0) return;
+    const totalRows = chosen.reduce((s, g) => s + g.rows.length, 0);
+    if (!confirm(`선택한 매출 데이터 ${chosen.length}건(품목 ${totalRows}개)을 삭제할까요? 되돌릴 수 없어요.`)) return;
+    setDeletingSelected(true);
+    const allIds = chosen.flatMap((g) => g.rows.map((r) => r.id));
+    const { error } = await supabase.from("rentals").delete().in("id", allIds);
+    setDeletingSelected(false);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setCheckedKeys(new Set());
+    onRefresh && onRefresh();
   }
 
   function setQuickRange(kind) {
@@ -6216,6 +6238,34 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
     return Array.from(map.values()).sort((a, b) => b.amount - a.amount);
   }, [groups]);
 
+  const visibleKeys = groups.map((g) => g.key);
+  const allChecked = visibleKeys.length > 0 && visibleKeys.every((k) => checkedKeys.has(k));
+  const someChecked = visibleKeys.some((k) => checkedKeys.has(k));
+  const selectAllRef = useRef(null);
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someChecked && !allChecked;
+  }, [someChecked, allChecked]);
+
+  const toggleChecked = (key) => {
+    setCheckedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleCheckedAll = () => {
+    setCheckedKeys((prev) => {
+      const next = new Set(prev);
+      if (allChecked) visibleKeys.forEach((k) => next.delete(k));
+      else visibleKeys.forEach((k) => next.add(k));
+      return next;
+    });
+  };
+
+  const listGridTemplate = "32px " + colWidths.map((w) => `${w}px`).join(" ");
+
   const selectedGroup = selectedVoucherKey ? groups.find((g) => g.key === selectedVoucherKey) : null;
   if (selectedGroup) {
     return (
@@ -6247,7 +6297,6 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
               value={managerInput}
               onChange={setManagerInput}
               onKeyDown={handleSearchKeyDown}
-              placeholder="예: 김영업"
             />
           </Field>
           <Field label="거래처">
@@ -6256,7 +6305,6 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
               value={customerInput}
               onChange={setCustomerInput}
               onKeyDown={handleSearchKeyDown}
-              placeholder="예: 엔알비"
               extraOptions={customerOptions}
             />
           </Field>
@@ -6336,18 +6384,35 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
             </div>
           )}
 
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11.5, color: C.muted }}>칸 경계를 드래그하면 너비를 늘이고 줄일 수 있어요.</span>
+            {checkedKeys.size > 0 && (
+              <>
+                <span style={{ fontSize: 12.5, color: C.inkSoft }}>{checkedKeys.size}건 선택됨</span>
+                <button
+                  onClick={handleDeleteSelected}
+                  disabled={deletingSelected}
+                  style={{ ...miniBtnStyle, borderColor: C.brick, color: C.brick }}
+                >
+                  {deletingSelected ? "삭제 중…" : "선택 삭제"}
+                </button>
+              </>
+            )}
+          </div>
+
           <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
-            <div style={{ display: "grid", gridTemplateColumns: salesListGridWithDue, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 980 }}>
-              <div>전표번호</div>
-              <div>거래처</div>
-              <div>담당자</div>
-              <div>구분</div>
-              <div>배송일자</div>
-              <div>렌탈종료일자</div>
-              <div>품목수</div>
-              <div>공급가액</div>
-              <div>부가세</div>
-              <div>합계(VAT포함)</div>
+            <div style={{ display: "grid", gridTemplateColumns: listGridTemplate, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: "max-content" }}>
+              <div>
+                <input ref={selectAllRef} type="checkbox" checked={allChecked} onChange={toggleCheckedAll} />
+              </div>
+              {[
+                "전표번호", "거래처", "담당자", "구분", "배송일자", "렌탈종료일자", "품목수", "공급가액", "부가세", "합계(VAT포함)",
+              ].map((label, i) => (
+                <div key={label} style={{ position: "relative" }}>
+                  {label}
+                  <ColResizeHandle onMouseDown={startResize(i)} />
+                </div>
+              ))}
             </div>
 
             {groups.map((g) => {
@@ -6355,8 +6420,11 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
               return (
                 <div
                   key={g.key}
-                  style={{ display: "grid", gridTemplateColumns: salesListGridWithDue, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 980 }}
+                  style={{ display: "grid", gridTemplateColumns: listGridTemplate, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content" }}
                 >
+                  <div>
+                    <input type="checkbox" checked={checkedKeys.has(g.key)} onChange={() => toggleChecked(g.key)} />
+                  </div>
                   <button
                     onClick={() => setSelectedVoucherKey(g.key)}
                     style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
