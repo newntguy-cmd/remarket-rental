@@ -1742,8 +1742,8 @@ function Dashboard({ profile, onLogout }) {
     ...(isStaff ? [{ key: "customerData", label: "업체별데이터" }] : []),
     ...(isStaff ? [{ key: "asboard", label: "A/S관리대장" }] : []),
     ...(isStaff ? [{ key: "collectionboard", label: "렌탈회수관리" }] : []),
-    ...(isStaff ? [{ key: "ledger", label: "현장별 렌탈잔량(수동등록)", star: true }] : []),
     ...(isStaff ? [{ key: "ledgerAuto", label: "현장별 렌탈잔량(자동등록)", star: true }] : []),
+    ...(isStaff ? [{ key: "ledger", label: "현장별 렌탈잔량(심화관리)", star: true }] : []),
   ];
 
   return (
@@ -6970,12 +6970,12 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
 
   return (
     <div>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>현장별 렌탈잔량(수동등록)</div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>현장별 렌탈잔량(심화관리)</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         업체(현장)별로 대장을 만들어두면, 전표가 새로 생길 때마다 계속 추가해서 출고·회수·미회수 수량을 관리할 수 있어요.
         아직 회수 안 된 렌탈의 렌탈종료일이 30일 이내로 다가오면 업체명 옆에 배지로 표시되고, 그런 대장이 목록 위쪽으로 올라와요.
-        업체에 보여줄 정식 출고·회수 내역서가 필요할 때 이 화면에서 대장을 만들어 관리해주세요. 지금까지 만든 대장을 한 번에
-        모아서 미회수 잔량만 훑어보고 싶으면 옆 메뉴의 "현장별 렌탈잔량(자동등록)"을 이용하세요.
+        업체에 보여줄 정식 출고·회수 내역서가 필요할 때 이 화면에서 대장을 만들어 관리해주세요. 그냥 전체 잔량만 훑어보고 싶으면
+        옆 메뉴의 "현장별 렌탈잔량(자동등록)"을 이용하세요.
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
@@ -7112,7 +7112,7 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
 }
 
 // ---------- 현장별 렌탈잔량(자동등록) ----------
-// 위 LedgerTab(수동등록)처럼 대장을 따로 만들 필요 없이, 등록된 렌탈전표(구매 제외)를 자동으로 전부 모아
+// 위 LedgerTab(심화관리)처럼 대장을 따로 만들 필요 없이, 등록된 렌탈전표(구매 제외)를 자동으로 전부 모아
 // 품목 단위 한 표로 보여준다. 대장 안 만든 현장도 렌탈전표만 등록돼 있으면 빠짐없이 다 잡힌다. 화면에서
 // 잔량까지 계산해주진 않고, 엑셀로 통째로 내려받아서 직접 걸러 쓰는 용도다.
 const autoLedgerGrid = "110px 130px 130px 90px 100px 100px 1fr 140px 70px 110px";
