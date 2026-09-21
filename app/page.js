@@ -525,6 +525,10 @@ function parseRentalPeriodDateRange(cell) {
   const re = new RegExp(DATE + "\\s*[~∼\\-]\\s*" + DATE);
   const m = cell.match(re);
   if (!m) return null;
+  // "(2025-00-00~2025-00-00)"처럼 실제 날짜를 아직 안 채운 견적서 양식의 틀(placeholder)이 그대로 남아있는
+  // 경우가 있어, 월/일이 달력상 있을 수 없는 값(00월, 00일, 13월 이상 등)이면 날짜를 못 찾은 것으로 처리한다.
+  const mo1 = Number(m[2]), da1 = Number(m[3]), mo2 = Number(m[5]), da2 = Number(m[6]);
+  if (mo1 < 1 || mo1 > 12 || da1 < 1 || da1 > 31 || mo2 < 1 || mo2 > 12 || da2 < 1 || da2 > 31) return null;
   const pad = (n) => String(n).padStart(2, "0");
   return {
     start: `${m[1]}-${pad(m[2])}-${pad(m[3])}`,
@@ -584,6 +588,10 @@ function parseQuoteRows(rows) {
     // 셀을 한 줄로 합치면 옆 칸(같은 행의 다른 라벨) 텍스트가 붙어버릴 수 있어
     // 라벨:값 형태의 정보는 셀 단위로 각각 따로 검사한다.
     const cells = (row || []).map(cellText).filter((t) => t.trim());
+    // "렌탈기간" 라벨과 실제 기간 값(예: "납품일로부터 21개월까지")이 같은 칸이 아니라
+    // 같은 행의 다른 칸에 나뉘어 있는 양식도 있어, 셀 단위 검사 외에 "이 행 어딘가에 렌탈기간 라벨이
+    // 있는지"도 같이 봐서 그런 경우까지 렌탈개월수를 놓치지 않게 한다.
+    const rowHasRentalLabel = cells.some((c) => c.replace(/\s/g, "").includes("렌탈기간") || c.includes("렌탈"));
     for (const cell of cells) {
       if (!voucherNo) {
         const vn = extractQuoteVoucherNoFromText(cell);
@@ -644,15 +652,16 @@ function parseQuoteRows(rows) {
 
       // "렌탈 10개월"뿐 아니라 "10개월 렌탈기준"처럼 순서가 반대인 표기도 인식한다.
       m = cell.match(/(\d+)\s*개월/);
-      if (m && cell.includes("렌탈")) {
+      if (m && (cell.includes("렌탈") || rowHasRentalLabel)) {
         transactionType = "rental";
         periodMonths = Number(m[1]);
         periodDays = Number(m[1]) * 30;
       }
       // "렌탈기간" 라벨과 실제 날짜가 같은 칸에 있든("렌탈기간: 2026.09.20~2027.12.19"),
       // 라벨은 옆 칸에 따로 있고 값 칸에 "렌탈 15개월 기준 (2026-09-15~2027-12-14)"처럼 적혀 있든,
-      // "렌탈"이 들어간 칸에서 일 단위 시작~종료 날짜를 찾으면 그걸 렌탈개시일의 최우선 근거로 쓴다.
-      if (!rentalPeriodRange && cell.includes("렌탈")) {
+      // "렌탈"이 들어간 칸(또는 같은 행에 "렌탈기간" 라벨이 있는 칸)에서 일 단위 시작~종료 날짜를
+      // 찾으면 그걸 렌탈개시일의 최우선 근거로 쓴다.
+      if (!rentalPeriodRange && (cell.includes("렌탈") || rowHasRentalLabel)) {
         rentalPeriodRange = parseRentalPeriodDateRange(cell);
       }
       // "(YYYY-MM~YYYY-MM)" 요약 표기는 월 단위라 정확도가 떨어지므로,
@@ -877,6 +886,9 @@ async function parseQuotePdf(file) {
   const firstPageRows = pdfGroupRows(allPagesItems[0] || []);
   for (const row of firstPageRows) {
     const segs = pdfSplitRowSegments(row.items);
+    // "렌탈기간" 라벨과 실제 기간 값이 같은 칸이 아니라 같은 줄의 다른 칸에 나뉘어 있는 양식도 있어,
+    // 셀 단위 검사 외에 "이 줄 어딘가에 렌탈기간 라벨이 있는지"도 같이 봐서 렌탈개월수를 놓치지 않게 한다.
+    const rowHasRentalLabel = segs.some((c) => c.replace(/\s/g, "").includes("렌탈기간") || c.includes("렌탈"));
     for (const cell of segs) {
       if (!voucherNo) {
         const vn = extractQuoteVoucherNoFromText(cell);
@@ -931,15 +943,16 @@ async function parseQuotePdf(file) {
 
       // "렌탈 10개월"뿐 아니라 "10개월 렌탈기준"처럼 순서가 반대인 표기도 인식한다.
       m = cell.match(/(\d+)\s*개월/);
-      if (m && cell.includes("렌탈")) {
+      if (m && (cell.includes("렌탈") || rowHasRentalLabel)) {
         transactionType = "rental";
         periodMonths = Number(m[1]);
         periodDays = Number(m[1]) * 30;
       }
       // "렌탈기간" 라벨과 실제 날짜가 같은 칸에 있든("렌탈기간: 2026.09.20~2027.12.19"),
       // 라벨은 옆 칸에 따로 있고 값 칸에 "렌탈 15개월 기준 (2026-09-15~2027-12-14)"처럼 적혀 있든,
-      // "렌탈"이 들어간 칸에서 일 단위 시작~종료 날짜를 찾으면 그걸 렌탈개시일의 최우선 근거로 쓴다.
-      if (!rentalPeriodRange && cell.includes("렌탈")) {
+      // "렌탈"이 들어간 칸(또는 같은 줄에 "렌탈기간" 라벨이 있는 칸)에서 일 단위 시작~종료 날짜를
+      // 찾으면 그걸 렌탈개시일의 최우선 근거로 쓴다.
+      if (!rentalPeriodRange && (cell.includes("렌탈") || rowHasRentalLabel)) {
         rentalPeriodRange = parseRentalPeriodDateRange(cell);
       }
       // 구분자가 "."인 표기("(YYYY.MM~YYYY.MM)")도 인식한다. "렌탈 N개월" 값도, 일 단위 날짜 범위도 못 찾았을 때만 보조적으로 사용.
