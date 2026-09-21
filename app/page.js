@@ -5771,6 +5771,11 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
     } else if (kind === "year") {
       nextFrom = `${now.getFullYear()}-01-01`;
       nextTo = todayStr;
+    } else if (kind === "all") {
+      // 기본값(이번달)에 데이터가 없으면 "혹시 검색이 안 되나?" 헷갈리기 쉬워서, 날짜 제한 없이 전체 기간을
+      // 한번에 볼 수 있는 버튼을 따로 둔다.
+      nextFrom = "";
+      nextTo = "";
     }
     setFromDateInput(nextFrom);
     setToDateInput(nextTo);
@@ -5869,7 +5874,8 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
     <div>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>판매현황</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
-        담당자·거래처·기간으로 매출 데이터를 조회할 수 있어요. 배송일자(렌탈개시일) 기준이에요.
+        담당자·거래처·기간으로 매출 데이터를 조회할 수 있어요. 배송일자(렌탈개시일) 기준이에요. 구분을 "전체"로 두면 렌탈·구매 모두 나와요.
+        기간을 처음 열면 이번달 기준으로 잡혀 있으니, 데이터가 안 보이면 아래 "전체기간" 버튼으로 넓혀서 찾아보세요.
       </div>
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
@@ -5926,6 +5932,7 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
             <button onClick={() => setQuickRange("month")} style={miniBtnStyle}>금월(~오늘)</button>
             <button onClick={() => setQuickRange("lastMonth")} style={miniBtnStyle}>전월</button>
             <button onClick={() => setQuickRange("year")} style={miniBtnStyle}>금년(~오늘)</button>
+            <button onClick={() => setQuickRange("all")} style={miniBtnStyle}>전체기간</button>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
