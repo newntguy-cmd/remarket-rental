@@ -52,6 +52,13 @@ function addMonthsMinusDay(dateStr, months) {
 function daysBetween(a, b) {
   return Math.round((new Date(b) - new Date(a)) / 86400000);
 }
+// 구분(렌탈/구매)이 바뀔 때 출하창고를 자동으로 맞춰준다. 사람이 직접 다른 값으로 고쳐놓은 경우(자동값 00007/00008이
+// 아닌 값)는 덮어쓰지 않고 그대로 둔다.
+function autoWarehouseFor(transactionType, current) {
+  const auto = transactionType === "rental" ? "00008" : transactionType === "purchase" ? "00007" : "";
+  if (!current || current === "00007" || current === "00008") return auto;
+  return current;
+}
 // 회수일자·거래일자 같은 칸은 사람이 직접 "2026-09-30(수)"처럼 요일을 붙여 적을 수 있게 자유 텍스트로 열어뒀는데,
 // 이 값을 그대로 DB의 날짜(date) 칼럼에 넣으면 "invalid input syntax for type date" 오류가 난다.
 // 문자열 안에서 YYYY-MM-DD 형태만 뽑아 쓰고, 그런 형태가 없으면 null로(오류 대신 그냥 날짜 없이 저장되게) 처리한다.
@@ -750,7 +757,7 @@ function parseQuoteRows(rows) {
     recipient,
     siteName, // "수신" 칸에 "거래처 - 현장명" 식으로 적혀 있으면 자동 인식, 없으면 공란
     // ECOUNT 스타일 입력 화면용, 데이터에서 유추할 수 없어 고정값/공란으로 두는 필드
-    warehouse: transactionType === "rental" ? "00008" : "",
+    warehouse: transactionType === "rental" ? "00008" : transactionType === "purchase" ? "00007" : "",
     dealType: "소매매출",
     currency: "내자",
     project: "",
@@ -1088,7 +1095,7 @@ async function parseQuotePdf(file) {
     phone,
     recipient,
     siteName,
-    warehouse: transactionType === "rental" ? "00008" : "",
+    warehouse: transactionType === "rental" ? "00008" : transactionType === "purchase" ? "00007" : "",
     dealType: "소매매출",
     currency: "내자",
     project: "",
@@ -1488,7 +1495,7 @@ function LoginScreen() {
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: sans, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div style={{ width: 380, maxWidth: "100%" }}>
         <div style={{ marginBottom: 32 }}>
-          <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>리마켓 렌탈장부</div>
+          <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>리마켓 영업관리 시스템</div>
           <div style={{ fontSize: 13.5, color: C.inkSoft, marginTop: 6, lineHeight: 1.5 }}>
             출고부터 회수까지, 렌탈·구매 현황을 한 곳에서 확인합니다.
           </div>
@@ -1550,6 +1557,8 @@ function Dashboard({ profile, onLogout }) {
   // 렌탈내역도 마찬가지로, 메뉴의 "렌탈내역"을 다시 눌렀을 때(이미 그 탭이어도) 상세화면이 아니라
   // 항상 목록 화면으로 되돌아가도록 이 값을 바꿔서 강제로 새로 마운트시킨다.
   const [rentalsResetKey, setRentalsResetKey] = useState(0);
+  // 구매내역(렌탈내역에서 구분된 별도 메뉴)도 같은 이유로 리셋 키를 따로 둔다.
+  const [purchasesResetKey, setPurchasesResetKey] = useState(0);
   // 판매현황도 전표번호를 눌러 상세화면으로 들어갈 수 있게 됐으니, 메뉴를 다시 눌렀을 때 항상 검색화면으로 되돌아가게 한다.
   const [salesResetKey, setSalesResetKey] = useState(0);
   // 출고/회수 내역서도 대장 상세화면에 들어갈 수 있으니, 메뉴를 다시 눌렀을 때 항상 대장 목록으로 되돌아가게 한다.
@@ -1725,6 +1734,7 @@ function Dashboard({ profile, onLogout }) {
     ...(isStaff ? [{ key: "quickcalc", label: "품목별데이터/톤수/배송비" }] : []),
     ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
     ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
+    ...(isStaff ? [{ key: "purchases", label: "구매내역" }] : []),
     ...(isStaff ? [{ key: "shares", label: "지분관리" }] : []),
     ...(isStaff ? [{ key: "sales", label: "판매현황" }] : []),
     ...(isStaff ? [{ key: "customerData", label: "업체별데이터" }] : []),
@@ -1744,7 +1754,7 @@ function Dashboard({ profile, onLogout }) {
       `}</style>
       <div style={{ borderBottom: `1px solid ${C.line}`, background: C.panel }}>
         <div style={{ maxWidth: 1600, margin: "0 auto", padding: "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ fontFamily: serif, fontSize: 20, letterSpacing: 0.2, color: C.ink }}>리마켓 렌탈장부</div>
+          <div style={{ fontFamily: serif, fontSize: 20, letterSpacing: 0.2, color: C.ink }}>리마켓 영업관리 시스템</div>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             {isStaff && (
               <div style={{ textAlign: "right" }}>
@@ -1792,6 +1802,7 @@ function Dashboard({ profile, onLogout }) {
                   setActiveTab(m.key);
                   if (m.key === "shares") setSharesResetKey((k) => k + 1); // 지분관리는 눌릴 때마다 목록 화면으로 리셋
                   if (m.key === "rentals") setRentalsResetKey((k) => k + 1); // 렌탈내역도 눌릴 때마다 목록 화면으로 리셋
+                  if (m.key === "purchases") setPurchasesResetKey((k) => k + 1); // 구매내역도 눌릴 때마다 목록 화면으로 리셋
                   if (m.key === "sales") setSalesResetKey((k) => k + 1); // 판매현황도 눌릴 때마다 검색 화면으로 리셋
                   if (m.key === "ledger") setLedgerResetKey((k) => k + 1); // 출고/회수 내역서도 눌릴 때마다 대장 목록으로 리셋
                   if (m.key === "asboard") setAsboardResetKey((k) => k + 1); // A/S관리대장도 눌릴 때마다 목록 화면으로 리셋
@@ -1844,7 +1855,11 @@ function Dashboard({ profile, onLogout }) {
         )}
 
         {activeTab === "rentals" && isStaff && (
-          <RentalListTab key={rentalsResetKey} rentals={rentals} onRefresh={fetchRentals} isAdmin={isAdmin} managerName={managerName} tonOverrides={tonOverrides} onTonOverrideSaved={fetchTonOverrides} />
+          <RentalListTab key={rentalsResetKey} rentals={rentals} onRefresh={fetchRentals} isAdmin={isAdmin} managerName={managerName} tonOverrides={tonOverrides} onTonOverrideSaved={fetchTonOverrides} dealType="rental" />
+        )}
+
+        {activeTab === "purchases" && isStaff && (
+          <RentalListTab key={purchasesResetKey} rentals={rentals} onRefresh={fetchRentals} isAdmin={isAdmin} managerName={managerName} tonOverrides={tonOverrides} onTonOverrideSaved={fetchTonOverrides} dealType="purchase" />
         )}
 
         {activeTab === "shares" && isStaff && (
@@ -2231,7 +2246,14 @@ function QuoteHeaderForm({ state, update, isAdmin = true }) {
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 16 }}>견적서입력(수정)</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         <Field label="구분">
-          <select style={inputStyle} value={state.transactionType} onChange={(e) => update({ transactionType: e.target.value })}>
+          <select
+            style={inputStyle}
+            value={state.transactionType}
+            onChange={(e) => {
+              const transactionType = e.target.value;
+              update({ transactionType, warehouse: autoWarehouseFor(transactionType, state.warehouse) });
+            }}
+          >
             <option value="rental">렌탈</option>
             <option value="purchase">구매</option>
           </select>
@@ -4424,7 +4446,10 @@ const emptyAdvSearch = {
   status: "",
 };
 
-function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", tonOverrides, onTonOverrideSaved }) {
+function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", tonOverrides, onTonOverrideSaved, dealType }) {
+  // dealType이 있으면("rental" 또는 "purchase") 그 구분에 해당하는 전표만 보여준다(렌탈내역/구매내역 메뉴 분리용).
+  // 지정하지 않으면(undefined) 예전처럼 전체를 다 보여준다.
+  const label = dealType === "purchase" ? "구매내역" : "렌탈내역";
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState(null);
   const [checkedKeys, setCheckedKeys] = useState(new Set());
@@ -4445,10 +4470,11 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
   };
 
   const groups = useMemo(() => {
-    const g = groupRentalsByVoucher(rentals);
+    let g = groupRentalsByVoucher(rentals);
+    if (dealType) g = g.filter((x) => (x.head.transaction_type || "rental") === dealType);
     g.sort((a, b) => (b.head.out_date || "").localeCompare(a.head.out_date || "") || (b.voucherNo || "").localeCompare(a.voucherNo || ""));
     return g;
-  }, [rentals]);
+  }, [rentals, dealType]);
 
   const advActive = Object.values(appliedAdv).some((v) => v);
 
@@ -4599,9 +4625,9 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
 
   return (
     <div>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>렌탈내역</div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>{label}</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
-        전표번호를 클릭하면 세부 내역을 확인·수정할 수 있어요. (견적서 업로드로 등록된 전표 기준)
+        전표번호를 클릭하면 세부 내역을 확인·수정할 수 있어요. (견적서 업로드로 등록된 전표 기준{dealType === "purchase" ? " · 구매 건만" : dealType === "rental" ? " · 렌탈 건만" : ""})
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
@@ -4625,13 +4651,15 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
             <Field label="배송일자(종료)">
               <input type="date" style={inputStyle} value={advSearch.toDate} onChange={(e) => setAdvSearch({ ...advSearch, toDate: e.target.value })} />
             </Field>
-            <Field label="구분">
-              <select style={inputStyle} value={advSearch.transactionType} onChange={(e) => setAdvSearch({ ...advSearch, transactionType: e.target.value })}>
-                <option value="">전체</option>
-                <option value="rental">렌탈</option>
-                <option value="purchase">구매</option>
-              </select>
-            </Field>
+            {!dealType && (
+              <Field label="구분">
+                <select style={inputStyle} value={advSearch.transactionType} onChange={(e) => setAdvSearch({ ...advSearch, transactionType: e.target.value })}>
+                  <option value="">전체</option>
+                  <option value="rental">렌탈</option>
+                  <option value="purchase">구매</option>
+                </select>
+              </Field>
+            )}
             <Field label="렌탈만료일(시작)">
               <input type="date" style={inputStyle} value={advSearch.dueFromDate} onChange={(e) => setAdvSearch({ ...advSearch, dueFromDate: e.target.value })} />
             </Field>
@@ -5084,7 +5112,14 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <Field label="구분">
-            <select style={inputStyle} value={header.transactionType} onChange={(e) => update({ transactionType: e.target.value })}>
+            <select
+              style={inputStyle}
+              value={header.transactionType}
+              onChange={(e) => {
+                const transactionType = e.target.value;
+                update({ transactionType, warehouse: autoWarehouseFor(transactionType, header.warehouse) });
+              }}
+            >
               <option value="rental">렌탈</option>
               <option value="purchase">구매</option>
             </select>
@@ -6257,7 +6292,7 @@ function CustomerDataTab({ rentals, onRefresh }) {
     setHiddenItemStatKeys(selectedItemVoucherKey, []);
   }
 
-  // 인쇄/PDF 저장 시 브라우저 상단에 뜨는 문서 제목("리마켓 렌탈장부")을 잠깐 "품목별 수량통계"로 바꿔서,
+  // 인쇄/PDF 저장 시 브라우저 상단에 뜨는 문서 제목("리마켓 영업관리 시스템")을 잠깐 "품목별 수량통계"로 바꿔서,
   // 인쇄 머리글과 "PDF로 저장" 시 기본 파일명이 모두 "품목별 수량통계"가 되게 한다. 인쇄가 끝나면 원래 제목으로 되돌린다.
   function handlePrintItemStats() {
     const prevTitle = document.title;
