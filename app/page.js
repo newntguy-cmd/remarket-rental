@@ -88,7 +88,14 @@ function groupRentalsByVoucher(rentals) {
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(r);
   }
-  return Array.from(map.entries()).map(([key, rows]) => {
+  return Array.from(map.entries()).map(([key, rowsRaw]) => {
+    // 같은 전표 안 품목은 견적서/등록 순서(line_no) 그대로 보이도록 정렬한다.
+    // line_no가 없는 옛 데이터는 id(등록된 순서) 기준으로 정렬해 최대한 원래 순서에 가깝게 보여준다.
+    const rows = [...rowsRaw].sort((a, b) => {
+      const la = a.line_no ?? a.id ?? 0;
+      const lb = b.line_no ?? b.id ?? 0;
+      return la - lb;
+    });
     const head = rows[0];
     const amount = rows.reduce((s, x) => s + (Number(x.amount) || 0), 0);
     return { key, voucherNo: head.voucher_no || "", rows, head, amount };
@@ -1665,7 +1672,9 @@ function Dashboard({ profile, onLogout }) {
       await supabase.from("customers").upsert(patch, { onConflict: "name" });
     }
 
-    const rows = importState.items.map((it) => ({
+    const rows = importState.items.map((it, idx) => ({
+      // 견적서에 나온 순서 그대로 화면에 보이도록 등록 순번을 저장해둔다.
+      line_no: idx,
       transaction_type: importState.transactionType,
       customer: importState.customer,
       site: it.site,
@@ -4821,7 +4830,8 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
     customer: group.head.customer || "",
     refContact: group.head.ref_contact || "",
     email: group.head.email || "",
-    warehouse: group.head.warehouse || "",
+    // 옛날에 등록되어 출하창고 값이 비어있는 전표는 구분(렌탈/구매)에 맞춰 자동으로 채워준다.
+    warehouse: group.head.warehouse || autoWarehouseFor(group.head.transaction_type || "rental", ""),
     dealType: group.head.deal_type || "",
     outDate: group.head.out_date || "",
     periodMonths: group.head.period_months || "",
@@ -4972,10 +4982,13 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
         setSaving(false);
         return;
       }
-      for (const it of items.filter((x) => x.id)) {
+      for (let idx = 0; idx < items.length; idx++) {
+        const it = items[idx];
+        if (!it.id) continue;
+        // 화면에 보이는 순서(items 배열 순서) 그대로 다음에도 표시되도록 순번을 같이 저장한다.
         await supabase
           .from("rentals")
-          .update({ item: it.item, spec: it.spec, qty: it.qty, unit_price: it.unit_price, amount: it.amount, note: it.note })
+          .update({ item: it.item, spec: it.spec, qty: it.qty, unit_price: it.unit_price, amount: it.amount, note: it.note, line_no: idx })
           .eq("id", it.id);
       }
     }
@@ -4984,6 +4997,7 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
     if (newItems.length > 0) {
       const rows = newItems.map((it) => ({
         ...headerPatch,
+        line_no: items.indexOf(it),
         item: it.item,
         spec: it.spec,
         qty: it.qty,
