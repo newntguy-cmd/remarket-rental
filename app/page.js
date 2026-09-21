@@ -59,6 +59,13 @@ function autoWarehouseFor(transactionType, current) {
   if (!current || current === "00007" || current === "00008") return auto;
   return current;
 }
+// 사업자등록번호는 "000-00-00000"(3-2-5자리) 형식으로 통일해서 보여준다. 숫자만 남기고 자동으로 하이픈을 붙여준다.
+function formatBizRegNo(v) {
+  const digits = (v || "").replace(/\D/g, "").slice(0, 10);
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 5) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
+  return `${digits.slice(0, 3)}-${digits.slice(3, 5)}-${digits.slice(5)}`;
+}
 // 회수일자·거래일자 같은 칸은 사람이 직접 "2026-09-30(수)"처럼 요일을 붙여 적을 수 있게 자유 텍스트로 열어뒀는데,
 // 이 값을 그대로 DB의 날짜(date) 칼럼에 넣으면 "invalid input syntax for type date" 오류가 난다.
 // 문자열 안에서 YYYY-MM-DD 형태만 뽑아 쓰고, 그런 형태가 없으면 null로(오류 대신 그냥 날짜 없이 저장되게) 처리한다.
@@ -481,6 +488,22 @@ function dedupeSorted(values) {
   return Array.from(seen.values()).sort((a, b) => a.localeCompare(b, "ko"));
 }
 
+// 견적서 "수신" 칸에 "거래처 - 현장명"처럼 거래처명과 현장명이 하이픈 하나로 같이 적혀 있는 경우가 많다.
+// 사람마다 "거래처 - 현장명"(하이픈 앞뒤 공백 있음)뿐 아니라 "거래처-현장명"(공백 없음)으로도 적기 때문에
+// 공백 유무와 상관없이 인식한다. 다만 "LG-CNS"처럼 회사명 자체에 하이픈이 들어간 경우까지 잘라버리면
+// 오히려 거래처명이 망가지므로, 하이픈 뒤쪽이 "누가 봐도 현장/프로젝트명처럼 보일 때"(공백이 있거나
+// 숫자가 섞여 있거나 어느 정도 길이가 있는 문구)만 현장명으로 떼어내고, 애매하면 원문을 그대로 거래처명에 둔다.
+function splitCustomerAndSite(raw) {
+  const text = (raw || "").trim();
+  const m = text.match(/^(.+?)\s*-\s*(.+)$/);
+  if (!m) return { customer: text, siteName: "" };
+  const left = m[1].trim();
+  const right = m[2].trim();
+  const looksLikeSite = /\s/.test(right) || /\d/.test(right) || right.length >= 4;
+  if (left && right && looksLikeSite) return { customer: left, siteName: right };
+  return { customer: text, siteName: "" };
+}
+
 // 표 머리글 행을 찾아 실제 열 위치(품목/규격/수량/단가/금액/비고)를 감지한다.
 // 견적서 양식마다 표가 시작되는 열이 다를 수 있어(B열부터 vs C열부터), 고정 인덱스 대신 헤더 텍스트로 찾는다.
 function detectColumns(rows) {
@@ -600,14 +623,9 @@ function parseQuoteRows(rows) {
 
       let m = cell.match(/수\s*신\s*[:：]\s*([^\n]+)/);
       if (m) {
-        const raw = m[1].trim();
-        if (raw.includes(" - ")) {
-          const [c, s] = raw.split(" - ");
-          customer = c.trim();
-          siteName = s.trim();
-        } else {
-          customer = raw;
-        }
+        const split = splitCustomerAndSite(m[1]);
+        customer = split.customer;
+        if (split.siteName) siteName = split.siteName;
       }
 
       m = cell.match(/배송지\s*[:：]\s*([^\n]+)/);
@@ -897,14 +915,9 @@ async function parseQuotePdf(file) {
 
       let m = cell.match(/수\s*신\s*[:：]\s*([^\n]+)/);
       if (m) {
-        const raw = m[1].trim();
-        if (raw.includes(" - ")) {
-          const [c, s] = raw.split(" - ");
-          customer = c.trim();
-          siteName = s.trim();
-        } else {
-          customer = raw;
-        }
+        const split = splitCustomerAndSite(m[1]);
+        customer = split.customer;
+        if (split.siteName) siteName = split.siteName;
       }
 
       m = cell.match(/배송지\s*[:：]\s*([^\n]+)/);
@@ -1676,15 +1689,6 @@ function Dashboard({ profile, onLogout }) {
     }
     setImporting(true);
 
-    // 거래처 담당자/연락처/메일이 파악됐으면 customers 테이블에도 반영 (기존 정보는 덮어쓰지 않고 채워진 값만 upsert)
-    if (importState.customer && (importState.refContact || importState.phone || importState.email)) {
-      const patch = { name: importState.customer };
-      if (importState.refContact) patch.contact_name = importState.refContact;
-      if (importState.phone) patch.phone = importState.phone;
-      if (importState.email) patch.email = importState.email;
-      await supabase.from("customers").upsert(patch, { onConflict: "name" });
-    }
-
     const rows = importState.items.map((it, idx) => ({
       // 견적서에 나온 순서 그대로 화면에 보이도록 등록 순번을 저장해둔다.
       line_no: idx,
@@ -1746,6 +1750,39 @@ function Dashboard({ profile, onLogout }) {
           .update({ source_file_path: path, source_file_name: sourceFile.name })
           .eq("voucher_no", importState.voucherNo);
       }
+    }
+
+    // 사업자등록증을 이번에 새로 올렸으면(견적서입력 화면에서 첨부) 같은 방식으로 Storage에 저장한다.
+    // (rentals 행이 등록된 뒤라야 업로드 권한 검사를 통과하므로 원본 견적서 파일과 같은 시점에 처리한다)
+    let bizCertPath = importState.bizCertPath || null;
+    const bizCertFile = importState._bizCertFile;
+    if (bizCertFile && importState.voucherNo) {
+      const safeVoucherNo = (importState.voucherNo || "").replace(/[^a-zA-Z0-9_-]/g, "") || "voucher";
+      const extMatch = bizCertFile.name.match(/\.[a-zA-Z0-9]+$/);
+      const ext = extMatch ? extMatch[0] : "";
+      const path = `quotes/${safeVoucherNo}/biz-cert-${Date.now()}${ext}`;
+      const { error: certUploadError } = await supabase.storage.from("quote-files").upload(path, bizCertFile, { upsert: false });
+      if (certUploadError) {
+        console.error("사업자등록증 업로드 실패:", certUploadError);
+        alert("데이터는 정상 등록됐지만, 사업자등록증 저장에는 실패했어요: " + certUploadError.message);
+      } else {
+        bizCertPath = path;
+      }
+    }
+
+    // 거래처 정보(담당자/연락처/메일/사업자등록번호/사업자등록증)를 customers 테이블에도 반영해둔다.
+    // 사업자등록번호가 있으면 그걸 기준으로 합쳐서(같은 번호=같은 거래처) 이름 표기가 달라도 하나로 통일되게 하고,
+    // 사업자등록번호가 없으면(옛 방식) 이름 기준으로 합친다.
+    if (importState.customer && (importState.refContact || importState.phone || importState.email || importState.bizRegNo || bizCertPath)) {
+      const patch = { name: importState.customer };
+      if (importState.refContact) patch.contact_name = importState.refContact;
+      if (importState.phone) patch.phone = importState.phone;
+      if (importState.email) patch.email = importState.email;
+      if (importState.bizRegNo) patch.business_reg_no = importState.bizRegNo;
+      if (bizCertPath) patch.biz_cert_path = bizCertPath;
+      const conflictKey = importState.bizRegNo ? "business_reg_no" : "name";
+      const { error: customerUpsertError } = await supabase.from("customers").upsert(patch, { onConflict: conflictKey });
+      if (customerUpsertError) console.error("거래처 정보 저장 실패:", customerUpsertError);
     }
 
     setImporting(false);
@@ -1873,6 +1910,7 @@ function Dashboard({ profile, onLogout }) {
             isAdmin={isAdmin}
             tonOverrides={tonOverrides}
             onTonOverrideSaved={fetchTonOverrides}
+            customers={customers}
           />
         )}
 
@@ -2269,7 +2307,98 @@ function CollectionUploadDropZone({ onFile, hasData }) {
   );
 }
 
-function QuoteHeaderForm({ state, update, isAdmin = true }) {
+// 사업자등록번호 입력칸 + 사업자등록증 업로드 칸. QuoteHeaderForm/RentalDetailPanel에서 공용으로 쓴다.
+// - 사업자등록증(이미지/PDF)은 파일 그대로 첨부해서 보관해둔다(자동 글자 인식은 비용이 들어 넣지 않음 — 상호명은 직접 입력).
+// - 사업자등록번호를 입력하면, 이미 우리 시스템에 등록된 같은 번호의 거래처가 있는 경우 그 거래처명으로 자동 통일한다.
+//   (예: 예전에 "금강주택"으로 등록했어도, 이번에 사업자등록번호가 같으면 자동으로 "(주)금강주택"으로 맞춰준다 — 반대로도 동일)
+function BizRegFields({ state, update, customers }) {
+  const [downloading, setDownloading] = useState(false);
+
+  const regNoDigits = (state.bizRegNo || "").replace(/\D/g, "");
+  const matched = useMemo(() => {
+    if (regNoDigits.length !== 10) return null;
+    return (customers || []).find((c) => (c.business_reg_no || "").replace(/\D/g, "") === regNoDigits) || null;
+  }, [customers, regNoDigits]);
+
+  const handleRegNoChange = (raw) => {
+    const formatted = formatBizRegNo(raw);
+    const patch = { bizRegNo: formatted };
+    const digits = raw.replace(/\D/g, "").slice(0, 10);
+    if (digits.length === 10) {
+      const hit = (customers || []).find((c) => (c.business_reg_no || "").replace(/\D/g, "") === digits);
+      if (hit) {
+        patch.customer = hit.name;
+        if (hit.biz_cert_path) patch.bizCertPath = hit.biz_cert_path;
+      }
+    }
+    update(patch);
+  };
+
+  // 자동 글자 인식 없이, 첨부한 파일만 그대로 등록 확정 시 Storage에 올려서 보관한다(견적서 원본 파일과 같은 방식).
+  const handleCertFile = (file) => {
+    if (!file) return;
+    update({ _bizCertFile: file, _bizCertFileName: file.name });
+  };
+
+  const handleDownloadCert = async () => {
+    if (!state.bizCertPath) return;
+    setDownloading(true);
+    const { data, error } = await supabase.storage.from("quote-files").download(state.bizCertPath);
+    setDownloading(false);
+    if (error || !data) {
+      alert("사업자등록증 파일을 불러오지 못했어요: " + (error?.message || ""));
+      return;
+    }
+    const url = URL.createObjectURL(data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "사업자등록증";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <>
+      <Field label="사업자등록번호 (선택)">
+        <input
+          style={inputStyle}
+          value={state.bizRegNo || ""}
+          onChange={(e) => handleRegNoChange(e.target.value)}
+          placeholder="예: 123-45-67890"
+          maxLength={12}
+        />
+        {matched && (
+          <div style={{ fontSize: 11.5, color: C.brick, marginTop: 4 }}>
+            ✓ 기존 등록된 거래처 "{matched.name}"와 같은 사업자등록번호예요. 거래처명을 자동으로 맞췄어요.
+          </div>
+        )}
+      </Field>
+      <Field label="사업자등록증 업로드 (선택)">
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <input
+            type="file"
+            accept="image/*,.pdf"
+            onChange={(e) => handleCertFile(e.target.files?.[0])}
+            style={{ fontSize: 12.5 }}
+          />
+          {state.bizCertPath && (
+            <button type="button" onClick={handleDownloadCert} disabled={downloading} style={miniBtnStyle}>
+              {downloading ? "불러오는 중…" : "등록된 파일 보기"}
+            </button>
+          )}
+        </div>
+        {state._bizCertFileName && (
+          <div style={{ fontSize: 11.5, color: C.brick, marginTop: 4 }}>✓ 첨부됨: {state._bizCertFileName} (등록 확정 시 저장돼요)</div>
+        )}
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>거래처명·사업자등록번호는 증명서를 보고 직접 입력해주세요.</div>
+      </Field>
+    </>
+  );
+}
+
+function QuoteHeaderForm({ state, update, isAdmin = true, customers }) {
   const isRental = state.transactionType === "rental";
   return (
     <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
@@ -2301,6 +2430,7 @@ function QuoteHeaderForm({ state, update, isAdmin = true }) {
         <Field label="거래처">
           <input style={inputStyle} value={state.customer || ""} onChange={(e) => update({ customer: e.target.value })} placeholder="예: 한우리건설" />
         </Field>
+        <BizRegFields state={state} update={update} customers={customers} />
         <Field label="거래처 담당자">
           <input style={inputStyle} value={state.refContact || ""} onChange={(e) => update({ refContact: e.target.value })} placeholder="예: 양지훈 대리" />
         </Field>
@@ -4293,7 +4423,7 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
   );
 }
 
-function QuoteUploadPanel({ importState, setImportState, onFile, onPasteText, onCancel, onConfirm, importing, isAdmin = true, tonOverrides, onTonOverrideSaved }) {
+function QuoteUploadPanel({ importState, setImportState, onFile, onPasteText, onCancel, onConfirm, importing, isAdmin = true, tonOverrides, onTonOverrideSaved, customers }) {
   const update = (patch) => setImportState({ ...importState, ...patch });
 
   return (
@@ -4313,7 +4443,7 @@ function QuoteUploadPanel({ importState, setImportState, onFile, onPasteText, on
 
       {importState && (
         <>
-          <QuoteHeaderForm state={importState} update={update} isAdmin={isAdmin} />
+          <QuoteHeaderForm state={importState} update={update} isAdmin={isAdmin} customers={customers} />
           <ImportPreview
             state={importState}
             setState={setImportState}
