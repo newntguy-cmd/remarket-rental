@@ -1582,9 +1582,14 @@ function LoginScreen() {
     e.preventDefault();
     setBusy(true);
     setErr("");
-    const { error } = await supabase.auth.signInWithPassword({ email: resolveLoginEmail(idOrEmail), password: pw });
-    setBusy(false);
-    if (error) setErr("아이디 또는 비밀번호가 올바르지 않습니다.");
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email: resolveLoginEmail(idOrEmail), password: pw });
+      if (error) setErr("아이디 또는 비밀번호가 올바르지 않습니다.");
+    } catch (e2) {
+      setErr("서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요. (네트워크 또는 서버 점검 중일 수 있습니다)");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
