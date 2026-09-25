@@ -1530,6 +1530,9 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
+  // 로그인(인증) 자체는 성공했는데 계정 정보(profiles 테이블) 조회가 실패하는 경우를 화면에 알려주기 위한 상태.
+  // 예전에는 이 경우 아무 안내 없이 조용히 로그인 화면으로 되돌아가서, 사용자 입장에서는 "로그인이 무반응"인 것처럼 보였다.
+  const [profileError, setProfileError] = useState("");
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -1541,6 +1544,7 @@ export default function Home() {
       else {
         setSession(null);
         setProfile(null);
+        setProfileError("");
       }
     });
     return () => sub.subscription.unsubscribe();
@@ -1548,8 +1552,16 @@ export default function Home() {
 
   async function loadProfile(sess) {
     setSession(sess);
-    const { data } = await supabase.from("profiles").select("*").eq("id", sess.user.id).single();
-    setProfile(data);
+    setProfileError("");
+    const { data, error } = await supabase.from("profiles").select("*").eq("id", sess.user.id).single();
+    if (error) {
+      setProfile(null);
+      setProfileError(
+        "로그인은 되었지만 계정 정보를 불러오지 못했습니다. 관리자에게 문의해 주세요. (" + (error.message || "profiles 조회 실패") + ")"
+      );
+    } else {
+      setProfile(data);
+    }
     setLoading(false);
   }
 
@@ -1557,6 +1569,18 @@ export default function Home() {
     return (
       <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: sans, color: C.inkSoft }}>
         불러오는 중…
+      </div>
+    );
+  }
+  if (session && profileError) {
+    return (
+      <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: sans, padding: 24 }}>
+        <div style={{ width: 420, maxWidth: "100%", textAlign: "center" }}>
+          <div style={{ fontSize: 14.5, color: C.brick, marginBottom: 20, lineHeight: 1.6 }}>{profileError}</div>
+          <button onClick={() => supabase.auth.signOut()} style={primaryBtnStyle}>
+            다시 로그인
+          </button>
+        </div>
       </div>
     );
   }
