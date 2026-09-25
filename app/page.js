@@ -179,6 +179,22 @@ const ghostBtnStyle = {
   transition: "background 0.15s ease, border-color 0.15s ease, color 0.15s ease",
 };
 const miniBtnStyle = { ...ghostBtnStyle, padding: "5px 10px", fontSize: 12, borderRadius: 6 };
+// 품목 표(RentalDetailPanel)의 행별 "+ / ↑ / ↓" 버튼처럼 아주 작은 아이콘 버튼용.
+const rowActionBtnStyle = {
+  width: 20,
+  height: 20,
+  padding: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  border: `1px solid ${C.line}`,
+  background: C.panel,
+  color: C.inkSoft,
+  fontSize: 12,
+  lineHeight: 1,
+  borderRadius: 4,
+  cursor: "pointer",
+};
 const miniBtnStylePrimary = {
   ...miniBtnStyle,
   background: C.green,
@@ -5216,7 +5232,37 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
     next[idx] = { ...next[idx], ...patch };
     setItems(next);
   };
-  const addItem = () => setItems([...items, { id: null, item: "", spec: "", qty: 1, unit_price: null, amount: null, note: "" }]);
+  // 아직 저장 전이라 실제 id가 없는 새 품목 행을 구분하기 위한 임시 키(화면 표시용, 저장에는 안 쓰임).
+  const tempKeyRef = useRef(0);
+  const nextTempKey = () => {
+    tempKeyRef.current += 1;
+    return `new-${tempKeyRef.current}`;
+  };
+  const blankItem = () => ({ id: null, _tempKey: nextTempKey(), item: "", spec: "", qty: 1, unit_price: null, amount: null, note: "" });
+  const addItem = () => setItems([...items, blankItem()]);
+  // 특정 품목 "다음 줄"에 새 품목을 끼워넣는다(중역책상과 사무책상 사이처럼, 목록 중간에도 추가할 수 있도록).
+  const insertItemAfter = (idx) => {
+    const next = [...items];
+    next.splice(idx + 1, 0, blankItem());
+    setItems(next);
+    setCheckedItemIdxs(new Set());
+  };
+  // 품목 순서를 위/아래로 한 칸씩 옮긴다. 저장 시 이 화면에 보이는 순서 그대로 저장되므로(line_no), 다음에 다시 열어도 같은 순서로 보인다.
+  const moveItem = (idx, dir) => {
+    const target = idx + dir;
+    if (target < 0 || target >= items.length) return;
+    const next = [...items];
+    [next[idx], next[target]] = [next[target], next[idx]];
+    setItems(next);
+    setCheckedItemIdxs(new Set());
+  };
+  // 품목명 가나다순으로 한 번에 정렬(직접 위/아래로 옮기지 않아도 되도록). 정렬 후에도 위/아래 버튼으로 다시 미세조정 가능.
+  const sortItemsAlpha = () => {
+    setItems(
+      [...items].sort((a, b) => (a.item || "").localeCompare(b.item || "", "ko") || (a.spec || "").localeCompare(b.spec || "", "ko"))
+    );
+    setCheckedItemIdxs(new Set());
+  };
   const toggleItemChecked = (idx) => {
     setCheckedItemIdxs((prev) => {
       const next = new Set(prev);
@@ -5602,6 +5648,9 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
                 선택삭제 ({checkedItemIdxs.size})
               </button>
             )}
+            <button onClick={sortItemsAlpha} style={miniBtnStyle} title="품목명 가나다순으로 한 번에 정렬합니다">
+              가나다순 정렬
+            </button>
             <button onClick={addItem} style={miniBtnStyle}>+ 품목 추가</button>
           </div>
         </div>
@@ -5609,7 +5658,7 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: itemsGridTemplate,
+              gridTemplateColumns: itemsGridTemplate + " 78px",
               gap: 8,
               padding: "8px 10px",
               fontSize: 11.5,
@@ -5634,14 +5683,16 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
                 <ColResizeHandle onMouseDown={startResize(i)} />
               </div>
             ))}
+            <div>순서</div>
           </div>
           {items.map((it, idx) => {
             const vat = Math.round((Number(it.amount) || 0) * 0.1);
             const lineTotal = (Number(it.amount) || 0) + vat;
+            const rowKey = it.id ?? it._tempKey ?? `new-${idx}`;
             return (
               <div
-                key={it.id ?? `new-${idx}`}
-                style={{ display: "grid", gridTemplateColumns: itemsGridTemplate, gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content" }}
+                key={rowKey}
+                style={{ display: "grid", gridTemplateColumns: itemsGridTemplate + " 78px", gap: 8, padding: "6px 10px", fontSize: 12.5, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: "max-content" }}
               >
                 <input type="checkbox" checked={checkedItemIdxs.has(idx)} onChange={() => toggleItemChecked(idx)} />
                 <input style={smallInputStyle} value={it.item || ""} onChange={(e) => updateItem(idx, { item: e.target.value })} />
@@ -5652,6 +5703,34 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
                 <div style={{ fontSize: 12.5, textAlign: "right", color: C.inkSoft }}>{fmtWon(vat)}</div>
                 <input style={smallInputStyle} value={it.note || ""} onChange={(e) => updateItem(idx, { note: e.target.value })} />
                 <div style={{ fontSize: 12.5, textAlign: "right" }}>{fmtWon(lineTotal)}</div>
+                <div style={{ display: "flex", gap: 3, justifyContent: "center" }}>
+                  <button
+                    type="button"
+                    onClick={() => insertItemAfter(idx)}
+                    title="이 품목 다음 줄에 새 품목 추가"
+                    style={rowActionBtnStyle}
+                  >
+                    +
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveItem(idx, -1)}
+                    disabled={idx === 0}
+                    title="위로 이동"
+                    style={{ ...rowActionBtnStyle, opacity: idx === 0 ? 0.3 : 1, cursor: idx === 0 ? "default" : "pointer" }}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveItem(idx, 1)}
+                    disabled={idx === items.length - 1}
+                    title="아래로 이동"
+                    style={{ ...rowActionBtnStyle, opacity: idx === items.length - 1 ? 0.3 : 1, cursor: idx === items.length - 1 ? "default" : "pointer" }}
+                  >
+                    ↓
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -7503,9 +7582,25 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
   const [checkedIds, setCheckedIds] = useState(() => new Set());
   const [deletingSelected, setDeletingSelected] = useState(false);
   const [colWidths, startResize] = useResizableColumns([110, 130, 130, 90, 100, 100, 200, 140, 70, 110]);
+  // "선택 삭제"는 렌탈내역 원본(rentals)을 지우지 않고, 이 화면에서만 안 보이게 숨기는 방식으로 동작한다
+  // (렌탈내역은 원본이라 절대 손상되면 안 됨). 숨긴 목록은 ledger_auto_hidden_rentals 테이블에 따로 저장한다.
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
+  const [showHidden, setShowHidden] = useState(false);
+  const [restoringId, setRestoringId] = useState(null);
 
-  // 렌탈전표만(구매 제외) 모은다. transaction_type이 비어있는 옛 데이터는 렌탈로 취급한다(다른 화면들과 동일한 규칙).
-  const rentalRows = useMemo(() => (rentals || []).filter((r) => (r.transaction_type || "rental") !== "purchase"), [rentals]);
+  useEffect(() => {
+    supabase
+      .from("ledger_auto_hidden_rentals")
+      .select("rental_id")
+      .then(({ data }) => setHiddenIds(new Set((data || []).map((r) => r.rental_id))));
+  }, []);
+
+  // 렌탈전표만(구매 제외) 모으고, 이 화면에서 "제외" 처리된 건은 뺀다. transaction_type이 비어있는 옛 데이터는 렌탈로 취급한다(다른 화면들과 동일한 규칙).
+  const rentalRows = useMemo(
+    () => (rentals || []).filter((r) => (r.transaction_type || "rental") !== "purchase" && !hiddenIds.has(r.id)),
+    [rentals, hiddenIds]
+  );
+  const hiddenRentalRows = useMemo(() => (rentals || []).filter((r) => hiddenIds.has(r.id)), [rentals, hiddenIds]);
 
   const customerSuggestions = useMemo(() => dedupeSorted(rentalRows.map((r) => r.customer)), [rentalRows]);
 
@@ -7585,16 +7680,41 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
 
   async function handleDeleteSelected() {
     if (checkedIds.size === 0) return;
-    if (!confirm(`선택한 품목 ${checkedIds.size}건을 삭제할까요? 되돌릴 수 없어요. (같은 전표의 다른 품목은 그대로 남아요)`)) return;
+    if (
+      !confirm(
+        `선택한 품목 ${checkedIds.size}건을 이 목록에서 제외할까요?\n렌탈내역 원본 데이터는 지워지지 않고 그대로 남아있고, 이 화면에서만 안 보이게 됩니다.\n(나중에 "제외된 품목 보기"에서 다시 꺼내올 수 있어요)`
+      )
+    )
+      return;
     setDeletingSelected(true);
-    const { error } = await supabase.from("rentals").delete().in("id", Array.from(checkedIds));
+    const rows = Array.from(checkedIds).map((id) => ({ rental_id: id }));
+    const { error } = await supabase.from("ledger_auto_hidden_rentals").upsert(rows, { onConflict: "rental_id" });
     setDeletingSelected(false);
     if (error) {
-      alert("삭제 중 오류가 발생했어요: " + error.message);
+      alert("처리 중 오류가 발생했어요: " + error.message);
       return;
     }
+    setHiddenIds((prev) => {
+      const next = new Set(prev);
+      checkedIds.forEach((id) => next.add(id));
+      return next;
+    });
     setCheckedIds(new Set());
-    onRefresh && onRefresh();
+  }
+
+  async function handleRestoreHidden(id) {
+    setRestoringId(id);
+    const { error } = await supabase.from("ledger_auto_hidden_rentals").delete().eq("rental_id", id);
+    setRestoringId(null);
+    if (error) {
+      alert("복원 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setHiddenIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
   }
 
   async function handleExportExcel() {
@@ -7668,9 +7788,39 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 12px", background: C.amberBg, fontSize: 12.5 }}>
           <div>{checkedIds.size}건 선택됨</div>
           <button onClick={handleDeleteSelected} disabled={deletingSelected} style={{ ...miniBtnStyle, borderColor: C.brick, color: C.brick }}>
-            {deletingSelected ? "삭제 중…" : "선택 삭제"}
+            {deletingSelected ? "제외 처리 중…" : "선택 제외"}
           </button>
           <button onClick={() => setCheckedIds(new Set())} style={miniBtnStyle}>선택 해제</button>
+          <div style={{ fontSize: 11.5, color: C.muted }}>렌탈내역 원본은 지워지지 않아요 — 이 화면에서만 안 보이게 됩니다</div>
+        </div>
+      )}
+
+      {hiddenRentalRows.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <button onClick={() => setShowHidden((v) => !v)} style={{ ...ghostBtnStyle, fontSize: 12 }}>
+            {showHidden ? "제외된 품목 숨기기" : `제외된 품목 보기 (${hiddenRentalRows.length})`}
+          </button>
+          {showHidden && (
+            <div style={{ marginTop: 8, border: `1px solid ${C.lineSoft}`, background: C.bg, padding: 10 }}>
+              {hiddenRentalRows.map((r) => (
+                <div
+                  key={r.id}
+                  style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 4px", fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}` }}
+                >
+                  <div style={{ flex: 1 }}>
+                    {r.customer} · {r.site_name || "-"} · {r.item} {r.spec ? `(${r.spec})` : ""} · {r.qty}개
+                  </div>
+                  <button
+                    onClick={() => handleRestoreHidden(r.id)}
+                    disabled={restoringId === r.id}
+                    style={{ ...miniBtnStyle, padding: "3px 8px", fontSize: 11.5 }}
+                  >
+                    {restoringId === r.id ? "복원 중…" : "복원"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
