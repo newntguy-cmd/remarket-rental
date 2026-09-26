@@ -2107,7 +2107,7 @@ function Dashboard({ profile, onLogout }) {
         )}
 
         {activeTab === "customerData" && isStaff && (
-          <CustomerDataTab rentals={rentals} onRefresh={fetchRentals} />
+          <CustomerDataTab rentals={rentals} onRefresh={fetchRentals} customers={customers} onCustomersRefresh={fetchCustomers} />
         )}
 
         {activeTab === "ledger" && isStaff && (
@@ -6686,7 +6686,7 @@ function SalesStatusTab({ rentals, onRefresh, isAdmin = true, managerName = "" }
   );
 }
 
-function CustomerDataTab({ rentals, onRefresh }) {
+function CustomerDataTab({ rentals, onRefresh, customers, onCustomersRefresh }) {
   const todayStr = todayISO();
   const now0 = new Date();
   const monthStart = todayStr.slice(0, 7) + "-01";
@@ -6752,6 +6752,63 @@ function CustomerDataTab({ rentals, onRefresh }) {
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b, "ko"));
   }, [rentals]);
+
+  // "무영씨엠"과 "(주)무영씨엠"처럼 표기만 다르고 실제로는 같은 회사인 거래처명을 찾아낸다.
+  // customers 테이블(견적서 업로드 시 저장해둔 거래처별 사업자등록번호)에서 각 거래처명의 번호를 찾아,
+  // 렌탈내역에 실제로 쓰이고 있는 거래처명들을 사업자등록번호 기준으로 묶어본다. 한 번호에 이름이 2개
+  // 이상 걸리면 "같은 회사인데 표기가 갈린 것"으로 보고 화면에 보여준다.
+  const bizRegDupGroups = useMemo(() => {
+    const namesInUse = new Set();
+    for (const r of rentals || []) {
+      const c = (r.customer || "").trim();
+      if (c) namesInUse.add(c);
+    }
+    const nameToReg = new Map();
+    for (const c of customers || []) {
+      const digits = (c.business_reg_no || "").replace(/\D/g, "");
+      const name = (c.name || "").trim();
+      if (name && digits) nameToReg.set(name, digits);
+    }
+    const regToNames = new Map();
+    for (const name of namesInUse) {
+      const reg = nameToReg.get(name);
+      if (!reg) continue;
+      if (!regToNames.has(reg)) regToNames.set(reg, new Set());
+      regToNames.get(reg).add(name);
+    }
+    const groups = [];
+    for (const [reg, namesSet] of regToNames.entries()) {
+      if (namesSet.size >= 2) {
+        groups.push({ reg, names: Array.from(namesSet).sort((a, b) => a.localeCompare(b, "ko")) });
+      }
+    }
+    return groups.sort((a, b) => a.reg.localeCompare(b.reg));
+  }, [rentals, customers]);
+
+  const [mergingReg, setMergingReg] = useState(null);
+  // 사업자등록번호가 같은 거래처명들을 하나(keepName)로 통일한다. 렌탈내역의 거래처 칼럼을 실제로 바꾸는
+  // 것이라, 이후엔 렌탈내역·업체별데이터·자동등록 등 어느 화면에서 봐도 같은 이름 하나로 통일돼 보인다.
+  async function handleMergeCustomerGroup(keepName, otherNames) {
+    if (
+      !confirm(
+        `"${otherNames.join(", ")}"(을)를 전부 "${keepName}"(으)로 통합할까요?\n렌탈내역·구매내역 등 모든 화면의 거래처명이 "${keepName}"으로 바뀝니다.`
+      )
+    )
+      return;
+    setMergingReg(keepName + "|" + otherNames.join(","));
+    const { error } = await supabase.from("rentals").update({ customer: keepName }).in("customer", otherNames);
+    if (error) {
+      alert("통합 중 오류가 발생했어요: " + error.message);
+      setMergingReg(null);
+      return;
+    }
+    // customers 테이블에 남아있는 예전 이름 등록도 정리해서, 다음에 같은 사업자등록번호를 입력했을 때
+    // 다시 예전 이름으로 자동완성되지 않게 한다.
+    await supabase.from("customers").delete().in("name", otherNames);
+    setMergingReg(null);
+    onRefresh && onRefresh();
+    onCustomersRefresh && onCustomersRefresh();
+  }
 
   // 현장명·품목명도 업체명처럼 실제 등록된 값 목록을 자동완성 후보로 보여준다.
   const siteOptions = useMemo(() => {
@@ -6972,6 +7029,43 @@ function CustomerDataTab({ rentals, onRefresh }) {
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         업체명과 기간을 입력하면 그 기간 동안의 매출 합계와 월별 추이를 볼 수 있어요. 현장명·품목명을 같이 입력하면 "A현장에 냉난방기만 몇 개 나갔는지"처럼 더 좁혀서 볼 수 있어요.
       </div>
+
+      {bizRegDupGroups.length > 0 && (
+        <div style={{ border: `1px solid ${C.brick}`, background: "#fff7f5", padding: 16, marginBottom: 16 }}>
+          <div style={{ fontFamily: serif, fontSize: 14.5, marginBottom: 4, color: C.brick }}>
+            사업자등록번호가 같은데 거래처명이 다르게 등록된 곳이 있어요
+          </div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>
+            사업자등록번호를 기준으로 자동으로 찾은 결과예요. 통일하고 싶은 이름을 눌러서 하나로 합치면, 렌탈내역·구매내역 등
+            모든 화면에서 그 이름 하나로 통일돼요.
+          </div>
+          {bizRegDupGroups.map((g) => {
+            return (
+              <div
+                key={g.reg}
+                style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "8px 0", borderTop: `1px solid ${C.lineSoft}` }}
+              >
+                <div style={{ fontSize: 12, color: C.muted, minWidth: 110 }}>{formatBizRegNo(g.reg)}</div>
+                {g.names.map((name) => {
+                  const otherNames = g.names.filter((n) => n !== name);
+                  const thisKey = name + "|" + otherNames.join(",");
+                  return (
+                    <button
+                      key={name}
+                      onClick={() => handleMergeCustomerGroup(name, otherNames)}
+                      disabled={!!mergingReg}
+                      style={miniBtnStyle}
+                      title={`"${name}"(으)로 통합`}
+                    >
+                      {mergingReg === thisKey ? "통합 중…" : `"${name}"(으)로 통합`}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 18, marginBottom: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr", gap: 14 }}>
