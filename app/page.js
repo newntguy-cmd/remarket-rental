@@ -10867,81 +10867,56 @@ function roundEndTablePathD(widthCm, depthCm) {
   return `M 0,0 L ${W},0 L ${W},${rectDepth} A ${radius},${radius} 0 0 1 0,${rectDepth} Z`;
 }
 
-// 사무용 의자를 캐드(CAD) 도면처럼 위에서 내려다본 모양으로 그린다. 등받이(맨 위, 헤드레스트 포함)·
-// 팔걸이(좌우)·좌판(가운데)·회전축과 5방향 캐스터(바퀴) 달린 별 모양 다리(맨 아래)까지, 실제 사무용
-// 의자를 도면에서 표시할 때 쓰는 기호에 가깝게 조합한다. width_cm×depth_cm 박스 안에 맞춰 그려서
-// 등받이가 위(0)쪽, 다리(캐스터)가 아래(depth)쪽을 향하도록 기본 방향을 잡아뒀고, 회전 버튼으로 다른
-// 방향도 그대로 돌릴 수 있다.
+// 사무용 의자를 캐드(CAD) 도면처럼 위에서 내려다본 모양으로 그린다. 실제 도면에서 흔히 쓰는 사무의자
+// 기호처럼, 등받이를 각진 사각형이 아니라 둥근 타원 두 쪽이 가운데 얇은 틈(이음선)을 두고 나란히 붙은
+// 모양으로 그리고(메쉬 등받이가 두 쪽으로 나뉘어 보이는 느낌), 그 아래 넓게 둥근 좌판이 등받이와 살짝
+// 겹치며 이어지게 그려서 하나로 뭉쳐 보이게 한다. 회전축(바퀴 달린 의자다리)은 맨 아래 아주 작은 점
+// 하나로만 은은하게 표시한다. width_cm×depth_cm 박스 안에 맞춰 그려서 등받이가 위(0)쪽, 좌판이
+// 아래(depth)쪽을 향하도록 기본 방향을 잡아뒀고, 회전 버튼으로 다른 방향도 그대로 돌릴 수 있다.
 function ChairTopIcon({ w, d, fill, stroke }) {
   const W = Number(w) || 0;
   const D = Number(d) || 0;
   const minWD = Math.min(W, D);
-  const strokeW = Math.max(minWD * 0.02, 0.4);
-  // 헤드레스트(맨 위, 좁게) + 등받이(그 아래, 조금 더 넓게)
-  const headW = W * 0.34;
-  const headH = D * 0.09;
-  const backW = W * 0.62;
-  const backH = D * 0.19;
-  const backY = headH * 0.55;
-  // 팔걸이(좌우, 등받이와 좌판 사이 높이)
-  const armW = W * 0.11;
-  const armH = D * 0.32;
-  const armY = D * 0.28;
-  // 좌판(등받이 아래, 팔걸이 사이)
-  const seatW = W * 0.64;
-  const seatH = D * 0.34;
-  const seatY = D * 0.27;
-  // 회전축(가운데 작은 원) + 5방향으로 뻗은 캐스터(바퀴) 달린 별 모양 다리
-  const baseCx = W / 2;
-  const baseCy = D * 0.84;
-  const spokeLen = minWD * 0.32;
-  const casterR = Math.max(minWD * 0.045, 0.6);
-  const spokeAngleDeg = [-90, -18, 54, 126, 198];
+  const strokeW = Math.max(minWD * 0.025, 0.4);
+  // 등받이: 둥근 타원 두 쪽이 가운데 살짝 틈을 두고 나란히 붙는다.
+  const lobeRx = W * 0.245;
+  const lobeRy = D * 0.3;
+  const lobeCy = D * 0.3;
+  const lobeGap = W * 0.02;
+  const lobeCxLeft = W / 2 - lobeRx - lobeGap / 2;
+  const lobeCxRight = W / 2 + lobeRx + lobeGap / 2;
+  // 좌판: 등받이 아래, 넓게 둥근 하나의 타원(등받이와 겹치게 그려서 한 덩어리로 이어 보이게 한다).
+  const seatRx = W * 0.4;
+  const seatRy = D * 0.3;
+  const seatCy = D * 0.68;
+  // 회전축(바퀴 달린 의자다리) — 아주 작은 점 하나로만 은은하게 표시.
+  const baseR = Math.max(minWD * 0.035, 0.5);
   return (
     <g fill={fill} stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round">
-      {spokeAngleDeg.map((deg) => {
-        const rad = (deg * Math.PI) / 180;
-        const ex = baseCx + Math.cos(rad) * spokeLen;
-        const ey = baseCy + Math.sin(rad) * spokeLen;
-        return (
-          <g key={deg}>
-            <line x1={baseCx} y1={baseCy} x2={ex} y2={ey} stroke={stroke} strokeWidth={strokeW * 1.4} />
-            <circle cx={ex} cy={ey} r={casterR} fill={stroke} stroke="none" />
-          </g>
-        );
-      })}
-      <circle cx={baseCx} cy={baseCy} r={Math.max(minWD * 0.05, casterR * 0.8)} fill={stroke} stroke="none" />
-      <rect x={(W - seatW) / 2} y={seatY} width={seatW} height={seatH} rx={seatH * 0.18} />
-      <rect x={0} y={armY} width={armW} height={armH} rx={armW * 0.35} />
-      <rect x={W - armW} y={armY} width={armW} height={armH} rx={armW * 0.35} />
-      <rect x={(W - backW) / 2} y={backY} width={backW} height={backH} rx={backH * 0.3} />
-      <rect x={(W - headW) / 2} y={0} width={headW} height={headH} rx={headH * 0.4} />
+      <ellipse cx={W / 2} cy={seatCy} rx={seatRx} ry={seatRy} />
+      <ellipse cx={lobeCxLeft} cy={lobeCy} rx={lobeRx} ry={lobeRy} />
+      <ellipse cx={lobeCxRight} cy={lobeCy} rx={lobeRx} ry={lobeRy} />
+      <circle cx={W / 2} cy={D * 0.92} r={baseR} fill={stroke} stroke="none" />
     </g>
   );
 }
 
 // 회의실·테이블 앞에 놓는 회의(응접)의자를 위에서 내려다본 모양으로 그린다. 개인 책상 앞 사무의자
-// (ChairTopIcon, 팔걸이·회전축·캐스터 있음)와 다르게, 회의의자는 대개 바퀴·팔걸이 없이 등받이+좌판만
-// 있는 단순한 형태라 도면에서도 둥근 사각형 두 개(등받이·좌판)만 포개서 표시하는 게 일반적이다. 이
-// 단순함 자체가 "책상 앞 사무의자"와 "테이블 앞 회의의자"를 한눈에 구분하는 표시가 된다.
+// (ChairTopIcon, 등받이가 두 쪽 타원으로 나뉘고 회전축 표시가 있음)와 다르게, 회의의자는 대개 바퀴 없이
+// 등받이·좌판이 하나로 매끈하게 이어진 단순한 모양이라 도면에서도 둥근 타원 하나만으로 표시하는 게
+// 일반적이다. 가운데 얇은 선 하나로 등받이·좌판이 나뉘는 느낌만 살짝 주고, 이 단순함 자체가 "책상 앞
+// 사무의자"와 "테이블 앞 회의의자"를 한눈에 구분하는 표시가 된다.
 function MeetingChairTopIcon({ w, d, fill, stroke }) {
   const W = Number(w) || 0;
   const D = Number(d) || 0;
   const minWD = Math.min(W, D);
-  const strokeW = Math.max(minWD * 0.02, 0.4);
-  // 등받이(맨 위, 좌판보다 살짝 좁게)
-  const backW = W * 0.86;
-  const backH = D * 0.26;
-  const backX = (W - backW) / 2;
-  // 좌판(등받이 아래, 전체 폭 거의 그대로)
-  const seatW = W * 0.94;
-  const seatH = D * 0.58;
-  const seatX = (W - seatW) / 2;
-  const seatY = D * 0.34;
+  const strokeW = Math.max(minWD * 0.025, 0.4);
+  const rx = W * 0.46;
+  const ry = D * 0.47;
   return (
     <g fill={fill} stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round">
-      <rect x={seatX} y={seatY} width={seatW} height={seatH} rx={Math.min(seatW, seatH) * 0.14} />
-      <rect x={backX} y={0} width={backW} height={backH} rx={backH * 0.35} />
+      <ellipse cx={W / 2} cy={D / 2} rx={rx} ry={ry} />
+      <line x1={W * 0.14} y1={D * 0.42} x2={W * 0.86} y2={D * 0.42} stroke={stroke} strokeWidth={strokeW * 0.7} />
     </g>
   );
 }
