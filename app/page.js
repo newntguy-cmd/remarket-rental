@@ -7471,6 +7471,41 @@ function splitLedgerSpecColor(rawSpec) {
   return { spec, color: "" };
 }
 
+// 품목명이 글자 하나만 더(빠지거나·바뀌거나) 다를 뿐인지 확인한다("사무용의자" vs "사무의자"처럼 "용" 한
+// 글자가 끼어든 경우 등). 편집거리(Levenshtein distance)가 0 또는 1이면 true — 정확히 같거나, 한 글자
+// 삽입·삭제·교체 한 번으로 서로 같아지는 경우만 잡아서, 실제로 전혀 다른 품목이 우연히 걸릴 위험을 낮춘다.
+function isOneEditApart(a, b) {
+  if (a === b) return true;
+  const la = a.length;
+  const lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+  if (la === lb) {
+    let diff = 0;
+    for (let i = 0; i < la; i++) {
+      if (a[i] !== b[i]) diff++;
+      if (diff > 1) return false;
+    }
+    return diff === 1;
+  }
+  const shorter = la < lb ? a : b;
+  const longer = la < lb ? b : a;
+  let i = 0;
+  let j = 0;
+  let skipped = false;
+  while (i < shorter.length && j < longer.length) {
+    if (shorter[i] === longer[j]) {
+      i++;
+      j++;
+    } else if (!skipped) {
+      skipped = true;
+      j++;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
 function sortLedgerItems(items) {
   return [...items].sort(
     (a, b) =>
@@ -8432,14 +8467,21 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
 
   const sortedItems = useMemo(() => withLedgerRowSpans(sortLedgerItems(items)), [items]);
 
-  // 이름이 서로 다르게 적혀서 표에 따로 나오는 품목들을 자동으로 찾아낸다. 두 가지 규칙만 본다:
+  // 이름이 서로 다르게 적혀서 표에 따로 나오는 품목들을 자동으로 찾아낸다. 세 가지 규칙을 본다:
   // (1) 품목·규격·색상이 공백/대소문자 차이만 있고 사실상 완전히 같은 경우.
   // (2) 한 품목의 규격란 앞부분에 다른 품목의 "품목명"이 그대로 적혀 있고(예: "탑책상, W1600*D800"),
   //     그 나머지 부분이 그 다른 품목의 규격과 정확히 같고 색상도 같은 경우 — 등록할 때 품목명을 규격에
-  //     같이 적어버린 전형적인 오기입 패턴. 둘 다 아주 구체적인 조건이라 서로 다른 품목이 우연히 걸릴 위험은
-  //     낮지만, 실제로 수량 기록을 지우는 작업이라 자동 실행은 하지 않고 화면에 제안만 띄워서 한 번 확인받는다.
+  //     같이 적어버린 전형적인 오기입 패턴.
+  // (3) 규격·색상은 완전히 같은데(같은 제품이라는 강한 증거), 품목명만 글자 하나 차이(오타·"용" 같은 조사
+  //     하나 삽입 등, isOneEditApart)인 경우 — 예: "사무용의자" vs "사무의자".
+  // 셋 다 아주 구체적인 조건이라 서로 다른 품목이 우연히 걸릴 위험은 낮지만, 실제로 수량 기록을 옮기는
+  // 작업이라 자동 실행은 하지 않고 화면에 제안만 띄워서 한 번 확인받는다.
   const mergeSuggestions = useMemo(() => {
     const norm = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
+    // (3)에서 어느 쪽 품목명을 남길지 고르는 기준 — 실제 전표에 더 많이 쓰인(수량 합이 더 큰) 이름을
+    // 남기고, 사용량이 같으면 더 긴(자세한) 이름 쪽을 남긴다.
+    const qtyById = new Map();
+    for (const e of entries) qtyById.set(e.ledger_item_id, (qtyById.get(e.ledger_item_id) || 0) + (Number(e.qty) || 0));
     const list = [];
     const seenPairs = new Set();
     for (const a of items) {
@@ -8456,16 +8498,33 @@ function LedgerBookDetail({ bookId, rentals, isAdmin, managerName, onClose, onBo
 
         const aSpecNorm = norm(a.spec);
         const bItemNorm = norm(b.item);
-        if (!bItemNorm || !aSpecNorm.startsWith(bItemNorm)) continue;
-        const rest = aSpecNorm.slice(bItemNorm.length).replace(/^[,·/]\s*/, "").trim();
-        if (rest && rest === norm(b.spec) && norm(a.color) === norm(b.color)) {
+        if (bItemNorm && aSpecNorm.startsWith(bItemNorm)) {
+          const rest = aSpecNorm.slice(bItemNorm.length).replace(/^[,·/]\s*/, "").trim();
+          if (rest && rest === norm(b.spec) && norm(a.color) === norm(b.color)) {
+            seenPairs.add(pairKey);
+            list.push({ keepId: b.id, otherId: a.id, reason: `"${a.item}"의 규격에 "${b.item}"이 그대로 적혀 있어요` });
+            continue;
+          }
+        }
+
+        if (
+          norm(a.spec) === norm(b.spec) &&
+          norm(a.color) === norm(b.color) &&
+          norm(a.item) !== norm(b.item) &&
+          isOneEditApart(norm(a.item), norm(b.item))
+        ) {
           seenPairs.add(pairKey);
-          list.push({ keepId: b.id, otherId: a.id, reason: `"${a.item}"의 규격에 "${b.item}"이 그대로 적혀 있어요` });
+          const aQty = qtyById.get(a.id) || 0;
+          const bQty = qtyById.get(b.id) || 0;
+          const aWins = aQty !== bQty ? aQty > bQty : a.item.length >= b.item.length;
+          const keepId = aWins ? a.id : b.id;
+          const otherId = aWins ? b.id : a.id;
+          list.push({ keepId, otherId, reason: `"${a.item}"과 "${b.item}"은 한 글자 차이(오타 등)이고 규격·색상은 완전히 같아요` });
         }
       }
     }
     return list;
-  }, [items]);
+  }, [items, entries]);
   const visibleMergeSuggestions = useMemo(
     () => mergeSuggestions.filter((s) => !dismissedMergeSuggestions.has(`${s.keepId}|${s.otherId}`)),
     [mergeSuggestions, dismissedMergeSuggestions]
