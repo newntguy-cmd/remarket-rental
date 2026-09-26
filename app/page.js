@@ -2115,7 +2115,15 @@ function Dashboard({ profile, onLogout }) {
         )}
 
         {activeTab === "ledgerAuto" && isStaff && (
-          <LedgerAutoSummaryTab key={ledgerAutoResetKey} rentals={rentals} onRefresh={fetchRentals} />
+          <LedgerAutoSummaryTab
+            key={ledgerAutoResetKey}
+            rentals={rentals}
+            onRefresh={fetchRentals}
+            isAdmin={isAdmin}
+            managerName={managerName}
+            tonOverrides={tonOverrides}
+            onTonOverrideSaved={fetchTonOverrides}
+          />
         )}
 
         {activeTab === "asboard" && isStaff && (
@@ -7625,7 +7633,7 @@ function LedgerTab({ rentals, customers, isAdmin, managerName }) {
 // 위 LedgerTab(심화관리)처럼 대장을 따로 만들 필요 없이, 등록된 렌탈전표(구매 제외)를 자동으로 전부 모아
 // 품목 단위 한 표로 보여준다. 대장 안 만든 현장도 렌탈전표만 등록돼 있으면 빠짐없이 다 잡힌다. 화면에서
 // 잔량까지 계산해주진 않고, 엑셀로 통째로 내려받아서 직접 걸러 쓰는 용도다.
-function LedgerAutoSummaryTab({ rentals, onRefresh }) {
+function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName = "", tonOverrides, onTonOverrideSaved }) {
   // 입력창에 타이핑하는 값(초안)과 실제로 검색에 적용된 값을 분리해서, "검색" 버튼을 눌러야(또는 Enter)
   // 결과에 반영되게 한다(업체별데이터 화면과 같은 방식).
   const [customerInput, setCustomerInput] = useState("");
@@ -7639,8 +7647,14 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
   const [toDate, setToDate] = useState("");
   const [checkedIds, setCheckedIds] = useState(() => new Set());
   const [deletingSelected, setDeletingSelected] = useState(false);
-  const [colWidths, startResize] = useResizableColumns([110, 130, 130, 90, 100, 100, 200, 140, 70, 110]);
-  // "선택 삭제"는 렌탈내역 원본(rentals)을 지우지 않고, 이 화면에서만 안 보이게 숨기는 방식으로 동작한다
+  const [colWidths, startResize] = useResizableColumns([110, 130, 130, 90, 100, 100, 220, 80, 110, 90]);
+  // 렌탈내역/구매내역처럼, 전표 단위로 한 줄만 보여주고 전표번호를 누르면 세부내역(품목 전체)이 나오게 한다.
+  // (예전엔 품목 하나하나가 다 따로 줄로 나와서 한 현장에 품목이 많으면 목록이 너무 길어졌음)
+  const [selectedKey, setSelectedKey] = useState(null);
+  // 열 제목을 눌러 정렬하는 기능(렌탈내역/구매내역과 동일한 방식). 안 누르면 예전처럼 현장명→거래처→배송일자 순.
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc");
+  // "선택 제외"는 렌탈내역 원본(rentals)을 지우지 않고, 이 화면에서만 안 보이게 숨기는 방식으로 동작한다
   // (렌탈내역은 원본이라 절대 손상되면 안 됨). 숨긴 목록은 ledger_auto_hidden_rentals 테이블에 따로 저장한다.
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
   const [showHidden, setShowHidden] = useState(false);
@@ -7662,21 +7676,13 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
 
   const customerSuggestions = useMemo(() => dedupeSorted(rentalRows.map((r) => r.customer)), [rentalRows]);
 
-  const sortedRows = useMemo(() => {
-    const list = [...rentalRows];
-    list.sort(
-      (a, b) =>
-        (a.site_name || "").localeCompare(b.site_name || "", "ko") ||
-        (a.customer || "").localeCompare(b.customer || "", "ko") ||
-        (a.out_date || "").localeCompare(b.out_date || "")
-    );
-    return list;
-  }, [rentalRows]);
+  // 화면에는 전표 단위로 묶어서 한 줄씩만 보여준다(렌탈내역/구매내역과 같은 방식).
+  const allGroups = useMemo(() => groupRentalsByVoucher(rentalRows), [rentalRows]);
 
   const filteredRows = useMemo(() => {
     const cq = customerQuery.trim().toLowerCase();
     const vq = voucherQuery.trim().toLowerCase();
-    return sortedRows.filter((r) => {
+    return rentalRows.filter((r) => {
       const d = (r.out_date || "").slice(0, 10);
       if (fromDate && (!d || d < fromDate)) return false;
       if (toDate && (!d || d > toDate)) return false;
@@ -7684,7 +7690,86 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
       if (vq && !(r.voucher_no || "").toLowerCase().includes(vq)) return false;
       return true;
     });
-  }, [sortedRows, customerQuery, voucherQuery, fromDate, toDate]);
+  }, [rentalRows, customerQuery, voucherQuery, fromDate, toDate]);
+
+  const filteredGroupsBase = useMemo(() => {
+    const cq = customerQuery.trim().toLowerCase();
+    const vq = voucherQuery.trim().toLowerCase();
+    return allGroups.filter((g) => {
+      const d = (g.head.out_date || "").slice(0, 10);
+      if (fromDate && (!d || d < fromDate)) return false;
+      if (toDate && (!d || d > toDate)) return false;
+      if (cq && !(g.head.customer || "").toLowerCase().includes(cq)) return false;
+      if (vq && !(g.voucherNo || "").toLowerCase().includes(vq)) return false;
+      return true;
+    });
+  }, [allGroups, customerQuery, voucherQuery, fromDate, toDate]);
+
+  const RENTAL_LIST_STATUS_RANK = { overdue: 0, soon: 1, normal: 2, collected: 3, purchase: 4 };
+  const sortAccessors = {
+    전표번호: (g) => g.voucherNo || "",
+    거래처: (g) => g.head.customer || "",
+    현장명: (g) => g.head.site_name || "",
+    담당자: (g) => g.head.manager || "",
+    배송일자: (g) => g.head.out_date || "",
+    렌탈종료일자: (g) => g.head.due_date || "",
+    수량: (g) => g.rows.reduce((s, r) => s + (Number(r.qty) || 0), 0),
+    금액: (g) => g.amount,
+    상태: (g) => {
+      const s = getStatus({ transaction_type: g.head.transaction_type, collected: g.rows.every((r) => r.collected), due_date: g.head.due_date });
+      return RENTAL_LIST_STATUS_RANK[s] ?? 9;
+    },
+  };
+  const handleSortClick = (label) => {
+    if (!sortAccessors[label]) return;
+    if (sortKey === label) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(label);
+      setSortDir("asc");
+    }
+  };
+
+  const filteredGroups = useMemo(() => {
+    const list = [...filteredGroupsBase];
+    if (!sortKey || !sortAccessors[sortKey]) {
+      list.sort(
+        (a, b) =>
+          (a.head.site_name || "").localeCompare(b.head.site_name || "", "ko") ||
+          (a.head.customer || "").localeCompare(b.head.customer || "", "ko") ||
+          (a.head.out_date || "").localeCompare(b.head.out_date || "")
+      );
+      return list;
+    }
+    const acc = sortAccessors[sortKey];
+    list.sort((a, b) => {
+      const va = acc(a);
+      const vb = acc(b);
+      let cmp;
+      if (typeof va === "number" || typeof vb === "number") cmp = (Number(va) || 0) - (Number(vb) || 0);
+      else cmp = String(va).localeCompare(String(vb), "ko");
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return list;
+  }, [filteredGroupsBase, sortKey, sortDir]);
+
+  const selectedGroup = allGroups.find((g) => g.key === selectedKey) || null;
+
+  if (selectedGroup) {
+    return (
+      <RentalDetailPanel
+        group={selectedGroup}
+        onClose={() => setSelectedKey(null)}
+        onSaved={() => {
+          onRefresh && onRefresh();
+          setSelectedKey(null);
+        }}
+        isAdmin={isAdmin}
+        managerName={managerName}
+        tonOverrides={tonOverrides}
+        onTonOverrideSaved={onTonOverrideSaved}
+      />
+    );
+  }
 
   const filtersActive = customerQuery.trim() || voucherQuery.trim() || fromDate || toDate;
   const runSearch = () => {
@@ -7710,19 +7795,19 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
   const totalQty = filteredRows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
   const gridTemplate = "32px " + colWidths.map((w) => `${w}px`).join(" ");
 
-  const visibleIds = filteredRows.map((r) => r.id);
-  const allChecked = visibleIds.length > 0 && visibleIds.every((id) => checkedIds.has(id));
-  const someChecked = visibleIds.some((id) => checkedIds.has(id));
+  const visibleKeys = filteredGroups.map((g) => g.key);
+  const allChecked = visibleKeys.length > 0 && visibleKeys.every((k) => checkedIds.has(k));
+  const someChecked = visibleKeys.some((k) => checkedIds.has(k));
   const selectAllRef = useRef(null);
   useEffect(() => {
     if (selectAllRef.current) selectAllRef.current.indeterminate = someChecked && !allChecked;
   }, [someChecked, allChecked]);
 
-  const toggleChecked = (id) => {
+  const toggleChecked = (key) => {
     setCheckedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -7730,8 +7815,8 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
   const toggleCheckedAll = () => {
     setCheckedIds((prev) => {
       const next = new Set(prev);
-      if (allChecked) visibleIds.forEach((id) => next.delete(id));
-      else visibleIds.forEach((id) => next.add(id));
+      if (allChecked) visibleKeys.forEach((k) => next.delete(k));
+      else visibleKeys.forEach((k) => next.add(k));
       return next;
     });
   };
@@ -7740,12 +7825,13 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
     if (checkedIds.size === 0) return;
     if (
       !confirm(
-        `선택한 품목 ${checkedIds.size}건을 이 목록에서 제외할까요?\n렌탈내역 원본 데이터는 지워지지 않고 그대로 남아있고, 이 화면에서만 안 보이게 됩니다.\n(나중에 "제외된 품목 보기"에서 다시 꺼내올 수 있어요)`
+        `선택한 전표 ${checkedIds.size}건을 이 목록에서 제외할까요?\n렌탈내역 원본 데이터는 지워지지 않고 그대로 남아있고, 이 화면에서만 안 보이게 됩니다.\n(나중에 "제외된 품목 보기"에서 다시 꺼내올 수 있어요)`
       )
     )
       return;
     setDeletingSelected(true);
-    const rows = Array.from(checkedIds).map((id) => ({ rental_id: id }));
+    const idsToHide = filteredGroups.filter((g) => checkedIds.has(g.key)).flatMap((g) => g.rows.map((r) => r.id));
+    const rows = idsToHide.map((id) => ({ rental_id: id }));
     const { error } = await supabase.from("ledger_auto_hidden_rentals").upsert(rows, { onConflict: "rental_id" });
     setDeletingSelected(false);
     if (error) {
@@ -7754,7 +7840,7 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
     }
     setHiddenIds((prev) => {
       const next = new Set(prev);
-      checkedIds.forEach((id) => next.add(id));
+      idsToHide.forEach((id) => next.add(id));
       return next;
     });
     setCheckedIds(new Set());
@@ -7802,8 +7888,9 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
     <div>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>현장별 렌탈잔량(자동등록)</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
-        대장을 따로 만들지 않아도, 구매 건을 뺀 렌탈전표 전체를 자동으로 모아 품목 단위로 보여줘요. 현장명 → 업체명 → 배송일자 순으로
-        정렬돼 있어요. "엑셀로 다운로드"로 통째로 받아서 원하는 대로 걸러 쓰시면 돼요.
+        대장을 따로 만들지 않아도, 구매 건을 뺀 렌탈전표 전체를 자동으로 모아 전표 단위로 보여줘요(렌탈내역과 같은 방식). 현장명 →
+        업체명 → 배송일자 순으로 정렬돼 있고, 전표번호를 누르면 품목 세부내역을 볼 수 있어요. 품목 단위로 통째로 받고 싶으면 "엑셀로
+        다운로드"를 이용하세요.
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 14, flexWrap: "wrap" }}>
@@ -7838,7 +7925,7 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
         )}
         <button onClick={handleExportExcel} style={{ ...ghostBtnStyle, marginBottom: 1 }}>엑셀로 다운로드</button>
         <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 9 }}>
-          {filteredRows.length}건 · 수량 합계 {totalQty.toLocaleString("ko-KR")}개
+          {filteredGroups.length}건 · 수량 합계 {totalQty.toLocaleString("ko-KR")}개
         </div>
       </div>
 
@@ -7898,34 +7985,75 @@ function LedgerAutoSummaryTab({ rentals, onRefresh }) {
           <div>
             <input ref={selectAllRef} type="checkbox" checked={allChecked} onChange={toggleCheckedAll} />
           </div>
-          {["전표번호", "거래처", "현장명", "담당자", "배송일자", "렌탈종료일자", "품목", "규격", "수량", "금액"].map((label, i) => (
-            <div key={label} style={{ position: "relative" }}>
-              {label}
-              <ColResizeHandle onMouseDown={startResize(i)} />
-            </div>
-          ))}
+          {["전표번호", "거래처", "현장명", "담당자", "배송일자", "렌탈종료일자", "품목", "수량", "금액", "상태"].map((label, i) =>
+            sortAccessors[label] ? (
+              <div key={label} style={{ position: "relative" }}>
+                <button
+                  type="button"
+                  onClick={() => handleSortClick(label)}
+                  title="눌러서 정렬"
+                  style={{
+                    all: "unset",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 2,
+                    fontSize: 11.5,
+                    color: sortKey === label ? C.ink : C.muted,
+                    fontWeight: sortKey === label ? 700 : 400,
+                  }}
+                >
+                  {label}
+                  <span style={{ fontSize: 9, opacity: sortKey === label ? 1 : 0.35 }}>{sortKey === label ? (sortDir === "asc" ? "▲" : "▼") : "▲"}</span>
+                </button>
+                <ColResizeHandle onMouseDown={startResize(i)} />
+              </div>
+            ) : (
+              <div key={label} style={{ position: "relative" }}>
+                {label}
+                <ColResizeHandle onMouseDown={startResize(i)} />
+              </div>
+            )
+          )}
         </div>
-        {filteredRows.map((r) => (
-          <div
-            key={r.id}
-            style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 8, padding: "12px 14px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}`, minWidth: 1130, alignItems: "center" }}
-          >
-            <div>
-              <input type="checkbox" checked={checkedIds.has(r.id)} onChange={() => toggleChecked(r.id)} />
+        {filteredGroups.map((g) => {
+          const status = getStatus({ transaction_type: g.head.transaction_type, collected: g.rows.every((r) => r.collected), due_date: g.head.due_date });
+          const meta = STATUS_META[status];
+          const first = g.rows[0];
+          const extra = g.rows.length - 1;
+          const qtySum = g.rows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+          return (
+            <div
+              key={g.key}
+              style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 8, padding: "12px 14px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}`, minWidth: 1130, alignItems: "center" }}
+            >
+              <div>
+                <input type="checkbox" checked={checkedIds.has(g.key)} onChange={() => toggleChecked(g.key)} />
+              </div>
+              <button
+                onClick={() => setSelectedKey(g.key)}
+                style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
+              >
+                {g.voucherNo || "(번호없음)"}
+              </button>
+              <div>{g.head.customer || "-"}</div>
+              <div style={{ color: C.inkSoft, fontSize: 12.5 }}>{g.head.site_name || "-"}</div>
+              <div>{g.head.manager || "-"}</div>
+              <div style={{ fontSize: 12.5 }}>{(g.head.out_date || "").slice(0, 10) || "-"}</div>
+              <div style={{ fontSize: 12.5 }}>{(g.head.due_date || "").slice(0, 10) || "-"}</div>
+              <div>
+                {first?.item || "-"}
+                {extra > 0 ? ` 외 ${extra}건` : ""}
+              </div>
+              <div>{qtySum.toLocaleString("ko-KR")}</div>
+              <div>{fmtWon(g.amount)}</div>
+              <div>
+                <span style={{ fontSize: 11.5, padding: "3px 9px", background: meta.bg, color: meta.fg }}>{meta.label}</span>
+              </div>
             </div>
-            <div>{r.voucher_no || "-"}</div>
-            <div>{r.customer || "-"}</div>
-            <div>{r.site_name || "-"}</div>
-            <div>{r.manager || "-"}</div>
-            <div>{(r.out_date || "").slice(0, 10) || "-"}</div>
-            <div>{(r.due_date || "").slice(0, 10) || "-"}</div>
-            <div>{r.item || "-"}</div>
-            <div>{r.spec || "-"}</div>
-            <div>{(Number(r.qty) || 0).toLocaleString("ko-KR")}</div>
-            <div>{fmtWon(r.amount)}</div>
-          </div>
-        ))}
-        {filteredRows.length === 0 && (
+          );
+        })}
+        {filteredGroups.length === 0 && (
           <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>조건에 맞는 렌탈전표가 없어요.</div>
         )}
       </div>
