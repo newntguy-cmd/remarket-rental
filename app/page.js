@@ -10846,6 +10846,10 @@ function LayoutSimTab({ managerName = "" }) {
   const [savingBoard, setSavingBoard] = useState(false);
   const [loadingBoardId, setLoadingBoardId] = useState(null);
 
+  // 줄자 기능: 캔버스를 두 번 눌러 그 사이 실제 거리(cm/m)를 재본다. 세 번째 클릭부터는 새로 잰다.
+  const [rulerMode, setRulerMode] = useState(false);
+  const [rulerPoints, setRulerPoints] = useState([]); // [{xCm, yCm}] 0~2개
+
   const canvasRef = useRef(null);
 
   useEffect(() => {
@@ -10988,6 +10992,7 @@ function LayoutSimTab({ managerName = "" }) {
           xCm: Math.max(0, cmX - widthCm / 2),
           yCm: Math.max(0, cmY - depthCm / 2),
           rotation: 0,
+          flipped: false,
         },
       ]);
     } else if (payload.type === "placed") {
@@ -11018,12 +11023,37 @@ function LayoutSimTab({ managerName = "" }) {
     );
   }
 
+  // ㄱ자·U자는 회전만으로는 거울에 비친 반대쪽 모양(예: 퍼즐책상 좌향/우향)을 만들 수 없어서
+  // (돌리기만 하면 파인 모서리 위치는 바뀌어도 "꺾인 방향" 자체는 안 바뀜) 좌우 반전을 따로 둔다.
+  // 사각형은 반전해도 모양이 똑같아서 버튼을 아예 안 보여준다.
+  function handleFlipPlaced(id) {
+    setPlacedItems((prev) => prev.map((it) => (it.id === id ? { ...it, flipped: !it.flipped } : it)));
+  }
+
   function handleClearBoard() {
     if (placedItems.length > 0 && !confirm("현재 배치를 전부 지우고 새로 시작할까요? (저장하지 않은 배치는 사라져요)")) return;
     setPlacedItems([]);
     setCurrentBoardId(null);
     setBoardName("");
+    setRulerPoints([]);
   }
+
+  // 줄자: 캔버스를 누를 때마다 점을 하나씩 찍고, 두 점이 모이면 그 사이 실제 거리를 계산해 보여준다.
+  // 세 번째 클릭부터는 이전 측정을 지우고 새로 잰다.
+  function handleCanvasClick(e) {
+    if (!rulerMode) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const xCm = (e.clientX - rect.left) / scale;
+    const yCm = (e.clientY - rect.top) / scale;
+    setRulerPoints((prev) => (prev.length >= 2 ? [{ xCm, yCm }] : [...prev, { xCm, yCm }]));
+  }
+
+  function handleClearRuler() {
+    setRulerPoints([]);
+  }
+
+  const rulerDistanceCm =
+    rulerPoints.length === 2 ? Math.hypot(rulerPoints[1].xCm - rulerPoints[0].xCm, rulerPoints[1].yCm - rulerPoints[0].yCm) : null;
 
   async function handleSaveBoard() {
     const name = (boardName || "").trim();
@@ -11090,13 +11120,23 @@ function LayoutSimTab({ managerName = "" }) {
 
   return (
     <div>
+      <style>{`
+        @media print {
+          @page { size: landscape; margin: 10mm; }
+          body * { visibility: hidden; }
+          #layoutsim-print-area, #layoutsim-print-area * { visibility: visible; }
+          #layoutsim-print-area { position: absolute; top: 0; left: 0; width: 100%; padding: 12px; }
+          .layoutsim-no-print { display: none !important; }
+          .layoutsim-print-only { display: block !important; }
+        }
+      `}</style>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>배치 시뮬레이션</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         현장 공간 크기를 입력하고, 왼쪽 모형 목록에서 원하는 걸 끌어다 놓아보세요. 처음 쓰는 모형은 가로·세로 크기(cm)를
         한 번 등록해두면 다음부터 목록에 계속 남아있어요. 배치가 마음에 들면 이름을 붙여 저장해두고 나중에 다시 불러올 수 있어요.
       </div>
 
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 14, flexWrap: "wrap" }}>
+      <div className="layoutsim-no-print" style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 14, flexWrap: "wrap" }}>
         <Field label="공간 가로(m)">
           <input
             type="number"
@@ -11131,10 +11171,13 @@ function LayoutSimTab({ managerName = "" }) {
           {savingBoard ? "저장 중…" : currentBoardId ? "배치 저장(덮어쓰기)" : "배치 저장"}
         </button>
         <button onClick={handleClearBoard} style={ghostBtnStyle}>새로 만들기</button>
+        <button onClick={() => window.print()} style={ghostBtnStyle} title="배치판만 인쇄하거나 PDF로 저장해요(인쇄 대화상자에서 '대상'을 PDF로 저장으로 바꾸면 됩니다)">
+          PDF로 출력
+        </button>
       </div>
 
       {boards.length > 0 && (
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+        <div className="layoutsim-no-print" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
           <div style={{ fontSize: 12, color: C.muted }}>저장된 배치안:</div>
           {boards.map((b) => (
             <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -11158,7 +11201,7 @@ function LayoutSimTab({ managerName = "" }) {
       )}
 
       <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div style={{ width: 240, border: `1px solid ${C.line}`, background: C.panel, padding: 14 }}>
+        <div className="layoutsim-no-print" style={{ width: 240, border: `1px solid ${C.line}`, background: C.panel, padding: 14 }}>
           <div style={{ fontFamily: serif, fontSize: 14, marginBottom: 10 }}>모형 목록</div>
           {loadingShapes ? (
             <div style={{ fontSize: 12.5, color: C.muted }}>불러오는 중…</div>
@@ -11295,14 +11338,38 @@ function LayoutSimTab({ managerName = "" }) {
           </div>
         </div>
 
-        <div>
-          <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>
-            공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요.
+        <div id="layoutsim-print-area">
+          {/* 인쇄/PDF로 저장할 때는 화면의 안내문구 대신 이 제목만 보이게 한다(평소엔 숨겨둠). */}
+          <div className="layoutsim-print-only" style={{ display: "none", fontFamily: serif, fontSize: 16, marginBottom: 8 }}>
+            {boardName || "배치 시뮬레이션"} — 공간 {spaceWidthM}m × {spaceDepthM}m ({todayISO()} 기준)
+          </div>
+          <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+            <div style={{ fontSize: 12, color: C.muted }}>
+              공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요.
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <button
+                onClick={() => setRulerMode((v) => !v)}
+                title="캔버스를 두 번 눌러 두 지점 사이 거리를 재보세요"
+                style={{
+                  ...miniBtnStyle,
+                  background: rulerMode ? C.ink : "transparent",
+                  color: rulerMode ? "#fff" : C.inkSoft,
+                  borderColor: rulerMode ? C.ink : C.lineSoft,
+                }}
+              >
+                📏 줄자{rulerMode ? " (켜짐)" : ""}
+              </button>
+              {rulerPoints.length > 0 && (
+                <button onClick={handleClearRuler} style={miniBtnStyle}>줄자 지우기</button>
+              )}
+            </div>
           </div>
           <div
             ref={canvasRef}
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleCanvasDrop}
+            onClick={handleCanvasClick}
             style={{
               position: "relative",
               width: canvasWidthPx,
@@ -11312,6 +11379,7 @@ function LayoutSimTab({ managerName = "" }) {
               backgroundImage:
                 `repeating-linear-gradient(0deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${scale * 100}px), ` +
                 `repeating-linear-gradient(90deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${scale * 100}px)`,
+              cursor: rulerMode ? "crosshair" : "default",
             }}
           >
             {placedItems.map((it) => {
@@ -11353,7 +11421,7 @@ function LayoutSimTab({ managerName = "" }) {
                       left: "50%",
                       width: baseWPx,
                       height: baseHPx,
-                      transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
+                      transform: `translate(-50%, -50%) rotate(${rotation}deg) scaleX(${it.flipped ? -1 : 1})`,
                     }}
                   >
                     {isPoly ? (
@@ -11379,16 +11447,39 @@ function LayoutSimTab({ managerName = "" }) {
                   >
                     {it.name}
                   </div>
+                  {/* ㄱ자·U자만 좌우반전(퍼즐책상 좌향/우향)이 의미가 있어서, 사각형에는 안 보여준다.
+                      버튼 클릭이 캔버스까지 올라가서 줄자 클릭으로 잘못 잡히지 않도록 stopPropagation. */}
+                  {isPoly && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleFlipPlaced(it.id);
+                      }}
+                      title="좌우 반전(퍼즐책상 좌향/우향 등)"
+                      className="layoutsim-no-print"
+                      style={{ position: "absolute", top: 1, right: 31, border: "none", background: "transparent", cursor: "pointer", fontSize: 10, padding: 1 }}
+                    >
+                      ⇋
+                    </button>
+                  )}
                   <button
-                    onClick={() => handleRotatePlaced(it.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRotatePlaced(it.id);
+                    }}
                     title="90도 회전"
+                    className="layoutsim-no-print"
                     style={{ position: "absolute", top: 1, right: 16, border: "none", background: "transparent", cursor: "pointer", fontSize: 10, padding: 1 }}
                   >
                     ⟳
                   </button>
                   <button
-                    onClick={() => handleRemovePlaced(it.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRemovePlaced(it.id);
+                    }}
                     title="삭제"
+                    className="layoutsim-no-print"
                     style={{ position: "absolute", top: 1, right: 1, border: "none", background: "transparent", cursor: "pointer", fontSize: 11, padding: 1 }}
                   >
                     ×
@@ -11399,6 +11490,62 @@ function LayoutSimTab({ managerName = "" }) {
             {placedItems.length === 0 && (
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 12.5, pointerEvents: "none" }}>
                 왼쪽 모형 목록에서 끌어다 놓아보세요
+              </div>
+            )}
+            {/* 줄자: 찍은 점(1~2개)과, 두 점이 모이면 그 사이를 잇는 선 + 실제 거리(cm/m) 표시.
+                클릭/드래그를 막지 않도록 pointerEvents는 항상 none. */}
+            {rulerPoints.map((p, idx) => (
+              <div
+                key={`ruler-pt-${idx}`}
+                style={{
+                  position: "absolute",
+                  left: p.xCm * scale - 4,
+                  top: p.yCm * scale - 4,
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: "#e11d48",
+                  border: "1px solid #fff",
+                  pointerEvents: "none",
+                }}
+              />
+            ))}
+            {rulerPoints.length === 2 && (
+              <svg
+                width={canvasWidthPx}
+                height={canvasHeightPx}
+                style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+              >
+                <line
+                  x1={rulerPoints[0].xCm * scale}
+                  y1={rulerPoints[0].yCm * scale}
+                  x2={rulerPoints[1].xCm * scale}
+                  y2={rulerPoints[1].yCm * scale}
+                  stroke="#e11d48"
+                  strokeWidth={2}
+                  strokeDasharray="6,4"
+                />
+              </svg>
+            )}
+            {rulerDistanceCm != null && (
+              <div
+                className="layoutsim-no-print"
+                style={{
+                  position: "absolute",
+                  left: ((rulerPoints[0].xCm + rulerPoints[1].xCm) / 2) * scale,
+                  top: ((rulerPoints[0].yCm + rulerPoints[1].yCm) / 2) * scale,
+                  transform: "translate(-50%, -50%)",
+                  background: "#e11d48",
+                  color: "#fff",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: "2px 6px",
+                  borderRadius: 4,
+                  whiteSpace: "nowrap",
+                  pointerEvents: "none",
+                }}
+              >
+                {rulerDistanceCm >= 100 ? `${(rulerDistanceCm / 100).toFixed(2)}m (${rulerDistanceCm.toFixed(0)}cm)` : `${rulerDistanceCm.toFixed(1)}cm`}
               </div>
             )}
           </div>
