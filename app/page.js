@@ -925,6 +925,50 @@ function pdfParseNum(str) {
   return isNaN(n) ? null : n;
 }
 
+// 품목 표의 한 줄(row.items = pdf.js 텍스트 조각들)을 품목/규격/수량/단가/금액/비고 칸으로 분류한다.
+// 두 가지 흔한 오분류를 막는다.
+// 1) 왼쪽 정렬된 넓은 칸(예: "규격"에 긴 스펙 설명)은 글자가 칸 가운데가 아니라 칸의 왼쪽 끝(=옆 칸에 더
+//    가까운 위치)에서 시작하는 경우가 많다. 조각의 "시작 위치"만 보고 칸을 정하면 옆의 좁은 칸(예: "품목")
+//    쪽으로 잘못 판정될 수 있어, 조각 전체의 "가운데 위치"(x + 너비/2)로 판정한다.
+// 2) 일부 견적서 양식은 "수량 + 단가 + 금액"처럼 서로 다른 칸에 걸친 값들을, 칸 사이 넓은 간격을 공백 여러
+//    칸으로만 표현한 채 하나의 텍스트 조각으로 통째로 찍어낸다(별도로 위치를 다시 잡지 않는 PDF 생성 방식).
+//    이 경우 조각 하나를 통째로 한 칸에 넣으면 "수량"만 이상하게 큰 숫자로 찍히고 "단가"·"금액"은 비어버린다.
+//    그래서 공백 두 칸 이상(칸 사이만큼 넓은 간격)이 조각 안에 있으면 그 지점 기준으로 잘게 쪼개고, 조각별로
+//    글자 폭 비례로 위치를 추정해 각자 따로 칸을 판정한다. 보통 문장 안의 단어 사이 한 칸 공백(예: "규격"
+//    설명 안의 "W1800*D800, 보조포함")은 이 기준(2칸 이상)에 걸리지 않아 하나의 칸 값으로 그대로 유지된다.
+function classifyPdfRowItems(rowItems, colCenters) {
+  const classify = (x) => {
+    let best = null;
+    let bestDist = Infinity;
+    for (const [k, cx] of Object.entries(colCenters)) {
+      const d = Math.abs(x - cx);
+      if (d < bestDist) {
+        bestDist = d;
+        best = k;
+      }
+    }
+    return best;
+  };
+  const bucket = { item: [], spec: [], qty: [], price: [], amount: [], note: [] };
+  for (const it of rowItems || []) {
+    const w = it.w || it.str.length * 6;
+    const pieces = it.str.split(/\s{2,}/).filter(Boolean);
+    if (pieces.length > 1) {
+      const charW = it.str.length ? w / it.str.length : 6;
+      let searchFrom = 0;
+      for (const piece of pieces) {
+        const idx = it.str.indexOf(piece, searchFrom);
+        searchFrom = idx + piece.length;
+        const pieceCenterX = it.x + (idx + piece.length / 2) * charW;
+        bucket[classify(pieceCenterX)].push(piece);
+      }
+      continue;
+    }
+    bucket[classify(it.x + w / 2)].push(it.str);
+  }
+  return bucket;
+}
+
 async function parseQuotePdf(file) {
   const pdfjsLib = await import("pdfjs-dist/build/pdf.mjs");
   // 워커 파일을 프로젝트 번들 안에 직접 넣으면 Vercel 빌드 압축 도구(Terser)가 이 파일의 최신 모듈 문법을
@@ -1103,24 +1147,10 @@ async function parseQuotePdf(file) {
     }
     if (!colCenters) continue; // 이 페이지엔 아직 품목 표 머리글이 없음(정보 영역만 있는 페이지 등)
 
-    const classify = (x) => {
-      let best = null;
-      let bestDist = Infinity;
-      for (const [k, cx] of Object.entries(colCenters)) {
-        const d = Math.abs(x - cx);
-        if (d < bestDist) {
-          bestDist = d;
-          best = k;
-        }
-      }
-      return best;
-    };
-
     const dataRows = headerRow ? rows.filter((r) => r.y < headerRow.y - 3) : rows;
 
     for (const row of dataRows) {
-      const bucket = { item: [], spec: [], qty: [], price: [], amount: [], note: [] };
-      for (const it of row.items) bucket[classify(it.x)].push(it.str);
+      const bucket = classifyPdfRowItems(row.items, colCenters);
       const itemStr = bucket.item.join("").trim();
       const specStr = bucket.spec.join(" ").trim();
       const qtyStr = bucket.qty.join("").trim();
@@ -1752,7 +1782,7 @@ function Dashboard({ profile, onLogout }) {
       const parsed = isPdf ? await parseQuotePdf(file) : await parseQuoteExcel(file);
       parsed.isPdf = isPdf;
       // 품목/규격 기준으로 기준표(+직원이 이전에 저장해둔 값)를 찾아 화물차 적재 톤수를 자동으로 채운다.
-      parsed.items = withComputedTons(parsed.items, tonOverrides);
+      parsed.items = withComputedTons(parsed.items, tonOverrides, parsed.site);
       // 전표번호는 견적서 상단의 "#숫자" 관리번호를 찾았으면 자동으로 채워두되(parseQuotePdf/parseQuoteExcel에서
       // 처리), 못 찾았을 땐 예전처럼 그대로 공란이라 직접 입력해야 한다. 어느 쪽이든 등록 확인 화면에서
       // 직접 수정할 수 있고, 비어있으면 등록 버튼(confirmImport)이 막아준다.
@@ -1777,7 +1807,7 @@ function Dashboard({ profile, onLogout }) {
     try {
       const parsed = parsePastedQuoteText(text);
       parsed.isPdf = false;
-      parsed.items = withComputedTons(parsed.items, tonOverrides);
+      parsed.items = withComputedTons(parsed.items, tonOverrides, parsed.site);
       // 전표번호는 parsePastedQuoteText에서 "#숫자" 관리번호를 찾았으면 이미 채워져 있고, 못 찾았으면
       // 예전처럼 공란이라 직접 입력해야 한다(등록 확인 화면에서 언제든 직접 수정 가능).
       if (!isAdmin) parsed.manager = managerName;
@@ -3174,9 +3204,12 @@ function isTonExcludedItem(item, spec) {
 // 품목 리스트(items)를 받아 각 행에 톤수(수량 × 개당용적)를 채워서 반환한다. 정말 비슷한 품목조차 없을 때만 톤수를 null로 둔다.
 // DC/설치비/배송비 등 요금성 품목은 tonExcluded:true로 표시하고 애초에 톤수 조회 대상에서 뺀다
 // ("미확인"이 아니라 "해당 없음"이므로, 화면에서 노란 칸으로 직접 입력을 요구하지 않는다).
-function withComputedTons(items, customOverrides) {
+// address가 수도권(서울/경기/인천)이면 냉난방기도 마찬가지로 tonExcluded 처리한다(8번 요청).
+function withComputedTons(items, customOverrides, address) {
+  const excludeAirconTon = isMetroAreaAddress(address);
   return (items || []).map((it) => {
     if (isTonExcludedItem(it.item, it.spec)) return { ...it, ton: null, tonExcluded: true };
+    if (excludeAirconTon && normalizeTonText(it.item).includes("냉난방기")) return { ...it, ton: null, tonExcluded: true };
     const per = lookupTonPerUnit(it.item, it.spec, customOverrides);
     const ton = per != null && it.qty ? Math.round(Number(it.qty) * per * 1000) / 1000 : null;
     return { ...it, ton, tonExcluded: false };
@@ -3710,6 +3743,18 @@ function findZoneIndex(zones, address) {
   return idx >= 0 ? idx : null;
 }
 
+// "수도권"(서울/경기/인천) 판정 — 8번 요청: 수도권은 냉난방기를 톤수 계산에서 제외한다(왜: 수도권은 냉난방기를
+// 별도 전문기사가 직접 차량으로 싣고 가서 설치하는 경우가 많아 화물차 적재 톤수에 넣지 않는다는 현업 기준).
+// 주소에 "서울"/"경기"/"인천"이 직접 적혀 있으면 그대로 수도권으로 보고, 시/군 이름만 적혀 있어도(예: "용인시 기흥구")
+// 구매 배송료 표의 인근지역~경기(장거리) 구역(0~4번, 전부 수도권)에 걸리면 수도권으로 판정한다. "광주"처럼 다른
+// 지역과 이름이 겹치는 애매한 키워드는 findZoneIndex가 이미 처리해주는 예외 목록을 그대로 재사용한다.
+function isMetroAreaAddress(address) {
+  const a = address || "";
+  if (a.includes("서울") || a.includes("경기") || a.includes("인천")) return true;
+  const idx = findZoneIndex(PURCHASE_DELIVERY_ZONES, a);
+  return idx != null && idx <= 4;
+}
+
 // ---------- 카카오맵으로 "용인시 기흥구 공세동(모든 용차 출발지 기준) ↔ 배송지" 실거리를 계산하는 기능 ----------
 // 서울/수도권 용차 구간표(10km 이하 ~ 90km 미만)는 지역명이 아니라 "거리"로 나뉘어 있어서 주소 키워드 매칭으로는
 // 자동 선택이 안 된다. 그래서 주소를 좌표로 변환(지오코딩)해서 실제 거리를 계산해 구간을 맞춘다.
@@ -4124,8 +4169,8 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
 
   const rawItems = useMemo(() => parsePastedItems(text), [text]);
   const items = useMemo(
-    () => withComputedTons(rawItems, tonOverrides).map((it, idx) => (tonEdits[idx] !== undefined ? { ...it, ton: tonEdits[idx] === "" ? null : Number(tonEdits[idx]) } : it)),
-    [rawItems, tonOverrides, tonEdits]
+    () => withComputedTons(rawItems, tonOverrides, address).map((it, idx) => (tonEdits[idx] !== undefined ? { ...it, ton: tonEdits[idx] === "" ? null : Number(tonEdits[idx]) } : it)),
+    [rawItems, tonOverrides, tonEdits, address]
   );
 
   // 사용자가 "선택삭제"로 이 계산에서 뺀 행(원본 items 배열의 인덱스 기준). 카드①(품목별 데이터)·카드②(톤수 계산)
@@ -5432,7 +5477,7 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
   // 바로 반영해서 보여주기 위한 임시 값(ton_overrides 저장은 물론 별도로 함).
   const [localTonOverrides, setLocalTonOverrides] = useState([]);
   const effectiveTonOverrides = useMemo(() => [...(tonOverrides || []), ...localTonOverrides], [tonOverrides, localTonOverrides]);
-  const itemsWithTon = useMemo(() => withComputedTons(items, effectiveTonOverrides), [items, effectiveTonOverrides]);
+  const itemsWithTon = useMemo(() => withComputedTons(items, effectiveTonOverrides, header.siteAddress), [items, effectiveTonOverrides, header.siteAddress]);
   const tonApplicableItems = itemsWithTon.filter((it) => !it.tonExcluded);
   const tonKnownItems = tonApplicableItems.filter((it) => it.ton != null);
   const totalTon = tonKnownItems.reduce((s, it) => s + Number(it.ton), 0);
