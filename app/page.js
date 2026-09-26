@@ -10867,6 +10867,59 @@ function roundEndTablePathD(widthCm, depthCm) {
   return `M 0,0 L ${W},0 L ${W},${rectDepth} A ${radius},${radius} 0 0 1 0,${rectDepth} Z`;
 }
 
+// 사무용 의자를 캐드(CAD) 도면처럼 위에서 내려다본 모양으로 그린다. 등받이(맨 위, 헤드레스트 포함)·
+// 팔걸이(좌우)·좌판(가운데)·회전축과 5방향 캐스터(바퀴) 달린 별 모양 다리(맨 아래)까지, 실제 사무용
+// 의자를 도면에서 표시할 때 쓰는 기호에 가깝게 조합한다. width_cm×depth_cm 박스 안에 맞춰 그려서
+// 등받이가 위(0)쪽, 다리(캐스터)가 아래(depth)쪽을 향하도록 기본 방향을 잡아뒀고, 회전 버튼으로 다른
+// 방향도 그대로 돌릴 수 있다.
+function ChairTopIcon({ w, d, fill, stroke }) {
+  const W = Number(w) || 0;
+  const D = Number(d) || 0;
+  const minWD = Math.min(W, D);
+  const strokeW = Math.max(minWD * 0.02, 0.4);
+  // 헤드레스트(맨 위, 좁게) + 등받이(그 아래, 조금 더 넓게)
+  const headW = W * 0.34;
+  const headH = D * 0.09;
+  const backW = W * 0.62;
+  const backH = D * 0.19;
+  const backY = headH * 0.55;
+  // 팔걸이(좌우, 등받이와 좌판 사이 높이)
+  const armW = W * 0.11;
+  const armH = D * 0.32;
+  const armY = D * 0.28;
+  // 좌판(등받이 아래, 팔걸이 사이)
+  const seatW = W * 0.64;
+  const seatH = D * 0.34;
+  const seatY = D * 0.27;
+  // 회전축(가운데 작은 원) + 5방향으로 뻗은 캐스터(바퀴) 달린 별 모양 다리
+  const baseCx = W / 2;
+  const baseCy = D * 0.84;
+  const spokeLen = minWD * 0.32;
+  const casterR = Math.max(minWD * 0.045, 0.6);
+  const spokeAngleDeg = [-90, -18, 54, 126, 198];
+  return (
+    <g fill={fill} stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round">
+      {spokeAngleDeg.map((deg) => {
+        const rad = (deg * Math.PI) / 180;
+        const ex = baseCx + Math.cos(rad) * spokeLen;
+        const ey = baseCy + Math.sin(rad) * spokeLen;
+        return (
+          <g key={deg}>
+            <line x1={baseCx} y1={baseCy} x2={ex} y2={ey} stroke={stroke} strokeWidth={strokeW * 1.4} />
+            <circle cx={ex} cy={ey} r={casterR} fill={stroke} stroke="none" />
+          </g>
+        );
+      })}
+      <circle cx={baseCx} cy={baseCy} r={Math.max(minWD * 0.05, casterR * 0.8)} fill={stroke} stroke="none" />
+      <rect x={(W - seatW) / 2} y={seatY} width={seatW} height={seatH} rx={seatH * 0.18} />
+      <rect x={0} y={armY} width={armW} height={armH} rx={armW * 0.35} />
+      <rect x={W - armW} y={armY} width={armW} height={armH} rx={armW * 0.35} />
+      <rect x={(W - backW) / 2} y={backY} width={backW} height={backH} rx={backH * 0.3} />
+      <rect x={(W - headW) / 2} y={0} width={headW} height={headH} rx={headH * 0.4} />
+    </g>
+  );
+}
+
 // ---------- 배치 시뮬레이션 ----------
 // 공간 크기(가로×세로, m)를 입력하면 그 비율의 네모 박스가 나오고, 미리 등록해둔 모형(품목명+가로×세로,
 // 사각형 외에 ㄱ자·U자 모양도 가능)을 드래그앤드랍으로 박스 안에 가져다 놓아볼 수 있다. 모형 크기는
@@ -10876,7 +10929,7 @@ function LayoutSimTab({ managerName = "" }) {
   const [shapes, setShapes] = useState([]);
   const [loadingShapes, setLoadingShapes] = useState(true);
   const [newShapeName, setNewShapeName] = useState("");
-  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "u"(U자) | "circle"(원형) | "roundend"(한쪽둥근)
+  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "u"(U자) | "circle"(원형) | "roundend"(한쪽둥근) | "chair"(캐드식 의자)
   const [newShapeWidth, setNewShapeWidth] = useState("");
   const [newShapeDepth, setNewShapeDepth] = useState("");
   const [newShapeNotchWidth, setNewShapeNotchWidth] = useState(""); // ㄱ자: 잘려나간 모서리, U자: 안쪽 파인 부분
@@ -10999,7 +11052,7 @@ function LayoutSimTab({ managerName = "" }) {
 
   // 모형이 많아져도 한눈에 찾기 쉽게 큰 카테고리(책상류/테이블류 등)로 묶는다. 카테고리가 안 적혀있으면
   // "기타"로 묶고, 알려진 카테고리를 먼저 보여준 뒤 나머지는 이름순으로 뒤에 붙인다.
-  const CATEGORY_ORDER = ["책상류", "테이블류", "책장류", "소파·파티션·기타", "컨테이너", "기타"];
+  const CATEGORY_ORDER = ["책상류", "의자류", "테이블류", "책장류", "소파·파티션·기타", "컨테이너", "기타"];
   const shapesByCategory = useMemo(() => {
     const map = {};
     for (const s of shapes) {
@@ -11032,12 +11085,13 @@ function LayoutSimTab({ managerName = "" }) {
   }, [shapes, shapeSearchQuery]);
 
   // 모형 목록 한 줄(카테고리 펼친 목록·검색 결과 둘 다 이걸로 그린다) — 드래그해서 배치판에 놓는 것도,
-  // 모양별 미리보기(사각형/ㄱ자·U자 다각형/원형)도, 삭제 버튼도 여기서 한 군데만 관리한다.
+  // 모양별 미리보기(사각형/ㄱ자·U자 다각형/원형/캐드식 의자)도, 삭제 버튼도 여기서 한 군데만 관리한다.
   function renderShapeRow(s) {
     const shapeType = s.shape_type || "rect";
     const isPoly = shapeType === "l" || shapeType === "u";
     const isCircle = shapeType === "circle";
     const isRoundEnd = shapeType === "roundend";
+    const isChair = shapeType === "chair";
     const previewPoints = isPoly
       ? shapePolygonPoints(shapeType, s.width_cm, s.depth_cm, s.notch_width_cm, s.notch_depth_cm)
           .map((p) => p.join(","))
@@ -11079,6 +11133,10 @@ function LayoutSimTab({ managerName = "" }) {
         ) : isRoundEnd ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
             <path d={roundEndTablePathD(s.width_cm, s.depth_cm)} fill={C.purpleBg} stroke={C.purple} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
+          </svg>
+        ) : isChair ? (
+          <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
+            <ChairTopIcon w={s.width_cm} d={s.depth_cm} fill={C.purpleBg} stroke={C.purple} />
           </svg>
         ) : (
           <div style={{ width: 14, height: 14, background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 2, flexShrink: 0 }} />
@@ -11779,6 +11837,7 @@ function LayoutSimTab({ managerName = "" }) {
                 { key: "u", label: "U자" },
                 { key: "circle", label: "원형" },
                 { key: "roundend", label: "한쪽둥근" },
+                { key: "chair", label: "의자(캐드형)" },
               ].map((opt) => (
                 <button
                   key={opt.key}
@@ -11910,6 +11969,7 @@ function LayoutSimTab({ managerName = "" }) {
               const isPoly = it.shapeType === "l" || it.shapeType === "u";
               const isCircle = it.shapeType === "circle";
               const isRoundEnd = it.shapeType === "roundend";
+              const isChair = it.shapeType === "chair";
               const polyPoints = isPoly
                 ? shapePolygonPoints(it.shapeType, it.widthCm, it.depthCm, it.notchWidthCm, it.notchDepthCm)
                     .map((p) => p.join(","))
@@ -11963,6 +12023,10 @@ function LayoutSimTab({ managerName = "" }) {
                     ) : isRoundEnd ? (
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={{ display: "block" }}>
                         <path d={roundEndTablePathD(it.widthCm, it.depthCm)} fill={C.purpleBg} stroke={C.purple} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                      </svg>
+                    ) : isChair ? (
+                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={{ display: "block" }}>
+                        <ChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
                       </svg>
                     ) : (
                       <div style={{ width: "100%", height: "100%", background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 3, boxSizing: "border-box" }} />
