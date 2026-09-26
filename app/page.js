@@ -1912,6 +1912,7 @@ function Dashboard({ profile, onLogout }) {
     ...(isStaff ? [{ key: "customerData", label: "업체별데이터" }] : []),
     ...(isStaff ? [{ key: "asboard", label: "A/S관리대장" }] : []),
     ...(isStaff ? [{ key: "collectionboard", label: "렌탈회수관리" }] : []),
+    ...(isStaff ? [{ key: "layoutSim", label: "배치 시뮬레이션" }] : []),
     ...(isStaff ? [{ key: "ledgerAuto", label: "현장별 렌탈잔량(자동등록)", star: true }] : []),
     ...(isStaff ? [{ key: "ledger", label: "현장별 렌탈잔량(심화관리)", star: true, starColor: "#FF1E1E" }] : []),
   ];
@@ -2133,6 +2134,8 @@ function Dashboard({ profile, onLogout }) {
         {activeTab === "collectionboard" && isStaff && (
           <CollectionBoardTab key={collectionboardResetKey} isAdmin={isAdmin} managerName={managerName} />
         )}
+
+        {activeTab === "layoutSim" && isStaff && <LayoutSimTab managerName={managerName} />}
 
         {activeTab == null && isStaff && (
           <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 40, textAlign: "center", color: C.muted, fontSize: 13.5 }}>
@@ -10761,6 +10764,463 @@ function CollectionRequestForm({ initial, prefill, isAdmin, managerName, onCance
         <button onClick={onCancel} style={ghostBtnStyle}>
           취소
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- 배치 시뮬레이션 ----------
+// 공간 크기(가로×세로, m)를 입력하면 그 비율의 네모 박스가 나오고, 미리 등록해둔 모형(품목명+가로×세로)을
+// 드래그앤드랍으로 박스 안에 가져다 놓아볼 수 있다. 모형 크기는 처음 쓸 때 한 번 등록해두면(톤수 기준표와
+// 같은 방식) 다음부터는 목록에서 바로 꺼내 쓸 수 있고, 배치한 결과는 이름을 붙여 저장해뒀다가 나중에 다시
+// 불러올 수 있다.
+function LayoutSimTab({ managerName = "" }) {
+  const [shapes, setShapes] = useState([]);
+  const [loadingShapes, setLoadingShapes] = useState(true);
+  const [newShapeName, setNewShapeName] = useState("");
+  const [newShapeWidth, setNewShapeWidth] = useState("");
+  const [newShapeDepth, setNewShapeDepth] = useState("");
+  const [savingShape, setSavingShape] = useState(false);
+
+  const [widthInput, setWidthInput] = useState("5");
+  const [depthInput, setDepthInput] = useState("4");
+  const [spaceWidthM, setSpaceWidthM] = useState(5);
+  const [spaceDepthM, setSpaceDepthM] = useState(4);
+
+  // 배치판 위에 실제로 놓인 모형들. cm 단위 좌표로 들고 있다가 화면에 그릴 때만 축척(scale)을 곱해 px로 바꾼다.
+  const [placedItems, setPlacedItems] = useState([]);
+  const nextPlacedIdRef = useRef(0);
+  const nextPlacedId = () => {
+    nextPlacedIdRef.current += 1;
+    return `p${nextPlacedIdRef.current}`;
+  };
+
+  const [boards, setBoards] = useState([]);
+  const [currentBoardId, setCurrentBoardId] = useState(null);
+  const [boardName, setBoardName] = useState("");
+  const [savingBoard, setSavingBoard] = useState(false);
+  const [loadingBoardId, setLoadingBoardId] = useState(null);
+
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    fetchShapes();
+    fetchBoards();
+  }, []);
+
+  async function fetchShapes() {
+    setLoadingShapes(true);
+    const { data, error } = await supabase.from("layout_shapes").select("*").order("name", { ascending: true });
+    if (!error) setShapes(data || []);
+    setLoadingShapes(false);
+  }
+
+  async function fetchBoards() {
+    const { data, error } = await supabase
+      .from("layout_boards")
+      .select("id, name, width_m, depth_m, updated_at")
+      .order("updated_at", { ascending: false });
+    if (!error) setBoards(data || []);
+  }
+
+  async function handleAddShape() {
+    const w = Number(newShapeWidth);
+    const d = Number(newShapeDepth);
+    if (!newShapeName.trim()) {
+      alert("모형 이름을 입력해주세요.");
+      return;
+    }
+    if (!w || !d) {
+      alert("가로·세로 크기(cm)를 입력해주세요.");
+      return;
+    }
+    setSavingShape(true);
+    const { error } = await supabase.from("layout_shapes").insert({ name: newShapeName.trim(), width_cm: w, depth_cm: d });
+    setSavingShape(false);
+    if (error) {
+      alert("모형 저장 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setNewShapeName("");
+    setNewShapeWidth("");
+    setNewShapeDepth("");
+    fetchShapes();
+  }
+
+  async function handleDeleteShape(id) {
+    if (!confirm("이 모형을 목록에서 삭제할까요? (이미 배치판에 놓아둔 것들은 그대로 남아요)")) return;
+    const { error } = await supabase.from("layout_shapes").delete().eq("id", id);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    fetchShapes();
+  }
+
+  function handleCreateSpace() {
+    const w = Number(widthInput);
+    const d = Number(depthInput);
+    if (!w || !d || w <= 0 || d <= 0) {
+      alert("가로·세로 크기(m)를 입력해주세요.");
+      return;
+    }
+    setSpaceWidthM(w);
+    setSpaceDepthM(d);
+  }
+
+  // 실제 공간(cm)을 화면에 몇 px로 그릴지 축척을 정한다 — 가로·세로 둘 다 정해둔 최대 크기 안에 들어오도록.
+  const MAX_CANVAS_W = 760;
+  const MAX_CANVAS_H = 520;
+  const scale = Math.min(MAX_CANVAS_W / (spaceWidthM * 100), MAX_CANVAS_H / (spaceDepthM * 100));
+  const canvasWidthPx = spaceWidthM * 100 * scale;
+  const canvasHeightPx = spaceDepthM * 100 * scale;
+
+  // 모형 목록(왼쪽)에서 새로 끌어올 때 — 드래그하는 게 "카탈로그의 어떤 모형"인지만 담아 보낸다.
+  function handleDragStartCatalog(e, shape) {
+    e.dataTransfer.setData("text/plain", JSON.stringify({ type: "catalog", shapeId: shape.id }));
+  }
+
+  // 배치판 위에 이미 놓인 모형을 다시 끌 때 — 마우스가 그 모형의 왼쪽 위 모서리에서 얼마나 떨어진
+  // 지점을 잡았는지(offset)도 같이 담아서, 놓았을 때 모형이 마우스 쪽으로 툭 튀지 않고 자연스럽게 옮겨지게 한다.
+  function handleDragStartPlaced(e, placed) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const offsetXCm = (e.clientX - rect.left) / scale;
+    const offsetYCm = (e.clientY - rect.top) / scale;
+    e.dataTransfer.setData("text/plain", JSON.stringify({ type: "placed", placedId: placed.id, offsetXCm, offsetYCm }));
+  }
+
+  function handleCanvasDrop(e) {
+    e.preventDefault();
+    let payload;
+    try {
+      payload = JSON.parse(e.dataTransfer.getData("text/plain"));
+    } catch {
+      return;
+    }
+    const rect = canvasRef.current.getBoundingClientRect();
+    const cmX = (e.clientX - rect.left) / scale;
+    const cmY = (e.clientY - rect.top) / scale;
+
+    if (payload.type === "catalog") {
+      const shape = shapes.find((s) => s.id === payload.shapeId);
+      if (!shape) return;
+      const widthCm = Number(shape.width_cm);
+      const depthCm = Number(shape.depth_cm);
+      setPlacedItems((prev) => [
+        ...prev,
+        {
+          id: nextPlacedId(),
+          shapeId: shape.id,
+          name: shape.name,
+          widthCm,
+          depthCm,
+          xCm: Math.max(0, cmX - widthCm / 2),
+          yCm: Math.max(0, cmY - depthCm / 2),
+          rotated: false,
+        },
+      ]);
+    } else if (payload.type === "placed") {
+      setPlacedItems((prev) =>
+        prev.map((it) =>
+          it.id === payload.placedId
+            ? { ...it, xCm: Math.max(0, cmX - (payload.offsetXCm || 0)), yCm: Math.max(0, cmY - (payload.offsetYCm || 0)) }
+            : it
+        )
+      );
+    }
+  }
+
+  function handleRemovePlaced(id) {
+    setPlacedItems((prev) => prev.filter((it) => it.id !== id));
+  }
+
+  function handleRotatePlaced(id) {
+    setPlacedItems((prev) => prev.map((it) => (it.id === id ? { ...it, rotated: !it.rotated } : it)));
+  }
+
+  function handleClearBoard() {
+    if (placedItems.length > 0 && !confirm("현재 배치를 전부 지우고 새로 시작할까요? (저장하지 않은 배치는 사라져요)")) return;
+    setPlacedItems([]);
+    setCurrentBoardId(null);
+    setBoardName("");
+  }
+
+  async function handleSaveBoard() {
+    const name = (boardName || "").trim();
+    if (!name) {
+      alert("배치 이름을 입력해주세요.");
+      return;
+    }
+    setSavingBoard(true);
+    const payload = {
+      name,
+      width_m: spaceWidthM,
+      depth_m: spaceDepthM,
+      items: placedItems,
+      manager: managerName || null,
+      updated_at: new Date().toISOString(),
+    };
+    let error;
+    if (currentBoardId) {
+      ({ error } = await supabase.from("layout_boards").update(payload).eq("id", currentBoardId));
+    } else {
+      const { data, error: insertError } = await supabase.from("layout_boards").insert(payload).select().single();
+      error = insertError;
+      if (!error && data) setCurrentBoardId(data.id);
+    }
+    setSavingBoard(false);
+    if (error) {
+      alert("저장 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    fetchBoards();
+  }
+
+  async function handleLoadBoard(id) {
+    if (!id) return;
+    setLoadingBoardId(id);
+    const { data, error } = await supabase.from("layout_boards").select("*").eq("id", id).single();
+    setLoadingBoardId(null);
+    if (error || !data) {
+      alert("불러오는 중 오류가 발생했어요: " + (error?.message || "알 수 없는 오류"));
+      return;
+    }
+    setSpaceWidthM(Number(data.width_m));
+    setSpaceDepthM(Number(data.depth_m));
+    setWidthInput(String(data.width_m));
+    setDepthInput(String(data.depth_m));
+    setPlacedItems(Array.isArray(data.items) ? data.items : []);
+    setCurrentBoardId(data.id);
+    setBoardName(data.name);
+  }
+
+  async function handleDeleteBoard(id) {
+    if (!confirm("이 배치안을 삭제할까요? 되돌릴 수 없어요.")) return;
+    const { error } = await supabase.from("layout_boards").delete().eq("id", id);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    if (currentBoardId === id) {
+      setCurrentBoardId(null);
+      setBoardName("");
+    }
+    fetchBoards();
+  }
+
+  return (
+    <div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>배치 시뮬레이션</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+        현장 공간 크기를 입력하고, 왼쪽 모형 목록에서 원하는 걸 끌어다 놓아보세요. 처음 쓰는 모형은 가로·세로 크기(cm)를
+        한 번 등록해두면 다음부터 목록에 계속 남아있어요. 배치가 마음에 들면 이름을 붙여 저장해두고 나중에 다시 불러올 수 있어요.
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 14, flexWrap: "wrap" }}>
+        <Field label="공간 가로(m)">
+          <input
+            type="number"
+            step="0.1"
+            min="0.1"
+            style={{ ...inputStyle, width: 100 }}
+            value={widthInput}
+            onChange={(e) => setWidthInput(e.target.value)}
+          />
+        </Field>
+        <Field label="공간 세로(m)">
+          <input
+            type="number"
+            step="0.1"
+            min="0.1"
+            style={{ ...inputStyle, width: 100 }}
+            value={depthInput}
+            onChange={(e) => setDepthInput(e.target.value)}
+          />
+        </Field>
+        <button onClick={handleCreateSpace} style={primaryBtnStyle2}>배치판 만들기</button>
+        <div style={{ flex: 1, minWidth: 8 }} />
+        <Field label="배치 이름">
+          <input
+            style={{ ...inputStyle, width: 160 }}
+            value={boardName}
+            onChange={(e) => setBoardName(e.target.value)}
+            placeholder="예: 쌍령공원 2단지"
+          />
+        </Field>
+        <button onClick={handleSaveBoard} disabled={savingBoard} style={miniBtnStylePrimary}>
+          {savingBoard ? "저장 중…" : currentBoardId ? "배치 저장(덮어쓰기)" : "배치 저장"}
+        </button>
+        <button onClick={handleClearBoard} style={ghostBtnStyle}>새로 만들기</button>
+      </div>
+
+      {boards.length > 0 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 12, color: C.muted }}>저장된 배치안:</div>
+          {boards.map((b) => (
+            <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <button
+                onClick={() => handleLoadBoard(b.id)}
+                disabled={loadingBoardId === b.id}
+                style={{ ...miniBtnStyle, borderColor: currentBoardId === b.id ? C.ink : undefined }}
+              >
+                {loadingBoardId === b.id ? "불러오는 중…" : b.name}
+              </button>
+              <button
+                onClick={() => handleDeleteBoard(b.id)}
+                title="이 배치안 삭제"
+                style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 13 }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div style={{ width: 240, border: `1px solid ${C.line}`, background: C.panel, padding: 14 }}>
+          <div style={{ fontFamily: serif, fontSize: 14, marginBottom: 10 }}>모형 목록</div>
+          {loadingShapes ? (
+            <div style={{ fontSize: 12.5, color: C.muted }}>불러오는 중…</div>
+          ) : shapes.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>아직 등록된 모형이 없어요. 아래에서 추가해보세요.</div>
+          ) : (
+            <div style={{ marginBottom: 14 }}>
+              {shapes.map((s) => (
+                <div
+                  key={s.id}
+                  draggable
+                  onDragStart={(e) => handleDragStartCatalog(e, s)}
+                  title="끌어서 배치판에 놓으세요"
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "8px 10px",
+                    marginBottom: 6,
+                    border: `1px solid ${C.lineSoft}`,
+                    background: C.bg,
+                    borderRadius: 6,
+                    cursor: "grab",
+                    fontSize: 12.5,
+                  }}
+                >
+                  <span>
+                    {s.name} <span style={{ color: C.muted, fontSize: 11 }}>({s.width_cm}×{s.depth_cm}cm)</span>
+                  </span>
+                  <button
+                    onClick={() => handleDeleteShape(s.id)}
+                    title="모형 삭제"
+                    style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 12 }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ borderTop: `1px solid ${C.lineSoft}`, paddingTop: 10 }}>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>+ 새 모형 추가</div>
+            <input
+              style={{ ...smallInputStyle, width: "100%", marginBottom: 6, boxSizing: "border-box" }}
+              placeholder="모형 이름 (예: 탑책상)"
+              value={newShapeName}
+              onChange={(e) => setNewShapeName(e.target.value)}
+            />
+            <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+              <input
+                type="number"
+                style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
+                placeholder="가로(cm)"
+                value={newShapeWidth}
+                onChange={(e) => setNewShapeWidth(e.target.value)}
+              />
+              <input
+                type="number"
+                style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
+                placeholder="세로(cm)"
+                value={newShapeDepth}
+                onChange={(e) => setNewShapeDepth(e.target.value)}
+              />
+            </div>
+            <button onClick={handleAddShape} disabled={savingShape} style={{ ...miniBtnStyle, width: "100%" }}>
+              {savingShape ? "저장 중…" : "+ 모형 추가"}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>
+            공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요.
+          </div>
+          <div
+            ref={canvasRef}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleCanvasDrop}
+            style={{
+              position: "relative",
+              width: canvasWidthPx,
+              height: canvasHeightPx,
+              border: `2px solid ${C.ink}`,
+              backgroundColor: C.panel,
+              backgroundImage:
+                `repeating-linear-gradient(0deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${scale * 100}px), ` +
+                `repeating-linear-gradient(90deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${scale * 100}px)`,
+            }}
+          >
+            {placedItems.map((it) => {
+              const wPx = (it.rotated ? it.depthCm : it.widthCm) * scale;
+              const hPx = (it.rotated ? it.widthCm : it.depthCm) * scale;
+              return (
+                <div
+                  key={it.id}
+                  draggable
+                  onDragStart={(e) => handleDragStartPlaced(e, it)}
+                  title={`${it.name} (${it.widthCm}×${it.depthCm}cm) — 끌어서 옮기거나 버튼으로 회전·삭제`}
+                  style={{
+                    position: "absolute",
+                    left: it.xCm * scale,
+                    top: it.yCm * scale,
+                    width: wPx,
+                    height: hPx,
+                    background: C.purpleBg,
+                    border: `1px solid ${C.purple}`,
+                    borderRadius: 3,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 11,
+                    textAlign: "center",
+                    cursor: "grab",
+                    overflow: "hidden",
+                    userSelect: "none",
+                  }}
+                >
+                  <span style={{ pointerEvents: "none" }}>{it.name}</span>
+                  <button
+                    onClick={() => handleRotatePlaced(it.id)}
+                    title="90도 회전"
+                    style={{ position: "absolute", top: 1, right: 16, border: "none", background: "transparent", cursor: "pointer", fontSize: 10, padding: 1 }}
+                  >
+                    ⟳
+                  </button>
+                  <button
+                    onClick={() => handleRemovePlaced(it.id)}
+                    title="삭제"
+                    style={{ position: "absolute", top: 1, right: 1, border: "none", background: "transparent", cursor: "pointer", fontSize: 11, padding: 1 }}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+            {placedItems.length === 0 && (
+              <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 12.5, pointerEvents: "none" }}>
+                왼쪽 모형 목록에서 끌어다 놓아보세요
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
