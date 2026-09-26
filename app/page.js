@@ -10820,7 +10820,7 @@ function LayoutSimTab({ managerName = "" }) {
   const [shapes, setShapes] = useState([]);
   const [loadingShapes, setLoadingShapes] = useState(true);
   const [newShapeName, setNewShapeName] = useState("");
-  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "u"(U자)
+  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "u"(U자) | "circle"(원형)
   const [newShapeWidth, setNewShapeWidth] = useState("");
   const [newShapeDepth, setNewShapeDepth] = useState("");
   const [newShapeNotchWidth, setNewShapeNotchWidth] = useState(""); // ㄱ자: 잘려나간 모서리, U자: 안쪽 파인 부분
@@ -11030,6 +11030,39 @@ function LayoutSimTab({ managerName = "" }) {
     setPlacedItems((prev) => prev.map((it) => (it.id === id ? { ...it, flipped: !it.flipped } : it)));
   }
 
+  // 크기 조절: 놓인 모형 오른쪽 아래 손잡이를 끌면 가로·세로(widthCm/depthCm)를 직접 바꿀 수 있다.
+  // 90도·270도로 돌려놓은 상태에서는 화면에 보이는 가로/세로가 실제 값과 서로 바뀌어 있어서,
+  // 화면에서 보이는 방향 그대로 끌리도록 늘어난 만큼을 반대로 적용해준다(startResizePlaced의 swapped).
+  const resizeDragRef = useRef(null);
+  useEffect(() => {
+    function onResizeMove(e) {
+      const drag = resizeDragRef.current;
+      if (!drag) return;
+      const dxCm = (e.clientX - drag.startX) / scale;
+      const dyCm = (e.clientY - drag.startY) / scale;
+      const newWidthCm = Math.max(10, drag.swapped ? drag.startWidthCm + dyCm : drag.startWidthCm + dxCm);
+      const newDepthCm = Math.max(10, drag.swapped ? drag.startDepthCm + dxCm : drag.startDepthCm + dyCm);
+      setPlacedItems((prev) => prev.map((it) => (it.id === drag.id ? { ...it, widthCm: newWidthCm, depthCm: newDepthCm } : it)));
+    }
+    function onResizeUp() {
+      resizeDragRef.current = null;
+    }
+    window.addEventListener("mousemove", onResizeMove);
+    window.addEventListener("mouseup", onResizeUp);
+    return () => {
+      window.removeEventListener("mousemove", onResizeMove);
+      window.removeEventListener("mouseup", onResizeUp);
+    };
+  }, [scale]);
+
+  function startResizePlaced(it, swapped) {
+    return (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      resizeDragRef.current = { id: it.id, startX: e.clientX, startY: e.clientY, startWidthCm: it.widthCm, startDepthCm: it.depthCm, swapped };
+    };
+  }
+
   function handleClearBoard() {
     if (placedItems.length > 0 && !confirm("현재 배치를 전부 지우고 새로 시작할까요? (저장하지 않은 배치는 사라져요)")) return;
     setPlacedItems([]);
@@ -11212,6 +11245,7 @@ function LayoutSimTab({ managerName = "" }) {
               {shapes.map((s) => {
                 const shapeType = s.shape_type || "rect";
                 const isPoly = shapeType === "l" || shapeType === "u";
+                const isCircle = shapeType === "circle";
                 const previewPoints = isPoly
                   ? shapePolygonPoints(shapeType, s.width_cm, s.depth_cm, s.notch_width_cm, s.notch_depth_cm)
                       .map((p) => p.join(","))
@@ -11219,6 +11253,8 @@ function LayoutSimTab({ managerName = "" }) {
                   : null;
                 const sizeLabel = isPoly
                   ? `${s.width_cm}×${s.depth_cm}cm, 파임 ${s.notch_width_cm}×${s.notch_depth_cm}`
+                  : isCircle && s.width_cm === s.depth_cm
+                  ? `지름 ${s.width_cm}cm`
                   : `${s.width_cm}×${s.depth_cm}cm`;
                 return (
                   <div
@@ -11243,6 +11279,10 @@ function LayoutSimTab({ managerName = "" }) {
                     {isPoly ? (
                       <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
                         <polygon points={previewPoints} fill={C.purpleBg} stroke={C.purple} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
+                      </svg>
+                    ) : isCircle ? (
+                      <svg width={14} height={14} style={{ flexShrink: 0 }}>
+                        <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={C.purpleBg} stroke={C.purple} strokeWidth={1} />
                       </svg>
                     ) : (
                       <div style={{ width: 14, height: 14, background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 2, flexShrink: 0 }} />
@@ -11275,6 +11315,7 @@ function LayoutSimTab({ managerName = "" }) {
                 { key: "rect", label: "사각형" },
                 { key: "l", label: "ㄱ자" },
                 { key: "u", label: "U자" },
+                { key: "circle", label: "원형" },
               ].map((opt) => (
                 <button
                   key={opt.key}
@@ -11391,6 +11432,7 @@ function LayoutSimTab({ managerName = "" }) {
               const baseWPx = it.widthCm * scale;
               const baseHPx = it.depthCm * scale;
               const isPoly = it.shapeType === "l" || it.shapeType === "u";
+              const isCircle = it.shapeType === "circle";
               const polyPoints = isPoly
                 ? shapePolygonPoints(it.shapeType, it.widthCm, it.depthCm, it.notchWidthCm, it.notchDepthCm)
                     .map((p) => p.join(","))
@@ -11401,7 +11443,7 @@ function LayoutSimTab({ managerName = "" }) {
                   key={it.id}
                   draggable
                   onDragStart={(e) => handleDragStartPlaced(e, it)}
-                  title={`${it.name} (${it.widthCm}×${it.depthCm}cm) — 끌어서 옮기거나 버튼으로 회전·삭제`}
+                  title={`${it.name} (${it.widthCm}×${it.depthCm}cm) — 끌어서 옮기거나 모서리를 끌어 크기 조절, 버튼으로 회전·삭제`}
                   style={{
                     position: "absolute",
                     left: it.xCm * scale,
@@ -11427,6 +11469,10 @@ function LayoutSimTab({ managerName = "" }) {
                     {isPoly ? (
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={{ display: "block" }}>
                         <polygon points={polyPoints} fill={C.purpleBg} stroke={C.purple} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                      </svg>
+                    ) : isCircle ? (
+                      <svg width={baseWPx} height={baseHPx} style={{ display: "block" }}>
+                        <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={C.purpleBg} stroke={C.purple} strokeWidth={1} />
                       </svg>
                     ) : (
                       <div style={{ width: "100%", height: "100%", background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 3, boxSizing: "border-box" }} />
@@ -11484,6 +11530,30 @@ function LayoutSimTab({ managerName = "" }) {
                   >
                     ×
                   </button>
+                  {/* 크기 조절 손잡이: 오른쪽 아래 모서리를 끌면 가로·세로가 바뀐다. 이 손잡이에서 시작한
+                      드래그는 항목 전체를 옮기는 draggable 동작이나 줄자 클릭으로 잘못 이어지지 않도록
+                      막아준다(stopPropagation + dragstart 취소). */}
+                  <div
+                    onMouseDown={startResizePlaced(it, swapped)}
+                    onDragStart={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    title="끌어서 크기 조절"
+                    className="layoutsim-no-print"
+                    style={{
+                      position: "absolute",
+                      bottom: -4,
+                      right: -4,
+                      width: 10,
+                      height: 10,
+                      borderRadius: 2,
+                      background: C.ink,
+                      border: "1px solid #fff",
+                      cursor: "nwse-resize",
+                    }}
+                  />
                 </div>
               );
             })}
