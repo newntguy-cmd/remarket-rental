@@ -10811,6 +10811,17 @@ function shapePolygonPoints(shapeType, widthCm, depthCm, notchWidthCm, notchDept
   ];
 }
 
+// 한쪽 끝만 둥근 테이블(U형테이블 등: 위쪽은 폭 그대로 사각형으로 내려오다가, 맨 아래에서 폭과 같은
+// 지름의 반원으로 둥글게 마무리되는 모양) 외곽선을 SVG path로 그린다. 직선만으로는 표현할 수 없는
+// 곡선(반원)이 있어서 shapePolygonPoints(다각형)와 달리 path의 "d" 속성 문자열을 만들어 돌려준다.
+function roundEndTablePathD(widthCm, depthCm) {
+  const W = Number(widthCm) || 0;
+  const D = Number(depthCm) || 0;
+  const radius = Math.min(W / 2, D);
+  const rectDepth = D - radius;
+  return `M 0,0 L ${W},0 L ${W},${rectDepth} A ${radius},${radius} 0 0 1 0,${rectDepth} Z`;
+}
+
 // ---------- 배치 시뮬레이션 ----------
 // 공간 크기(가로×세로, m)를 입력하면 그 비율의 네모 박스가 나오고, 미리 등록해둔 모형(품목명+가로×세로,
 // 사각형 외에 ㄱ자·U자 모양도 가능)을 드래그앤드랍으로 박스 안에 가져다 놓아볼 수 있다. 모형 크기는
@@ -10820,7 +10831,7 @@ function LayoutSimTab({ managerName = "" }) {
   const [shapes, setShapes] = useState([]);
   const [loadingShapes, setLoadingShapes] = useState(true);
   const [newShapeName, setNewShapeName] = useState("");
-  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "u"(U자) | "circle"(원형)
+  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "u"(U자) | "circle"(원형) | "roundend"(한쪽둥근)
   const [newShapeWidth, setNewShapeWidth] = useState("");
   const [newShapeDepth, setNewShapeDepth] = useState("");
   const [newShapeNotchWidth, setNewShapeNotchWidth] = useState(""); // ㄱ자: 잘려나간 모서리, U자: 안쪽 파인 부분
@@ -10978,6 +10989,7 @@ function LayoutSimTab({ managerName = "" }) {
     const shapeType = s.shape_type || "rect";
     const isPoly = shapeType === "l" || shapeType === "u";
     const isCircle = shapeType === "circle";
+    const isRoundEnd = shapeType === "roundend";
     const previewPoints = isPoly
       ? shapePolygonPoints(shapeType, s.width_cm, s.depth_cm, s.notch_width_cm, s.notch_depth_cm)
           .map((p) => p.join(","))
@@ -11015,6 +11027,10 @@ function LayoutSimTab({ managerName = "" }) {
         ) : isCircle ? (
           <svg width={14} height={14} style={{ flexShrink: 0 }}>
             <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={C.purpleBg} stroke={C.purple} strokeWidth={1} />
+          </svg>
+        ) : isRoundEnd ? (
+          <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
+            <path d={roundEndTablePathD(s.width_cm, s.depth_cm)} fill={C.purpleBg} stroke={C.purple} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
           </svg>
         ) : (
           <div style={{ width: 14, height: 14, background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 2, flexShrink: 0 }} />
@@ -11175,13 +11191,50 @@ function LayoutSimTab({ managerName = "" }) {
     setRulerPoints([]);
   }
 
+  // 줄자로 찍을 수 있는 "끝점" 후보: 놓인 모형들의 네 모서리(회전된 상태면 화면에 보이는 대로).
+  // 줄자 모드일 때 이 점들을 화면에 옅게 보여줘서 어디를 누르면 딱 붙는지 미리 알 수 있게 한다.
+  const rulerSnapPoints = useMemo(() => {
+    if (!rulerMode) return [];
+    const pts = [];
+    for (const it of placedItems) {
+      const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
+      const swapped = rotation === 90 || rotation === 270;
+      const wCm = swapped ? it.depthCm : it.widthCm;
+      const hCm = swapped ? it.widthCm : it.depthCm;
+      pts.push({ xCm: it.xCm, yCm: it.yCm });
+      pts.push({ xCm: it.xCm + wCm, yCm: it.yCm });
+      pts.push({ xCm: it.xCm, yCm: it.yCm + hCm });
+      pts.push({ xCm: it.xCm + wCm, yCm: it.yCm + hCm });
+    }
+    return pts;
+  }, [rulerMode, placedItems]);
+
+  // 클릭 지점 근처(화면 기준 12px 안)에 모형 끝점이 있으면 그 점에 딱 맞춰 찍는다("끝점 인식") —
+  // 손으로 정확히 모서리를 맞추기 어려운 걸 보완해준다. 근처에 없으면 클릭한 자리 그대로 찍는다.
+  function nearestSnapPoint(xCm, yCm) {
+    const thresholdCm = 12 / scale;
+    let best = null;
+    let bestDist = thresholdCm;
+    for (const p of rulerSnapPoints) {
+      const dist = Math.hypot(p.xCm - xCm, p.yCm - yCm);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = p;
+      }
+    }
+    return best;
+  }
+
   // 줄자: 캔버스를 누를 때마다 점을 하나씩 찍고, 두 점이 모이면 그 사이 실제 거리를 계산해 보여준다.
   // 세 번째 클릭부터는 이전 측정을 지우고 새로 잰다.
   function handleCanvasClick(e) {
     if (!rulerMode) return;
     const rect = canvasRef.current.getBoundingClientRect();
-    const xCm = (e.clientX - rect.left) / scale;
-    const yCm = (e.clientY - rect.top) / scale;
+    const rawXCm = (e.clientX - rect.left) / scale;
+    const rawYCm = (e.clientY - rect.top) / scale;
+    const snapped = nearestSnapPoint(rawXCm, rawYCm);
+    const xCm = snapped ? snapped.xCm : rawXCm;
+    const yCm = snapped ? snapped.yCm : rawYCm;
     setRulerPoints((prev) => (prev.length >= 2 ? [{ xCm, yCm }] : [...prev, { xCm, yCm }]));
   }
 
@@ -11437,6 +11490,7 @@ function LayoutSimTab({ managerName = "" }) {
                 { key: "l", label: "ㄱ자" },
                 { key: "u", label: "U자" },
                 { key: "circle", label: "원형" },
+                { key: "roundend", label: "한쪽둥근" },
               ].map((opt) => (
                 <button
                   key={opt.key}
@@ -11567,6 +11621,7 @@ function LayoutSimTab({ managerName = "" }) {
               const baseHPx = it.depthCm * scale;
               const isPoly = it.shapeType === "l" || it.shapeType === "u";
               const isCircle = it.shapeType === "circle";
+              const isRoundEnd = it.shapeType === "roundend";
               const polyPoints = isPoly
                 ? shapePolygonPoints(it.shapeType, it.widthCm, it.depthCm, it.notchWidthCm, it.notchDepthCm)
                     .map((p) => p.join(","))
@@ -11607,6 +11662,10 @@ function LayoutSimTab({ managerName = "" }) {
                     ) : isCircle ? (
                       <svg width={baseWPx} height={baseHPx} style={{ display: "block" }}>
                         <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={C.purpleBg} stroke={C.purple} strokeWidth={1} />
+                      </svg>
+                    ) : isRoundEnd ? (
+                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={{ display: "block" }}>
+                        <path d={roundEndTablePathD(it.widthCm, it.depthCm)} fill={C.purpleBg} stroke={C.purple} strokeWidth={1} vectorEffect="non-scaling-stroke" />
                       </svg>
                     ) : (
                       <div style={{ width: "100%", height: "100%", background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 3, boxSizing: "border-box" }} />
@@ -11696,6 +11755,26 @@ function LayoutSimTab({ managerName = "" }) {
                 왼쪽 모형 목록에서 끌어다 놓아보세요
               </div>
             )}
+            {/* 줄자 모드일 때는 모형 끝점(모서리)마다 옅은 점을 미리 보여줘서, 어디를 누르면
+                딱 붙는지("끝점 인식") 미리 알 수 있게 한다. */}
+            {rulerMode &&
+              rulerSnapPoints.map((p, idx) => (
+                <div
+                  key={`ruler-snap-${idx}`}
+                  className="layoutsim-no-print"
+                  style={{
+                    position: "absolute",
+                    left: p.xCm * scale - 3,
+                    top: p.yCm * scale - 3,
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    border: `1px solid ${C.purple}`,
+                    background: "#fff",
+                    pointerEvents: "none",
+                  }}
+                />
+              ))}
             {/* 줄자: 찍은 점(1~2개)과, 두 점이 모이면 그 사이를 잇는 선 + 실제 거리(cm/m) 표시.
                 클릭/드래그를 막지 않도록 pointerEvents는 항상 none. */}
             {rulerPoints.map((p, idx) => (
