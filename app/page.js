@@ -10825,7 +10825,14 @@ function LayoutSimTab({ managerName = "" }) {
   const [newShapeDepth, setNewShapeDepth] = useState("");
   const [newShapeNotchWidth, setNewShapeNotchWidth] = useState(""); // ㄱ자: 잘려나간 모서리, U자: 안쪽 파인 부분
   const [newShapeNotchDepth, setNewShapeNotchDepth] = useState("");
+  const [newShapeCategory, setNewShapeCategory] = useState(""); // 비워두면 "기타"로 등록됨
   const [savingShape, setSavingShape] = useState(false);
+
+  // 모형 목록: 품목이 많아지니 큰 카테고리(책상류/테이블류 등)로 접었다 펼 수 있게 하고,
+  // 검색으로 카테고리를 몰라도 이름으로 바로 찾을 수 있게 한다.
+  const [shapeViewMode, setShapeViewMode] = useState("category"); // "category" | "search"
+  const [shapeSearchQuery, setShapeSearchQuery] = useState("");
+  const [expandedCategories, setExpandedCategories] = useState({});
 
   const [widthInput, setWidthInput] = useState("5");
   const [depthInput, setDepthInput] = useState("4");
@@ -10904,6 +10911,7 @@ function LayoutSimTab({ managerName = "" }) {
       depth_cm: d,
       notch_width_cm: nw,
       notch_depth_cm: nd,
+      category: (newShapeCategory || "기타").trim(),
     });
     setSavingShape(false);
     if (error) {
@@ -10916,6 +10924,7 @@ function LayoutSimTab({ managerName = "" }) {
     setNewShapeDepth("");
     setNewShapeNotchWidth("");
     setNewShapeNotchDepth("");
+    setNewShapeCategory("");
     fetchShapes();
   }
 
@@ -10927,6 +10936,101 @@ function LayoutSimTab({ managerName = "" }) {
       return;
     }
     fetchShapes();
+  }
+
+  // 모형이 많아져도 한눈에 찾기 쉽게 큰 카테고리(책상류/테이블류 등)로 묶는다. 카테고리가 안 적혀있으면
+  // "기타"로 묶고, 알려진 카테고리를 먼저 보여준 뒤 나머지는 이름순으로 뒤에 붙인다.
+  const CATEGORY_ORDER = ["책상류", "테이블류", "책장류", "소파·파티션·기타", "컨테이너", "기타"];
+  const shapesByCategory = useMemo(() => {
+    const map = {};
+    for (const s of shapes) {
+      const cat = s.category || "기타";
+      if (!map[cat]) map[cat] = [];
+      map[cat].push(s);
+    }
+    return map;
+  }, [shapes]);
+  const categoryNames = useMemo(() => {
+    const names = Object.keys(shapesByCategory);
+    names.sort((a, b) => {
+      const ia = CATEGORY_ORDER.indexOf(a);
+      const ib = CATEGORY_ORDER.indexOf(b);
+      if (ia === -1 && ib === -1) return a.localeCompare(b, "ko");
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+    return names;
+  }, [shapesByCategory]);
+  function toggleCategory(cat) {
+    setExpandedCategories((prev) => ({ ...prev, [cat]: !prev[cat] }));
+  }
+  // 검색: 카테고리를 몰라도 이름으로 바로 찾을 수 있게, 전체 모형 중 이름에 검색어가 들어간 것만 골라낸다.
+  const shapeSearchResults = useMemo(() => {
+    const q = shapeSearchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return shapes.filter((s) => s.name.toLowerCase().includes(q));
+  }, [shapes, shapeSearchQuery]);
+
+  // 모형 목록 한 줄(카테고리 펼친 목록·검색 결과 둘 다 이걸로 그린다) — 드래그해서 배치판에 놓는 것도,
+  // 모양별 미리보기(사각형/ㄱ자·U자 다각형/원형)도, 삭제 버튼도 여기서 한 군데만 관리한다.
+  function renderShapeRow(s) {
+    const shapeType = s.shape_type || "rect";
+    const isPoly = shapeType === "l" || shapeType === "u";
+    const isCircle = shapeType === "circle";
+    const previewPoints = isPoly
+      ? shapePolygonPoints(shapeType, s.width_cm, s.depth_cm, s.notch_width_cm, s.notch_depth_cm)
+          .map((p) => p.join(","))
+          .join(" ")
+      : null;
+    const sizeLabel = isPoly
+      ? `${s.width_cm}×${s.depth_cm}cm, 파임 ${s.notch_width_cm}×${s.notch_depth_cm}`
+      : isCircle && s.width_cm === s.depth_cm
+      ? `지름 ${s.width_cm}cm`
+      : `${s.width_cm}×${s.depth_cm}cm`;
+    return (
+      <div
+        key={s.id}
+        draggable
+        onDragStart={(e) => handleDragStartCatalog(e, s)}
+        title="끌어서 배치판에 놓으세요"
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 6,
+          padding: "8px 10px",
+          marginBottom: 6,
+          border: `1px solid ${C.lineSoft}`,
+          background: C.bg,
+          borderRadius: 6,
+          cursor: "grab",
+          fontSize: 12.5,
+        }}
+      >
+        {isPoly ? (
+          <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
+            <polygon points={previewPoints} fill={C.purpleBg} stroke={C.purple} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
+          </svg>
+        ) : isCircle ? (
+          <svg width={14} height={14} style={{ flexShrink: 0 }}>
+            <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={C.purpleBg} stroke={C.purple} strokeWidth={1} />
+          </svg>
+        ) : (
+          <div style={{ width: 14, height: 14, background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 2, flexShrink: 0 }} />
+        )}
+        <span style={{ flex: 1 }}>
+          {s.name} <span style={{ color: C.muted, fontSize: 11 }}>({sizeLabel})</span>
+        </span>
+        <button
+          onClick={() => handleDeleteShape(s.id)}
+          title="모형 삭제"
+          style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 12 }}
+        >
+          ×
+        </button>
+      </div>
+    );
   }
 
   function handleCreateSpace() {
@@ -11242,64 +11346,81 @@ function LayoutSimTab({ managerName = "" }) {
             <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>아직 등록된 모형이 없어요. 아래에서 추가해보세요.</div>
           ) : (
             <div style={{ marginBottom: 14 }}>
-              {shapes.map((s) => {
-                const shapeType = s.shape_type || "rect";
-                const isPoly = shapeType === "l" || shapeType === "u";
-                const isCircle = shapeType === "circle";
-                const previewPoints = isPoly
-                  ? shapePolygonPoints(shapeType, s.width_cm, s.depth_cm, s.notch_width_cm, s.notch_depth_cm)
-                      .map((p) => p.join(","))
-                      .join(" ")
-                  : null;
-                const sizeLabel = isPoly
-                  ? `${s.width_cm}×${s.depth_cm}cm, 파임 ${s.notch_width_cm}×${s.notch_depth_cm}`
-                  : isCircle && s.width_cm === s.depth_cm
-                  ? `지름 ${s.width_cm}cm`
-                  : `${s.width_cm}×${s.depth_cm}cm`;
-                return (
-                  <div
-                    key={s.id}
-                    draggable
-                    onDragStart={(e) => handleDragStartCatalog(e, s)}
-                    title="끌어서 배치판에 놓으세요"
+              {/* 카테고리별로 접어보기 / 이름으로 검색하기, 두 가지 방식으로 모형을 찾을 수 있다. */}
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                {[
+                  { key: "category", label: "카테고리" },
+                  { key: "search", label: "검색" },
+                ].map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setShapeViewMode(opt.key)}
                     style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      gap: 6,
-                      padding: "8px 10px",
-                      marginBottom: 6,
-                      border: `1px solid ${C.lineSoft}`,
-                      background: C.bg,
-                      borderRadius: 6,
-                      cursor: "grab",
-                      fontSize: 12.5,
+                      ...miniBtnStyle,
+                      flex: 1,
+                      background: shapeViewMode === opt.key ? C.ink : "transparent",
+                      color: shapeViewMode === opt.key ? "#fff" : C.inkSoft,
+                      borderColor: shapeViewMode === opt.key ? C.ink : C.lineSoft,
                     }}
                   >
-                    {isPoly ? (
-                      <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
-                        <polygon points={previewPoints} fill={C.purpleBg} stroke={C.purple} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
-                      </svg>
-                    ) : isCircle ? (
-                      <svg width={14} height={14} style={{ flexShrink: 0 }}>
-                        <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={C.purpleBg} stroke={C.purple} strokeWidth={1} />
-                      </svg>
-                    ) : (
-                      <div style={{ width: 14, height: 14, background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 2, flexShrink: 0 }} />
-                    )}
-                    <span style={{ flex: 1 }}>
-                      {s.name} <span style={{ color: C.muted, fontSize: 11 }}>({sizeLabel})</span>
-                    </span>
-                    <button
-                      onClick={() => handleDeleteShape(s.id)}
-                      title="모형 삭제"
-                      style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 12 }}
-                    >
-                      ×
-                    </button>
-                  </div>
-                );
-              })}
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              {shapeViewMode === "search" ? (
+                <div>
+                  <input
+                    style={{ ...smallInputStyle, width: "100%", marginBottom: 8, boxSizing: "border-box" }}
+                    placeholder="모형 이름으로 검색 (예: 책상, 원형)"
+                    value={shapeSearchQuery}
+                    onChange={(e) => setShapeSearchQuery(e.target.value)}
+                  />
+                  {shapeSearchQuery.trim() === "" ? (
+                    <div style={{ fontSize: 12, color: C.muted }}>찾으시는 모형 이름을 입력해보세요.</div>
+                  ) : shapeSearchResults.length === 0 ? (
+                    <div style={{ fontSize: 12, color: C.muted }}>"{shapeSearchQuery}"와(과) 일치하는 모형이 없어요.</div>
+                  ) : (
+                    shapeSearchResults.map((s) => renderShapeRow(s))
+                  )}
+                </div>
+              ) : (
+                <div>
+                  {categoryNames.map((cat) => {
+                    const items = shapesByCategory[cat];
+                    const isOpen = !!expandedCategories[cat];
+                    return (
+                      <div key={cat} style={{ marginBottom: 6 }}>
+                        <button
+                          type="button"
+                          onClick={() => toggleCategory(cat)}
+                          style={{
+                            width: "100%",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            padding: "8px 10px",
+                            border: `1px solid ${C.lineSoft}`,
+                            background: isOpen ? C.ink : C.bg,
+                            color: isOpen ? "#fff" : C.ink,
+                            borderRadius: 6,
+                            cursor: "pointer",
+                            fontSize: 12.5,
+                            fontFamily: serif,
+                          }}
+                        >
+                          <span>{cat}</span>
+                          <span style={{ fontSize: 11, opacity: 0.8 }}>
+                            {items.length}개 {isOpen ? "▲" : "▼"}
+                          </span>
+                        </button>
+                        {isOpen && <div style={{ marginTop: 6, paddingLeft: 4 }}>{items.map((s) => renderShapeRow(s))}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
           <div style={{ borderTop: `1px solid ${C.lineSoft}`, paddingTop: 10 }}>
@@ -11373,6 +11494,19 @@ function LayoutSimTab({ managerName = "" }) {
                 </div>
               </div>
             )}
+            {/* 카테고리는 기존 목록에서 골라도 되고(자동완성), 새 이름을 직접 입력해도 된다. 비워두면 "기타"로 등록. */}
+            <input
+              style={{ ...smallInputStyle, width: "100%", marginBottom: 6, boxSizing: "border-box" }}
+              placeholder="카테고리 (예: 책상류, 테이블류 — 비워두면 기타)"
+              value={newShapeCategory}
+              onChange={(e) => setNewShapeCategory(e.target.value)}
+              list="layoutsim-category-list"
+            />
+            <datalist id="layoutsim-category-list">
+              {categoryNames.map((cat) => (
+                <option key={cat} value={cat} />
+              ))}
+            </datalist>
             <button onClick={handleAddShape} disabled={savingShape} style={{ ...miniBtnStyle, width: "100%" }}>
               {savingShape ? "저장 중…" : "+ 모형 추가"}
             </button>
