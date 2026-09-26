@@ -905,12 +905,19 @@ function pdfGroupRows(items) {
   return rows;
 }
 
-function pdfMergeWords(rowItems, gapThreshold) {
+// boundaryKeywords를 주면(품목표 머리글을 찾을 때만 씀), 지금까지 이어붙인 단어가 이미 그 목록의 글자와
+// "정확히" 같아지는 순간 거기서 끊고 새 단어를 시작한다(간격이 좁아도 더 이어붙이지 않음). 이렇게 해야
+// "규 격"처럼 한 라벨 안에서 글자 사이 간격이 넓게 찍힌 경우(간격 기준만으로 붙여야 함)와, "수량"·"단 가"·
+// "금 액"처럼 서로 다른 라벨이 폭 좁은 표에서 오히려 더 가깝게 붙어 찍힌 경우(간격 기준만으로는 잘못 붙어버림)를
+// 동시에 정확히 구분할 수 있다 — boundaryKeywords가 없으면(일반 데이터 행 처리 등) 기존과 완전히 같게 동작한다.
+function pdfMergeWords(rowItems, gapThreshold, boundaryKeywords) {
   const words = [];
   let lastX = null;
   for (const it of rowItems) {
     const last = words[words.length - 1];
-    if (last && lastX !== null && it.x - lastX < gapThreshold) {
+    const lastNorm = last ? last.str.replace(/\s/g, "") : "";
+    const lastIsCompleteKeyword = !!(boundaryKeywords && boundaryKeywords.includes(lastNorm));
+    if (last && lastX !== null && it.x - lastX < gapThreshold && !lastIsCompleteKeyword) {
       last.str += it.str;
       last.endX = it.x + (it.w || 0);
     } else {
@@ -920,6 +927,9 @@ function pdfMergeWords(rowItems, gapThreshold) {
   }
   return words.map((w) => ({ ...w, centerX: (w.x + w.endX) / 2 }));
 }
+
+// 품목 표 머리글(품목/규격/수량/단가/금액/비고)을 찾을 때 pdfMergeWords에 넘기는 경계 키워드 목록.
+const PDF_HEADER_LABEL_KEYWORDS = ["품목", "규격", "수량", "단가", "금액", "비고"];
 
 // 한 행에 라벨:값 쌍이 여러 개(좌/우 2단 구성) 있을 수 있어, x 간격이 크게 벌어지는 지점마다 조각을 나눈다.
 function pdfSplitRowSegments(rowItems, gapThreshold = 35) {
@@ -1142,7 +1152,11 @@ async function parseQuotePdf(file) {
       // 견적서 양식에 따라 "규격" 같은 헤더 글자 사이 간격이 유독 넓게 찍히는 경우가 있어(예: 규/격 사이 38px),
       // 기존 30px 기준으로는 두 글자가 합쳐지지 않아 헤더를 못 찾고 그 페이지 전체를 건너뛰는 문제가 있었다.
       // 헤더 줄은 어차피 몇 글자 안 되는 라벨만 있는 줄이라 기준을 넉넉히 늘려도 다른 오탐 위험은 거의 없다.
-      const words = pdfMergeWords(row.items, 45);
+      // 다만 표 폭이 좁은 양식은 반대로 "수량"·"단가"·"금액"처럼 서로 다른 라벨끼리 오히려 이 기준보다 더
+      // 가깝게 붙어 찍히는 경우가 있어(예: 수량↔단가 27px), boundaryKeywords로 라벨이 완성되는 순간 거기서
+      // 끊어서 서로 다른 라벨이 하나로 합쳐지지 않게 한다(그대로 두면 단가·금액 칸이 통째로 수량 칸에
+      // 뒤섞여 들어가서 수량이 어마어마하게 큰 숫자로 잘못 인식되고 단가·금액은 빈 칸이 돼버린다).
+      const words = pdfMergeWords(row.items, 45, PDF_HEADER_LABEL_KEYWORDS);
       const norm = words.map((w) => w.str.replace(/\s/g, ""));
       const find = (pred) => words[norm.findIndex(pred)];
       const item = find((s) => s.includes("품") && s.includes("목"));
@@ -1206,9 +1220,10 @@ async function parseQuotePdf(file) {
           currentSite = itemStr;
           continue;
         }
-        // 병합된 셀 라벨(예: "사무책상")은 세로로 두 데이터 행 사이 중앙에 찍혀 나오는 경우가 있어,
-        // 그 라벨이 실제로는 "바로 위 데이터 행"의 품목명인데 그 행에는 직접 붙어있지 않고 지금 이 줄로 따로 찍힌 것이다.
-        // 바로 위 행이 자기 줄에 직접 품목명을 갖고 있지 않았다면(=이전 품목명을 그냥 이어받은 것뿐이라면) 지금 읽은 진짜 이름으로 소급 정정한다.
+        // 병합된 셀 라벨(예: "파티션")은 위아래 두 데이터 행 사이 중앙에 자기 혼자만 있는 줄로 찍혀 나오는
+        // 경우가 있어, 그 라벨이 실제로는 "바로 위 데이터 행"의 품목명인데 그 행에는 직접 붙어있지 않고 지금
+        // 이 줄로 따로 찍힌 것이다. 바로 위 행이 자기 줄에 직접 품목명을 갖고 있지 않았다면(=이전 품목명을
+        // 그냥 이어받은 것뿐이라면) 지금 읽은 진짜 이름으로 소급 정정한다.
         currentItem = itemStr;
         const last = items[items.length - 1];
         if (last && !last._explicitItem) last.item = itemStr;
