@@ -5261,7 +5261,7 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
   );
 }
 
-function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerName = "", tonOverrides, onTonOverrideSaved }) {
+function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerName = "", tonOverrides, onTonOverrideSaved, hideInsteadOfDelete = false }) {
   const [header, setHeader] = useState(() => ({
     voucherNo: group.head.voucher_no || "",
     transactionType: group.head.transaction_type || "rental",
@@ -5342,7 +5342,10 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
   };
   const handleDeleteSelectedItems = () => {
     if (checkedItemIdxs.size === 0) return;
-    if (!confirm(`선택한 ${checkedItemIdxs.size}개 품목을 삭제할까요?`)) return;
+    const msg = hideInsteadOfDelete
+      ? `선택한 ${checkedItemIdxs.size}개 품목을 제외할까요?\n저장하면 렌탈내역 원본은 그대로 두고 이 화면에서만 안 보이게 됩니다.`
+      : `선택한 ${checkedItemIdxs.size}개 품목을 삭제할까요?`;
+    if (!confirm(msg)) return;
     setItems(items.filter((_, i) => !checkedItemIdxs.has(i)));
     setCheckedItemIdxs(new Set());
   };
@@ -5436,11 +5439,24 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
     const removedIds = originalIds.filter((id) => !currentIds.includes(id));
 
     if (removedIds.length > 0) {
-      const { error } = await supabase.from("rentals").delete().in("id", removedIds);
-      if (error) {
-        alert("삭제 중 오류가 발생했어요: " + error.message);
-        setSaving(false);
-        return;
+      // hideInsteadOfDelete가 켜진 화면(예: 자동등록)에서는 렌탈내역 원본(rentals)을 절대 지우지 않고,
+      // 이 화면에서만 안 보이게 숨김 처리한다(자동등록의 "선택 제외"와 동일한 방식).
+      if (hideInsteadOfDelete) {
+        const { error } = await supabase
+          .from("ledger_auto_hidden_rentals")
+          .upsert(removedIds.map((id) => ({ rental_id: id })), { onConflict: "rental_id" });
+        if (error) {
+          alert("제외 처리 중 오류가 발생했어요: " + error.message);
+          setSaving(false);
+          return;
+        }
+      } else {
+        const { error } = await supabase.from("rentals").delete().in("id", removedIds);
+        if (error) {
+          alert("삭제 중 오류가 발생했어요: " + error.message);
+          setSaving(false);
+          return;
+        }
       }
     }
 
@@ -5489,9 +5505,30 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
   }
 
   async function handleDelete() {
+    const ids = group.rows.map((r) => r.id);
+    // hideInsteadOfDelete가 켜진 화면(자동등록)에서는 전표 전체를 지우는 것도 실제 삭제가 아니라
+    // 숨김 처리로 대신한다 — 렌탈내역 원본은 그대로 남는다.
+    if (hideInsteadOfDelete) {
+      if (
+        !confirm(
+          `이 전표를 목록에서 제외할까요?\n렌탈내역 원본 데이터는 지워지지 않고 그대로 남아있고, 이 화면에서만 안 보이게 됩니다.`
+        )
+      )
+        return;
+      setDeleting(true);
+      const { error } = await supabase
+        .from("ledger_auto_hidden_rentals")
+        .upsert(ids.map((id) => ({ rental_id: id })), { onConflict: "rental_id" });
+      setDeleting(false);
+      if (error) {
+        alert("제외 처리 중 오류가 발생했어요: " + error.message);
+        return;
+      }
+      onSaved();
+      return;
+    }
     if (!confirm("이 전표를 삭제할까요? 되돌릴 수 없어요.")) return;
     setDeleting(true);
-    const ids = group.rows.map((r) => r.id);
     const { error } = await supabase.from("rentals").delete().in("id", ids);
     setDeleting(false);
     if (error) {
@@ -5711,7 +5748,7 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
           <div style={{ display: "flex", gap: 8 }}>
             {checkedItemIdxs.size > 0 && (
               <button onClick={handleDeleteSelectedItems} style={{ ...miniBtnStyle, borderColor: C.brick, color: C.brick }}>
-                선택삭제 ({checkedItemIdxs.size})
+                {hideInsteadOfDelete ? "선택 제외" : "선택삭제"} ({checkedItemIdxs.size})
               </button>
             )}
             <button onClick={sortItemsAlpha} style={miniBtnStyle} title="품목명 가나다순으로 한 번에 정렬합니다">
@@ -5808,7 +5845,7 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
 
       <div style={{ display: "flex", gap: 8, justifyContent: "space-between" }}>
         <button onClick={handleDelete} disabled={deleting} style={{ ...ghostBtnStyle, borderColor: C.brick, color: C.brick }}>
-          {deleting ? "삭제 중…" : "전표 삭제"}
+          {hideInsteadOfDelete ? (deleting ? "제외 중…" : "전표 제외") : deleting ? "삭제 중…" : "전표 삭제"}
         </button>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={onClose} style={ghostBtnStyle}>취소</button>
@@ -7660,11 +7697,17 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
   const [showHidden, setShowHidden] = useState(false);
   const [restoringId, setRestoringId] = useState(null);
 
-  useEffect(() => {
+  // 전표 상세화면(RentalDetailPanel)에서 품목을 지우거나 전표를 "제외"해도 실제로는 이 숨김 목록에
+  // 새로 추가되는 것뿐이라, 상세화면을 닫을 때(onSaved) 이 목록도 다시 불러와야 방금 처리한 건이
+  // 바로 화면에서 사라진다.
+  const fetchHiddenIds = () =>
     supabase
       .from("ledger_auto_hidden_rentals")
       .select("rental_id")
       .then(({ data }) => setHiddenIds(new Set((data || []).map((r) => r.rental_id))));
+
+  useEffect(() => {
+    fetchHiddenIds();
   }, []);
 
   // 렌탈전표만(구매 제외) 모으고, 이 화면에서 "제외" 처리된 건은 뺀다. transaction_type이 비어있는 옛 데이터는 렌탈로 취급한다(다른 화면들과 동일한 규칙).
@@ -7794,12 +7837,14 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
         onClose={() => setSelectedKey(null)}
         onSaved={() => {
           onRefresh && onRefresh();
+          fetchHiddenIds();
           setSelectedKey(null);
         }}
         isAdmin={isAdmin}
         managerName={managerName}
         tonOverrides={tonOverrides}
         onTonOverrideSaved={onTonOverrideSaved}
+        hideInsteadOfDelete
       />
     );
   }
