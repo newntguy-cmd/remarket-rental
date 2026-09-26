@@ -489,6 +489,24 @@ function cellText(v) {
   return String(v).trim();
 }
 
+// 견적서 표 안의 "— 사무집기 —"/"ㅡ 소장실 ㅡ"/"-- 이전 및 설치 --"처럼, 실제 품목이 아니라 구역을 나누는
+// 구획 제목 줄인지 판단한다. 이런 줄은 앞뒤로 대시류 기호(하이픈/엔대시/엠대시/한글 채움 기호 "ㅡ" 등)가
+// 있고 그 사이에 실제 라벨 글자가 있는 형태라, 대시가 하나뿐이든(예: "— 사무집기 —") 여러 개든(예:
+// "-- 이전 및 설치 --") 상관없이 같은 기준으로 인식한다. 이 줄은 품목명으로 등록하면 안 되고(구역 이름일
+// 뿐), 그 줄의 "규격" 칸에 우연히 다른 텍스트(예: 배송지 주소)가 같이 찍혀 있어도 그건 실제 규격이 아니므로
+// 함께 버려야 한다(안 그러면 "— 사무집기 —"라는 이상한 품목이 주소를 규격 삼아 그대로 등록돼버린다).
+function isSectionDividerLabel(s) {
+  const t = (s || "").trim();
+  if (!t) return false;
+  if (t.includes("ㅡ")) return true;
+  const DASH = "\\-\u2013\u2014=_"; // -, –, —, =, _
+  const startsWithDash = new RegExp(`^[${DASH}]`).test(t);
+  const endsWithDash = new RegExp(`[${DASH}]$`).test(t);
+  if (!startsWithDash || !endsWithDash) return false;
+  const inner = t.replace(new RegExp(`^[${DASH}\\s]+|[${DASH}\\s]+$`, "g"), "");
+  return inner.length > 0;
+}
+
 // 자동완성 후보 목록을 만들 때 쓰는 두 헬퍼. 빈 값 제거 + 대소문자/앞뒤공백 무시하고 중복 제거 + 가나다순 정렬.
 function normalizeMatchText(s) {
   return (s || "").trim().toLowerCase();
@@ -805,7 +823,11 @@ function parseQuoteRows(rows) {
     // 어느 쪽이든 "실제로 텍스트가 있는지"로 판단해야 "ㅡ 소장실 ㅡ" 같은 구획 제목 줄이 품목으로 잘못
     // 등록되지 않는다(빈 문자열은 hasData로 치지 않음).
     const hasData = cellText(qtyRaw) !== "" || cellText(priceRaw) !== "" || cellText(amountRaw) !== "";
-    if (itemCell && !hasData && !specCell) {
+    // "— 사무집기 —"처럼 구획 제목인 줄은, 그 줄의 "규격" 칸에 배송지 주소 등 다른 텍스트가 같이 찍혀
+    // 있어도(원본 양식에서 병합된 셀 때문에 그렇게 보일 수 있음) 그 텍스트는 진짜 규격이 아니므로 함께
+    // 버리고 구역 이름으로만 취급한다. 구획 제목이 아닌 일반 줄은 기존처럼 규격 칸이 정말 비어있을 때만
+    // 구역 이름으로 취급한다(규격 있는 일반 품목을 잘못 건너뛰지 않도록).
+    if (itemCell && !hasData && (!specCell || isSectionDividerLabel(itemCell))) {
       currentSite = itemCell;
       continue;
     }
@@ -1173,10 +1195,12 @@ async function parseQuotePdf(file) {
       const priceNum = pdfParseNum(priceStr);
       const amountNum = pdfParseNum(amountStr);
       const hasData = qtyNum != null || priceNum != null || amountNum != null;
-      // "ㅡ 사무집기 ㅡ" 같은 구획 제목: 이 양식 특유의 필러 문자(ㅡ) 포함 여부로 판단
-      const isDivider = itemStr.includes("ㅡ") || /^[-–—=_]{2,}.*[-–—=_]{2,}$/.test(itemStr.replace(/\s/g, ""));
+      // "ㅡ 사무집기 ㅡ"/"— 사무집기 —" 같은 구획 제목인지 판단(엑셀 파싱과 같은 공통 기준 사용)
+      const isDivider = isSectionDividerLabel(itemStr);
 
-      if (itemStr && !hasData && !specStr) {
+      // 구획 제목 줄은, 좌표 인식 특성상 그 줄의 "규격" 칸 위치에 배송지 주소 등 다른 텍스트가 같이 찍혀도
+      // (병합된 셀 등) 그건 진짜 규격이 아니므로 함께 버리고 구역 이름으로만 취급한다(엑셀 파싱과 동일 기준).
+      if (itemStr && !hasData && (isDivider || !specStr)) {
         if (isDivider) {
           // 품목별 "현장/구역"은 배송지 주소와 별개라, 배송지 주소를 섞지 않고 구획 제목 텍스트만 그대로 쓴다.
           currentSite = itemStr;
@@ -1966,6 +1990,7 @@ function Dashboard({ profile, onLogout }) {
           if (m.key === "ledgerAuto") setLedgerAutoResetKey((k) => k + 1); // 현장별 렌탈잔량(자동등록)도 눌릴 때마다 목록으로 리셋
           if (m.key === "asboard") setAsboardResetKey((k) => k + 1); // A/S관리대장도 눌릴 때마다 목록 화면으로 리셋
           if (m.key === "collectionboard") setCollectionboardResetKey((k) => k + 1); // 렌탈회수관리도 눌릴 때마다 목록 화면으로 리셋
+          if (m.key === "quote") setImportState(null); // 견적서 업로드도 다른 메뉴 갔다가 눌릴 때마다 업로드/붙여넣기 미리보기를 리셋
         }}
         style={{
           display: "block",
@@ -3400,6 +3425,26 @@ function extractPastedSiteAddress(text) {
   return "";
 }
 
+// 붙여넣은 견적서 텍스트에서 렌탈/구매 여부를 자동으로 판단한다. 전표 등록용 견적서 파싱(parseQuoteRows)과
+// 같은 기준을 쓴다 — "렌탈기간" 항목이 있거나 "렌탈 N개월"처럼 "렌탈"이 들어간 칸에 개월수가 적혀 있으면
+// 렌탈, 그런 단서가 전혀 없으면 구매로 본다(전표 파싱의 기본값도 "구매"). 톤수/배송비 계산 화면에서
+// 붙여넣은 견적서 내용에 맞게 "③ 배송비 계산"의 거래유형이 자동으로 골라지게 하기 위한 것 — 아직 아무것도
+// 안 붙여넣었으면(rows가 없으면) 판단할 근거가 없으니 null을 돌려주고 기존 값을 그대로 둔다.
+function detectPastedTransactionType(text) {
+  const rows = parsePastedTable(text);
+  if (rows.length === 0) return null;
+  for (const row of rows) {
+    for (const cell of row) {
+      const raw = cellText(cell);
+      if (!raw) continue;
+      if (raw.replace(/\s/g, "").includes("렌탈기간")) return "rental";
+      if (raw.includes("렌탈") && /\d+\s*개월/.test(raw)) return "rental";
+      if (raw.includes("렌탈") && /\(\d{4}[.\-]\d{2}~\d{4}[.\-]\d{2}\)/.test(raw)) return "rental";
+    }
+  }
+  return "purchase";
+}
+
 // 붙여넣은 견적서 텍스트에서 "수신: 거래처 - 현장명" / "담당자: ..." 값을 찾아온다(견적서 헤더 파싱과 같은 정규식,
 // extractPastedSiteAddress와 같은 방식으로 붙여넣은 텍스트 전체를 훑는다). 품목별 데이터 출력물에 거래처·담당자를
 // 표시하기 위한 것 — 업체별데이터의 "품목별 수량 통계" 출력물과 형식을 맞춘다.
@@ -4162,6 +4207,14 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
   useEffect(() => {
     if (extractedAddress) setAddress(extractedAddress);
   }, [extractedAddress]);
+
+  // 붙여넣은 견적서가 구매 건이면 "③ 배송비 계산"의 거래유형도 "구매"로 자동으로 체크되게 한다(기존에는
+  // 렌탈로 고정 시작해서, 구매 견적서를 붙여넣어도 직접 드롭다운을 바꿔야 했음). 직접 드롭다운을 바꾼
+  // 뒤에도, 배송지 주소와 같은 방식으로 붙여넣은 내용이 바뀌면 새로 판단한 값으로 다시 갱신된다.
+  const detectedTransactionType = useMemo(() => detectPastedTransactionType(text), [text]);
+  useEffect(() => {
+    if (detectedTransactionType) setTransactionType(detectedTransactionType);
+  }, [detectedTransactionType]);
 
   // 붙여넣은 텍스트에 거래처/담당자 정보가 있으면 품목별 데이터 출력물 상단에 그대로 보여준다
   // (업체별데이터의 "품목별 수량 통계" 출력물과 같은 형식).
