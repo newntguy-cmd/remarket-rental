@@ -11135,6 +11135,15 @@ function LayoutSimTab({ managerName = "" }) {
       }
     }
 
+    // 배치판 벽(공간 경계)도 다른 모형과 똑같이 자석처럼 붙는다 — 벽은 캔버스 전체에 걸쳐있어서
+    // 다른 모형과 달리 세로·가로 범위가 겹치는지 따질 필요 없이 항상 후보로 본다.
+    const spaceWidthCm = spaceWidthM * 100;
+    const spaceDepthCm = spaceDepthM * 100;
+    tryX(0); // 왼쪽 벽
+    tryX(spaceWidthCm - wCm); // 오른쪽 벽
+    tryY(0); // 위쪽 벽
+    tryY(spaceDepthCm - hCm); // 아래쪽 벽
+
     return { xCm: snappedX, yCm: snappedY };
   }
 
@@ -11175,7 +11184,8 @@ function LayoutSimTab({ managerName = "" }) {
   }
 
   // 자석 스냅 → 그래도 겹치면 밀어내기, 순서로 적용한다(최대 4번 반복해서 여러 모형에 연달아
-  // 걸리는 경우도 웬만큼 처리한다). 마지막엔 공간 밖(음수 좌표)으로 나가지 않게 0 이상으로 고정한다.
+  // 걸리는 경우도 웬만큼 처리한다). 마지막엔 배치판(공간) 밖으로 절대 넘어가지 않도록 가로·세로
+  // 범위를 벽 안쪽으로 딱 고정한다(모형이 방보다 큰 극단적인 경우만 왼쪽·위쪽 벽에 맞춰둔다).
   function placeWithSnap(xCm, yCm, wCm, hCm, excludeId) {
     let { xCm: x, yCm: y } = snapPlacement(xCm, yCm, wCm, hCm, excludeId);
     for (let i = 0; i < 4; i++) {
@@ -11184,7 +11194,9 @@ function LayoutSimTab({ managerName = "" }) {
       x = resolved.xCm;
       y = resolved.yCm;
     }
-    return { xCm: Math.max(0, x), yCm: Math.max(0, y) };
+    const maxX = Math.max(0, spaceWidthM * 100 - wCm);
+    const maxY = Math.max(0, spaceDepthM * 100 - hCm);
+    return { xCm: Math.min(Math.max(0, x), maxX), yCm: Math.min(Math.max(0, y), maxY) };
   }
 
   function handleCanvasDrop(e) {
