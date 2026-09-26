@@ -4849,6 +4849,34 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
   const [showAdvSearch, setShowAdvSearch] = useState(false);
   const [advSearch, setAdvSearch] = useState(emptyAdvSearch);
   const [appliedAdv, setAppliedAdv] = useState(emptyAdvSearch);
+  // 목록 표의 열(컬럼) 제목을 눌러서 정렬하는 기능(구매내역/렌탈내역 공용 — 이 컴포넌트를 그대로 재사용하기 때문).
+  // sortKey가 없으면 예전처럼 배송일자 최신순(기본 순서) 그대로 보여준다.
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc"); // "asc" | "desc"
+  const RENTAL_LIST_STATUS_RANK = { overdue: 0, soon: 1, normal: 2, collected: 3, purchase: 4 };
+  const sortAccessors = {
+    전표번호: (g) => g.voucherNo || "",
+    거래처: (g) => g.head.customer || "",
+    현장명: (g) => g.head.site_name || "",
+    담당자: (g) => g.head.manager || "",
+    배송일자: (g) => g.head.out_date || "",
+    렌탈개시일: (g) => g.head.out_date || "",
+    렌탈만료일: (g) => g.head.due_date || "",
+    금액: (g) => g.rows.reduce((s, r) => s + (Number(r.amount) || 0), 0),
+    상태: (g) => {
+      const s = getStatus({ transaction_type: g.head.transaction_type, collected: g.rows.every((r) => r.collected), due_date: g.head.due_date });
+      return RENTAL_LIST_STATUS_RANK[s] ?? 9;
+    },
+  };
+  const handleSortClick = (label) => {
+    if (!sortAccessors[label]) return;
+    if (sortKey === label) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(label);
+      setSortDir("asc");
+    }
+  };
 
   const toggleCheck = (key) => {
     setCheckedKeys((prev) => {
@@ -4906,6 +4934,22 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
     return list;
   }, [groups, query, appliedAdv]);
 
+  // 열 제목을 눌러 정렬을 지정했으면 그 기준으로, 아니면 원래 순서(배송일자 최신순)를 그대로 유지한다.
+  const sortedFiltered = useMemo(() => {
+    if (!sortKey || !sortAccessors[sortKey]) return filtered;
+    const acc = sortAccessors[sortKey];
+    const list = [...filtered];
+    list.sort((a, b) => {
+      const va = acc(a);
+      const vb = acc(b);
+      let cmp;
+      if (typeof va === "number" || typeof vb === "number") cmp = (Number(va) || 0) - (Number(vb) || 0);
+      else cmp = String(va).localeCompare(String(vb), "ko");
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return list;
+  }, [filtered, sortKey, sortDir]);
+
   const applyAdvSearch = () => setAppliedAdv(advSearch);
   const resetAdvSearch = () => {
     setAdvSearch(emptyAdvSearch);
@@ -4914,7 +4958,7 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
 
   const selected = groups.find((g) => g.key === selectedKey) || null;
 
-  const visibleKeys = filtered.map((g) => g.key);
+  const visibleKeys = sortedFiltered.map((g) => g.key);
   const allChecked = visibleKeys.length > 0 && visibleKeys.every((k) => checkedKeys.has(k));
   const someChecked = visibleKeys.some((k) => checkedKeys.has(k));
   const selectAllRef = useRef(null);
@@ -5123,20 +5167,34 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
           <div>
             <input ref={selectAllRef} type="checkbox" checked={allChecked} onChange={toggleSelectAll} />
           </div>
-          <div>전표번호</div>
-          <div>거래처</div>
-          <div>현장명</div>
-          <div>담당자</div>
-          <div>배송일자</div>
-          <div>품목</div>
-          <div>렌탈기간</div>
-          <div>렌탈개시일</div>
-          <div>렌탈만료일</div>
-          <div>금액</div>
-          <div>상태</div>
+          {["전표번호", "거래처", "현장명", "담당자", "배송일자", "품목", "렌탈기간", "렌탈개시일", "렌탈만료일", "금액", "상태"].map((label) =>
+            sortAccessors[label] ? (
+              <button
+                key={label}
+                type="button"
+                onClick={() => handleSortClick(label)}
+                title="눌러서 정렬"
+                style={{
+                  all: "unset",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 2,
+                  fontSize: 11.5,
+                  color: sortKey === label ? C.ink : C.muted,
+                  fontWeight: sortKey === label ? 700 : 400,
+                }}
+              >
+                {label}
+                <span style={{ fontSize: 9, opacity: sortKey === label ? 1 : 0.35 }}>{sortKey === label ? (sortDir === "asc" ? "▲" : "▼") : "▲"}</span>
+              </button>
+            ) : (
+              <div key={label}>{label}</div>
+            )
+          )}
         </div>
 
-        {filtered.map((g) => {
+        {sortedFiltered.map((g) => {
           const status = getStatus({
             transaction_type: g.head.transaction_type,
             collected: g.rows.every((r) => r.collected),
