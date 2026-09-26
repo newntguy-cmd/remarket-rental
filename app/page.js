@@ -11265,6 +11265,35 @@ function LayoutSimTab({ managerName = "" }) {
     return { xCm: Math.min(Math.max(0, x), maxX), yCm: Math.min(Math.max(0, y), maxY) };
   }
 
+  // 안전망: 끌기·크기조절·회전·방향키처럼 사용자가 직접 조작할 때는 각 동작마다 벽 밖으로 못 나가게
+  // 막아뒀지만, 예전에(이 규칙이 생기기 전에) 저장해둔 배치안을 불러오거나(handleLoadBoard), 이미
+  // 모형을 놓아둔 상태에서 방 가로·세로 크기를 더 작게 바꾸면(handleCreateSpace) 그 좌표는 아무도
+  // 손대지 않았으니 여전히 벽 밖으로 나가 있는 채로 남아있을 수 있다(화면 오른쪽·아래쪽만 살짝
+  // 삐져나오는 것처럼 보이는 문제). 방 크기나 배치 목록이 바뀔 때마다 벽 밖으로 나간 모형이 있는지
+  // 확인해서 자동으로 안쪽으로 맞춰준다. 고칠 게 없으면 원래 배열을 그대로 돌려줘서(참조 동일)
+  // 불필요한 재렌더링·무한 루프 없이 조용히 지나간다.
+  useEffect(() => {
+    setPlacedItems((prev) => {
+      let changed = false;
+      const next = prev.map((it) => {
+        const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
+        const swapped = rotation === 90 || rotation === 270;
+        const wCm = swapped ? it.depthCm : it.widthCm;
+        const hCm = swapped ? it.widthCm : it.depthCm;
+        const maxX = Math.max(0, spaceWidthM * 100 - wCm);
+        const maxY = Math.max(0, spaceDepthM * 100 - hCm);
+        const xCm = Math.min(Math.max(0, it.xCm), maxX);
+        const yCm = Math.min(Math.max(0, it.yCm), maxY);
+        if (xCm !== it.xCm || yCm !== it.yCm) {
+          changed = true;
+          return { ...it, xCm, yCm };
+        }
+        return it;
+      });
+      return changed ? next : prev;
+    });
+  }, [spaceWidthM, spaceDepthM, placedItems]);
+
   function handleCanvasDrop(e) {
     e.preventDefault();
     let payload;
