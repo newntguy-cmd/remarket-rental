@@ -5329,6 +5329,41 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
     );
     setCheckedItemIdxs(new Set());
   };
+  // 품목 내역 표의 열 제목을 눌러서 정렬하는 기능(렌탈내역/자동등록 목록과 같은 방식). 이 표는 입력칸이라
+  // 화면 표시만 따로 바꾸지 않고, "가나다순 정렬"처럼 실제 items 배열 순서 자체를 바꾼다(그래야 각 입력칸이
+  // 계속 올바른 품목을 가리킨다). 저장하면 이 순서 그대로 line_no에 반영된다.
+  const [itemSortKey, setItemSortKey] = useState(null);
+  const [itemSortDir, setItemSortDir] = useState("asc");
+  const itemSortAccessors = {
+    "품목명": (it) => it.item || "",
+    "규격": (it) => it.spec || "",
+    "수량": (it) => Number(it.qty) || 0,
+    "단가": (it) => Number(it.unit_price) || 0,
+    "공급가액": (it) => Number(it.amount) || 0,
+    "부가세": (it) => Math.round((Number(it.amount) || 0) * 0.1),
+    "적요": (it) => it.note || "",
+    "합계": (it) => (Number(it.amount) || 0) + Math.round((Number(it.amount) || 0) * 0.1),
+  };
+  const handleItemSortClick = (label) => {
+    const accessor = itemSortAccessors[label];
+    if (!accessor) return;
+    const nextDir = itemSortKey === label && itemSortDir === "asc" ? "desc" : "asc";
+    setItemSortKey(label);
+    setItemSortDir(nextDir);
+    setItems((prev) => {
+      const list = [...prev];
+      list.sort((a, b) => {
+        const va = accessor(a);
+        const vb = accessor(b);
+        let cmp;
+        if (typeof va === "number" || typeof vb === "number") cmp = (Number(va) || 0) - (Number(vb) || 0);
+        else cmp = String(va).localeCompare(String(vb), "ko");
+        return nextDir === "asc" ? cmp : -cmp;
+      });
+      return list;
+    });
+    setCheckedItemIdxs(new Set());
+  };
   const toggleItemChecked = (idx) => {
     setCheckedItemIdxs((prev) => {
       const next = new Set(prev);
@@ -5340,6 +5375,42 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
   const toggleItemCheckedAll = () => {
     setCheckedItemIdxs((prev) => (prev.size === items.length ? new Set() : new Set(items.map((_, i) => i))));
   };
+  // 체크박스로 선택한 품목만(헤더의 "전체선택" 체크박스로 전부 선택한 경우도 포함) 엑셀로 내려받는다.
+  const [exportingItems, setExportingItems] = useState(false);
+  async function handleExportCheckedItemsExcel() {
+    if (checkedItemIdxs.size === 0) return;
+    setExportingItems(true);
+    const XLSX = await import("xlsx");
+    const checked = items.filter((_, i) => checkedItemIdxs.has(i));
+    const rows = checked.map((it) => {
+      const vat = Math.round((Number(it.amount) || 0) * 0.1);
+      return [
+        it.item || "",
+        it.spec || "",
+        Number(it.qty) || 0,
+        Number(it.unit_price) || 0,
+        Number(it.amount) || 0,
+        vat,
+        it.note || "",
+        (Number(it.amount) || 0) + vat,
+      ];
+    });
+    const header2 = ["품목명", "규격", "수량", "단가", "공급가액", "부가세", "적요", "합계"];
+    const aoa = [
+      [`${header.voucherNo || "전표"} 품목 내역`],
+      [`거래처: ${header.customer || ""}  현장명: ${header.siteName || ""}`],
+      [`추출일: ${todayISO()}`],
+      [],
+      header2,
+      ...rows,
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 20 }, { wch: 22 }, { wch: 8 }, { wch: 12 }, { wch: 13 }, { wch: 11 }, { wch: 16 }, { wch: 13 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "품목 내역");
+    XLSX.writeFile(wb, `${header.voucherNo || "전표"}_품목내역_${todayISO()}.xlsx`);
+    setExportingItems(false);
+  }
   const handleDeleteSelectedItems = () => {
     if (checkedItemIdxs.size === 0) return;
     const msg = hideInsteadOfDelete
@@ -5747,6 +5818,11 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
           <div style={{ fontFamily: serif, fontSize: 16 }}>품목 내역</div>
           <div style={{ display: "flex", gap: 8 }}>
             {checkedItemIdxs.size > 0 && (
+              <button onClick={handleExportCheckedItemsExcel} disabled={exportingItems} style={miniBtnStyle}>
+                {exportingItems ? "내려받는 중…" : `선택 엑셀출력 (${checkedItemIdxs.size})`}
+              </button>
+            )}
+            {checkedItemIdxs.size > 0 && (
               <button onClick={handleDeleteSelectedItems} style={{ ...miniBtnStyle, borderColor: C.brick, color: C.brick }}>
                 {hideInsteadOfDelete ? "선택 제외" : "선택삭제"} ({checkedItemIdxs.size})
               </button>
@@ -5782,7 +5858,14 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
             </div>
             {["품목명", "규격", "수량", "단가", "공급가액", "부가세", "적요", "합계"].map((label, i) => (
               <div key={label} style={{ position: "relative" }}>
-                {label}
+                <button
+                  onClick={() => handleItemSortClick(label)}
+                  title="눌러서 정렬"
+                  style={{ all: "unset", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 2 }}
+                >
+                  {label}
+                  {itemSortKey === label && <span style={{ fontSize: 9 }}>{itemSortDir === "asc" ? "▲" : "▼"}</span>}
+                </button>
                 <ColResizeHandle onMouseDown={startResize(i)} />
               </div>
             ))}
