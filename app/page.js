@@ -7752,25 +7752,6 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
     return list;
   }, [filteredGroupsBase, sortKey, sortDir]);
 
-  const selectedGroup = allGroups.find((g) => g.key === selectedKey) || null;
-
-  if (selectedGroup) {
-    return (
-      <RentalDetailPanel
-        group={selectedGroup}
-        onClose={() => setSelectedKey(null)}
-        onSaved={() => {
-          onRefresh && onRefresh();
-          setSelectedKey(null);
-        }}
-        isAdmin={isAdmin}
-        managerName={managerName}
-        tonOverrides={tonOverrides}
-        onTonOverrideSaved={onTonOverrideSaved}
-      />
-    );
-  }
-
   const filtersActive = customerQuery.trim() || voucherQuery.trim() || fromDate || toDate;
   const runSearch = () => {
     setCustomerQuery(customerInput);
@@ -7802,6 +7783,26 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
   useEffect(() => {
     if (selectAllRef.current) selectAllRef.current.indeterminate = someChecked && !allChecked;
   }, [someChecked, allChecked]);
+
+  // 이 위까지 모든 훅(useState/useMemo/useRef/useEffect)을 먼저 다 호출한 다음에만 조건부로 화면을 바꿔야
+  // 한다(그렇지 않으면 "전표번호 클릭 시 오류" 같은 훅 순서 오류가 남 — 렌탈내역/판매현황과 동일한 패턴).
+  const selectedGroup = allGroups.find((g) => g.key === selectedKey) || null;
+  if (selectedGroup) {
+    return (
+      <RentalDetailPanel
+        group={selectedGroup}
+        onClose={() => setSelectedKey(null)}
+        onSaved={() => {
+          onRefresh && onRefresh();
+          setSelectedKey(null);
+        }}
+        isAdmin={isAdmin}
+        managerName={managerName}
+        tonOverrides={tonOverrides}
+        onTonOverrideSaved={onTonOverrideSaved}
+      />
+    );
+  }
 
   const toggleChecked = (key) => {
     setCheckedIds((prev) => {
