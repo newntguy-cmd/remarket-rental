@@ -11247,6 +11247,24 @@ function LayoutSimTab({ managerName = "" }) {
     return { xCm: Math.min(Math.max(0, x), maxX), yCm: Math.min(Math.max(0, y), maxY) };
   }
 
+  // 방향키로 옮길 때 쓰는 버전 — 다른 모형과는 안 겹치게 밀어내고 배치판 밖으로는 못 나가게 막지만,
+  // placeWithSnap과 달리 벽·다른 모형에 자석처럼 달라붙는 부분(snapPlacement)은 적용하지 않는다.
+  // 벽에 붙어있던 모형을 5cm씩 떼어내려 해도, 그 움직인 거리가 자석 스냅 범위(15cm) 안에 들어가면
+  // 다시 벽으로 끌려가 버려서 "붙은 뒤에는 움직이지 않는" 것처럼 보이던 문제를 막기 위함이다.
+  function moveWithClamp(xCm, yCm, wCm, hCm, excludeId) {
+    let x = xCm;
+    let y = yCm;
+    for (let i = 0; i < 4; i++) {
+      const resolved = resolveOverlap(x, y, wCm, hCm, excludeId);
+      if (resolved.xCm === x && resolved.yCm === y) break;
+      x = resolved.xCm;
+      y = resolved.yCm;
+    }
+    const maxX = Math.max(0, spaceWidthM * 100 - wCm);
+    const maxY = Math.max(0, spaceDepthM * 100 - hCm);
+    return { xCm: Math.min(Math.max(0, x), maxX), yCm: Math.min(Math.max(0, y), maxY) };
+  }
+
   function handleCanvasDrop(e) {
     e.preventDefault();
     let payload;
@@ -11306,12 +11324,26 @@ function LayoutSimTab({ managerName = "" }) {
   // 사각형은 0/90도만 돌려도 충분하지만, ㄱ자·U자는 방 구석·방향에 맞춰 4방향 모두 필요해서
   // 누를 때마다 0→90→180→270→0으로 한 바퀴 돈다. 예전에 저장된 배치(rotated: true/false만 있던
   // 옛 데이터)도 그대로 이어받을 수 있도록 rotation이 없으면 rotated 값으로 대신 계산한다.
+  // 가로·세로가 다른 모형(예: W1400×D1200)은 90도로 돌리면 화면에 보이는 가로·세로가 서로 바뀌는데,
+  // 위치(xCm/yCm)는 그대로 두면 커진 쪽 끝이 배치판 벽 밖으로 삐져나갈 수 있어서(하단·우측 침범),
+  // 회전 직후 새로 보이는 가로·세로 기준으로 위치를 벽 안쪽으로 다시 맞춰준다.
   function handleRotatePlaced(id) {
     setPlacedItems((prev) =>
       prev.map((it) => {
         if (it.id !== id) return it;
         const current = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
-        return { ...it, rotation: (current + 90) % 360 };
+        const nextRotation = (current + 90) % 360;
+        const swapped = nextRotation === 90 || nextRotation === 270;
+        const wCm = swapped ? it.depthCm : it.widthCm;
+        const hCm = swapped ? it.widthCm : it.depthCm;
+        const maxX = Math.max(0, spaceWidthM * 100 - wCm);
+        const maxY = Math.max(0, spaceDepthM * 100 - hCm);
+        return {
+          ...it,
+          rotation: nextRotation,
+          xCm: Math.min(Math.max(0, it.xCm), maxX),
+          yCm: Math.min(Math.max(0, it.yCm), maxY),
+        };
       })
     );
   }
@@ -11369,9 +11401,12 @@ function LayoutSimTab({ managerName = "" }) {
   }
 
   // 키보드 화살표로 선택한 모형을 옮긴다. 기본 5cm씩, Shift를 누르면 20cm씩 움직이고, 마우스로 끌 때와
-  // 똑같이 자석 스냅·배치판 밖으로 못 나가는 제한(placeWithSnap)을 그대로 적용해서 마우스 없이도 세밀하게
-  // 위치를 맞출 수 있게 한다. 이름 입력칸 등 다른 곳에 포커스가 가 있을 때는 그 칸의 원래 동작(커서 이동)을
-  // 방해하지 않도록 건드리지 않는다. Escape를 누르면 선택만 해제한다.
+  // 똑같이 다른 모형과 안 겹치게·배치판 밖으로 못 나가게 제한(moveWithClamp)을 그대로 적용해서 마우스
+  // 없이도 세밀하게 위치를 맞출 수 있게 한다. 단, 벽·다른 모형에 자석처럼 달라붙는 동작(placeWithSnap의
+  // snapPlacement)은 일부러 적용하지 않는다 — 벽에 붙은 모형을 방향키로 떼어내려 해도 움직인 거리가
+  // 자석 범위 안이면 도로 끌려가서 "붙은 뒤에는 움직이지 않는" 것처럼 보이기 때문이다. 이름 입력칸 등
+  // 다른 곳에 포커스가 가 있을 때는 그 칸의 원래 동작(커서 이동)을 방해하지 않도록 건드리지 않는다.
+  // Escape를 누르면 선택만 해제한다.
   useEffect(() => {
     function onKeyDown(e) {
       if (!selectedPlacedId) return;
@@ -11396,7 +11431,7 @@ function LayoutSimTab({ managerName = "" }) {
       else if (e.key === "ArrowDown") dy = step;
       else if (e.key === "ArrowLeft") dx = -step;
       else if (e.key === "ArrowRight") dx = step;
-      const placed = placeWithSnap(it.xCm + dx, it.yCm + dy, wCm, hCm, it.id);
+      const placed = moveWithClamp(it.xCm + dx, it.yCm + dy, wCm, hCm, it.id);
       setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, xCm: placed.xCm, yCm: placed.yCm } : p)));
     }
     window.addEventListener("keydown", onKeyDown);
