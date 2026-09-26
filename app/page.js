@@ -11081,6 +11081,112 @@ function LayoutSimTab({ managerName = "" }) {
     e.dataTransfer.setData("text/plain", JSON.stringify({ type: "placed", placedId: placed.id, offsetXCm, offsetYCm }));
   }
 
+  // 모형을 새로 놓거나 옮길 때, 근처(화면 기준 15px 이내)에 이미 놓인 모형의 변이 있으면 자석처럼
+  // 그 변에 딱 붙여준다(왼쪽/오른쪽/위/아래로 붙이기, 변끼리 줄맞추기). 세로 범위가 겹칠 때만 좌우로,
+  // 가로 범위가 겹칠 때만 위아래로 붙이는 게 자연스러워서 그 경우에만 후보로 고려한다.
+  function snapPlacement(xCm, yCm, wCm, hCm, excludeId) {
+    const thresholdCm = 15 / scale;
+    let snappedX = xCm;
+    let snappedY = yCm;
+    let bestXDist = thresholdCm;
+    let bestYDist = thresholdCm;
+    const myTop = yCm;
+    const myBottom = yCm + hCm;
+    const myLeft = xCm;
+    const myRight = xCm + wCm;
+
+    function tryX(candidate) {
+      const dist = Math.abs(candidate - xCm);
+      if (dist < bestXDist) {
+        bestXDist = dist;
+        snappedX = candidate;
+      }
+    }
+    function tryY(candidate) {
+      const dist = Math.abs(candidate - yCm);
+      if (dist < bestYDist) {
+        bestYDist = dist;
+        snappedY = candidate;
+      }
+    }
+
+    for (const other of placedItems) {
+      if (other.id === excludeId) continue;
+      const rotation = other.rotation != null ? other.rotation : other.rotated ? 90 : 0;
+      const swapped = rotation === 90 || rotation === 270;
+      const ow = swapped ? other.depthCm : other.widthCm;
+      const oh = swapped ? other.widthCm : other.depthCm;
+      const oLeft = other.xCm;
+      const oRight = other.xCm + ow;
+      const oTop = other.yCm;
+      const oBottom = other.yCm + oh;
+
+      if (myTop < oBottom + thresholdCm && myBottom > oTop - thresholdCm) {
+        tryX(oLeft - wCm); // 상대 왼쪽에 붙이기
+        tryX(oRight); // 상대 오른쪽에 붙이기
+        tryX(oLeft); // 왼쪽 변끼리 맞추기
+        tryX(oRight - wCm); // 오른쪽 변끼리 맞추기
+      }
+      if (myLeft < oRight + thresholdCm && myRight > oLeft - thresholdCm) {
+        tryY(oTop - hCm); // 상대 위쪽에 붙이기
+        tryY(oBottom); // 상대 아래쪽에 붙이기
+        tryY(oTop); // 위쪽 변끼리 맞추기
+        tryY(oBottom - hCm); // 아래쪽 변끼리 맞추기
+      }
+    }
+
+    return { xCm: snappedX, yCm: snappedY };
+  }
+
+  // 자석 스냅으로도 다른 모형과 겹친 채로 남아있으면(예: 다른 모형 한가운데에 떨어뜨린 경우),
+  // 겹친 폭·높이 중 더 적게 밀어내도 되는 방향으로 딱 붙을 때까지 밀어내서 서로 영역을 침범하지 않게 한다.
+  function resolveOverlap(xCm, yCm, wCm, hCm, excludeId) {
+    let x = xCm;
+    let y = yCm;
+    for (const other of placedItems) {
+      if (other.id === excludeId) continue;
+      const rotation = other.rotation != null ? other.rotation : other.rotated ? 90 : 0;
+      const swapped = rotation === 90 || rotation === 270;
+      const ow = swapped ? other.depthCm : other.widthCm;
+      const oh = swapped ? other.widthCm : other.depthCm;
+      const oLeft = other.xCm;
+      const oRight = other.xCm + ow;
+      const oTop = other.yCm;
+      const oBottom = other.yCm + oh;
+      const myLeft = x;
+      const myRight = x + wCm;
+      const myTop = y;
+      const myBottom = y + hCm;
+      const overlapX = Math.min(myRight, oRight) - Math.max(myLeft, oLeft);
+      const overlapY = Math.min(myBottom, oBottom) - Math.max(myTop, oTop);
+      if (overlapX > 0 && overlapY > 0) {
+        if (overlapX < overlapY) {
+          const myCenterX = myLeft + wCm / 2;
+          const oCenterX = oLeft + ow / 2;
+          x = myCenterX < oCenterX ? oLeft - wCm : oRight;
+        } else {
+          const myCenterY = myTop + hCm / 2;
+          const oCenterY = oTop + oh / 2;
+          y = myCenterY < oCenterY ? oTop - hCm : oBottom;
+        }
+      }
+    }
+    return { xCm: x, yCm: y };
+  }
+
+  // 자석 스냅 → 그래도 겹치면 밀어내기, 순서로 적용한다(최대 4번 반복해서 여러 모형에 연달아
+  // 걸리는 경우도 웬만큼 처리한다). 마지막엔 공간 밖(음수 좌표)으로 나가지 않게 0 이상으로 고정한다.
+  function placeWithSnap(xCm, yCm, wCm, hCm, excludeId) {
+    let { xCm: x, yCm: y } = snapPlacement(xCm, yCm, wCm, hCm, excludeId);
+    for (let i = 0; i < 4; i++) {
+      const resolved = resolveOverlap(x, y, wCm, hCm, excludeId);
+      if (resolved.xCm === x && resolved.yCm === y) break;
+      x = resolved.xCm;
+      y = resolved.yCm;
+    }
+    return { xCm: Math.max(0, x), yCm: Math.max(0, y) };
+  }
+
   function handleCanvasDrop(e) {
     e.preventDefault();
     let payload;
@@ -11098,6 +11204,9 @@ function LayoutSimTab({ managerName = "" }) {
       if (!shape) return;
       const widthCm = Number(shape.width_cm);
       const depthCm = Number(shape.depth_cm);
+      const rawX = Math.max(0, cmX - widthCm / 2);
+      const rawY = Math.max(0, cmY - depthCm / 2);
+      const placed = placeWithSnap(rawX, rawY, widthCm, depthCm, null);
       setPlacedItems((prev) => [
         ...prev,
         {
@@ -11109,20 +11218,23 @@ function LayoutSimTab({ managerName = "" }) {
           depthCm,
           notchWidthCm: shape.notch_width_cm != null ? Number(shape.notch_width_cm) : null,
           notchDepthCm: shape.notch_depth_cm != null ? Number(shape.notch_depth_cm) : null,
-          xCm: Math.max(0, cmX - widthCm / 2),
-          yCm: Math.max(0, cmY - depthCm / 2),
+          xCm: placed.xCm,
+          yCm: placed.yCm,
           rotation: 0,
           flipped: false,
         },
       ]);
     } else if (payload.type === "placed") {
-      setPlacedItems((prev) =>
-        prev.map((it) =>
-          it.id === payload.placedId
-            ? { ...it, xCm: Math.max(0, cmX - (payload.offsetXCm || 0)), yCm: Math.max(0, cmY - (payload.offsetYCm || 0)) }
-            : it
-        )
-      );
+      const moving = placedItems.find((it) => it.id === payload.placedId);
+      if (!moving) return;
+      const rotation = moving.rotation != null ? moving.rotation : moving.rotated ? 90 : 0;
+      const swapped = rotation === 90 || rotation === 270;
+      const wCm = swapped ? moving.depthCm : moving.widthCm;
+      const hCm = swapped ? moving.widthCm : moving.depthCm;
+      const rawX = Math.max(0, cmX - (payload.offsetXCm || 0));
+      const rawY = Math.max(0, cmY - (payload.offsetYCm || 0));
+      const placed = placeWithSnap(rawX, rawY, wCm, hCm, moving.id);
+      setPlacedItems((prev) => prev.map((it) => (it.id === payload.placedId ? { ...it, xCm: placed.xCm, yCm: placed.yCm } : it)));
     }
   }
 
