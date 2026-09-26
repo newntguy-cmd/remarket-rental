@@ -10902,6 +10902,9 @@ function LayoutSimTab({ managerName = "" }) {
     nextPlacedIdRef.current += 1;
     return `p${nextPlacedIdRef.current}`;
   };
+  // 키보드로 옮기려면 "지금 어떤 모형을 고른 상태인지"가 있어야 해서, 모형을 누르면 선택되고
+  // 빈 캔버스를 누르면 선택이 풀리게 한다(선택된 모형은 테두리를 강조해서 보여준다).
+  const [selectedPlacedId, setSelectedPlacedId] = useState(null);
 
   const [boards, setBoards] = useState([]);
   const [currentBoardId, setCurrentBoardId] = useState(null);
@@ -11297,6 +11300,7 @@ function LayoutSimTab({ managerName = "" }) {
 
   function handleRemovePlaced(id) {
     setPlacedItems((prev) => prev.filter((it) => it.id !== id));
+    setSelectedPlacedId((prev) => (prev === id ? null : prev));
   }
 
   // 사각형은 0/90도만 돌려도 충분하지만, ㄱ자·U자는 방 구석·방향에 맞춰 4방향 모두 필요해서
@@ -11329,8 +11333,20 @@ function LayoutSimTab({ managerName = "" }) {
       if (!drag) return;
       const dxCm = (e.clientX - drag.startX) / scale;
       const dyCm = (e.clientY - drag.startY) / scale;
-      const newWidthCm = Math.max(10, drag.swapped ? drag.startWidthCm + dyCm : drag.startWidthCm + dxCm);
-      const newDepthCm = Math.max(10, drag.swapped ? drag.startDepthCm + dxCm : drag.startDepthCm + dyCm);
+      let newWidthCm = Math.max(10, drag.swapped ? drag.startWidthCm + dyCm : drag.startWidthCm + dxCm);
+      let newDepthCm = Math.max(10, drag.swapped ? drag.startDepthCm + dxCm : drag.startDepthCm + dyCm);
+      // 손잡이가 오른쪽 아래에 있어 왼쪽·위쪽 위치(xCm/yCm)는 그대로인 채 커지므로, 화면에 보이는
+      // 가로·세로(swapped 반영)가 배치판 오른쪽·아래쪽 벽을 넘지 않도록 커지는 만큼만 제한한다.
+      // (하단·우측을 침범하지 않게: 크기 조절로 방 밖까지 늘어나던 문제를 막는다.)
+      const maxOnScreenW = Math.max(10, spaceWidthM * 100 - drag.xCm);
+      const maxOnScreenH = Math.max(10, spaceDepthM * 100 - drag.yCm);
+      if (drag.swapped) {
+        newDepthCm = Math.min(newDepthCm, maxOnScreenW);
+        newWidthCm = Math.min(newWidthCm, maxOnScreenH);
+      } else {
+        newWidthCm = Math.min(newWidthCm, maxOnScreenW);
+        newDepthCm = Math.min(newDepthCm, maxOnScreenH);
+      }
       setPlacedItems((prev) => prev.map((it) => (it.id === drag.id ? { ...it, widthCm: newWidthCm, depthCm: newDepthCm } : it)));
     }
     function onResizeUp() {
@@ -11342,15 +11358,50 @@ function LayoutSimTab({ managerName = "" }) {
       window.removeEventListener("mousemove", onResizeMove);
       window.removeEventListener("mouseup", onResizeUp);
     };
-  }, [scale]);
+  }, [scale, spaceWidthM, spaceDepthM]);
 
   function startResizePlaced(it, swapped) {
     return (e) => {
       e.preventDefault();
       e.stopPropagation();
-      resizeDragRef.current = { id: it.id, startX: e.clientX, startY: e.clientY, startWidthCm: it.widthCm, startDepthCm: it.depthCm, swapped };
+      resizeDragRef.current = { id: it.id, startX: e.clientX, startY: e.clientY, startWidthCm: it.widthCm, startDepthCm: it.depthCm, xCm: it.xCm, yCm: it.yCm, swapped };
     };
   }
+
+  // 키보드 화살표로 선택한 모형을 옮긴다. 기본 5cm씩, Shift를 누르면 20cm씩 움직이고, 마우스로 끌 때와
+  // 똑같이 자석 스냅·배치판 밖으로 못 나가는 제한(placeWithSnap)을 그대로 적용해서 마우스 없이도 세밀하게
+  // 위치를 맞출 수 있게 한다. 이름 입력칸 등 다른 곳에 포커스가 가 있을 때는 그 칸의 원래 동작(커서 이동)을
+  // 방해하지 않도록 건드리지 않는다. Escape를 누르면 선택만 해제한다.
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (!selectedPlacedId) return;
+      const tag = document.activeElement && document.activeElement.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "Escape") {
+        setSelectedPlacedId(null);
+        return;
+      }
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
+      const it = placedItems.find((p) => p.id === selectedPlacedId);
+      if (!it) return;
+      e.preventDefault();
+      const step = e.shiftKey ? 20 : 5;
+      const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
+      const swapped = rotation === 90 || rotation === 270;
+      const wCm = swapped ? it.depthCm : it.widthCm;
+      const hCm = swapped ? it.widthCm : it.depthCm;
+      let dx = 0;
+      let dy = 0;
+      if (e.key === "ArrowUp") dy = -step;
+      else if (e.key === "ArrowDown") dy = step;
+      else if (e.key === "ArrowLeft") dx = -step;
+      else if (e.key === "ArrowRight") dx = step;
+      const placed = placeWithSnap(it.xCm + dx, it.yCm + dy, wCm, hCm, it.id);
+      setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, xCm: placed.xCm, yCm: placed.yCm } : p)));
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedPlacedId, placedItems, spaceWidthM, spaceDepthM]);
 
   function handleClearBoard() {
     if (placedItems.length > 0 && !confirm("현재 배치를 전부 지우고 새로 시작할까요? (저장하지 않은 배치는 사라져요)")) return;
@@ -11358,6 +11409,7 @@ function LayoutSimTab({ managerName = "" }) {
     setCurrentBoardId(null);
     setBoardName("");
     setRulerPoints([]);
+    setSelectedPlacedId(null);
   }
 
   // 줄자로 찍을 수 있는 "끝점" 후보: 놓인 모형들의 네 모서리(회전된 상태면 화면에 보이는 대로).
@@ -11397,6 +11449,9 @@ function LayoutSimTab({ managerName = "" }) {
   // 줄자: 캔버스를 누를 때마다 점을 하나씩 찍고, 두 점이 모이면 그 사이 실제 거리를 계산해 보여준다.
   // 세 번째 클릭부터는 이전 측정을 지우고 새로 잰다.
   function handleCanvasClick(e) {
+    // 빈 캔버스(모형이 없는 곳)를 누르면 선택을 해제한다. 모형 자체를 눌렀을 때는 그 모형의 onClick이
+    // stopPropagation을 해서 여기까지 올라오지 않으므로, 선택이 계속 유지된다.
+    setSelectedPlacedId(null);
     if (!rulerMode) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const rawXCm = (e.clientX - rect.left) / scale;
@@ -11743,7 +11798,7 @@ function LayoutSimTab({ managerName = "" }) {
           </div>
           <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
             <div style={{ fontSize: 12, color: C.muted }}>
-              공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요.
+              공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 한 번 클릭하면 선택되고(테두리 강조), 방향키로 세밀하게 옮길 수 있어요(Shift+방향키는 더 크게).
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <button
@@ -11796,12 +11851,17 @@ function LayoutSimTab({ managerName = "" }) {
                     .map((p) => p.join(","))
                     .join(" ")
                 : null;
+              const isSelected = it.id === selectedPlacedId;
               return (
                 <div
                   key={it.id}
                   draggable
                   onDragStart={(e) => handleDragStartPlaced(e, it)}
-                  title={`${it.name} (${it.widthCm}×${it.depthCm}cm) — 끌어서 옮기거나 모서리를 끌어 크기 조절, 버튼으로 회전·삭제`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedPlacedId(it.id);
+                  }}
+                  title={`${it.name} (${it.widthCm}×${it.depthCm}cm) — 눌러서 선택 후 방향키로 이동(Shift+방향키는 크게), 끌어서 옮기거나 모서리를 끌어 크기 조절, 버튼으로 회전·삭제`}
                   style={{
                     position: "absolute",
                     left: it.xCm * scale,
@@ -11810,6 +11870,10 @@ function LayoutSimTab({ managerName = "" }) {
                     height: outerHPx,
                     cursor: "grab",
                     userSelect: "none",
+                    outline: isSelected ? `2px solid ${C.purple}` : "none",
+                    outlineOffset: 1,
+                    boxShadow: isSelected ? "0 0 0 4px rgba(124, 58, 237, 0.15)" : "none",
+                    zIndex: isSelected ? 1 : 0,
                   }}
                 >
                   {/* 실제 모양(사각형 또는 ㄱ자/U자 다각형)은 회전 각도만큼 돌리고, 아래 이름표·버튼은
