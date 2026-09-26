@@ -10920,6 +10920,32 @@ function ChairTopIcon({ w, d, fill, stroke }) {
   );
 }
 
+// 회의실·테이블 앞에 놓는 회의(응접)의자를 위에서 내려다본 모양으로 그린다. 개인 책상 앞 사무의자
+// (ChairTopIcon, 팔걸이·회전축·캐스터 있음)와 다르게, 회의의자는 대개 바퀴·팔걸이 없이 등받이+좌판만
+// 있는 단순한 형태라 도면에서도 둥근 사각형 두 개(등받이·좌판)만 포개서 표시하는 게 일반적이다. 이
+// 단순함 자체가 "책상 앞 사무의자"와 "테이블 앞 회의의자"를 한눈에 구분하는 표시가 된다.
+function MeetingChairTopIcon({ w, d, fill, stroke }) {
+  const W = Number(w) || 0;
+  const D = Number(d) || 0;
+  const minWD = Math.min(W, D);
+  const strokeW = Math.max(minWD * 0.02, 0.4);
+  // 등받이(맨 위, 좌판보다 살짝 좁게)
+  const backW = W * 0.86;
+  const backH = D * 0.26;
+  const backX = (W - backW) / 2;
+  // 좌판(등받이 아래, 전체 폭 거의 그대로)
+  const seatW = W * 0.94;
+  const seatH = D * 0.58;
+  const seatX = (W - seatW) / 2;
+  const seatY = D * 0.34;
+  return (
+    <g fill={fill} stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round">
+      <rect x={seatX} y={seatY} width={seatW} height={seatH} rx={Math.min(seatW, seatH) * 0.14} />
+      <rect x={backX} y={0} width={backW} height={backH} rx={backH * 0.35} />
+    </g>
+  );
+}
+
 // ---------- 배치 시뮬레이션 ----------
 // 공간 크기(가로×세로, m)를 입력하면 그 비율의 네모 박스가 나오고, 미리 등록해둔 모형(품목명+가로×세로,
 // 사각형 외에 ㄱ자·U자 모양도 가능)을 드래그앤드랍으로 박스 안에 가져다 놓아볼 수 있다. 모형 크기는
@@ -10929,7 +10955,7 @@ function LayoutSimTab({ managerName = "" }) {
   const [shapes, setShapes] = useState([]);
   const [loadingShapes, setLoadingShapes] = useState(true);
   const [newShapeName, setNewShapeName] = useState("");
-  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "u"(U자) | "circle"(원형) | "roundend"(한쪽둥근) | "chair"(캐드식 의자)
+  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "u"(U자) | "circle"(원형) | "roundend"(한쪽둥근) | "chair"(사무의자) | "meetingchair"(회의의자)
   const [newShapeWidth, setNewShapeWidth] = useState("");
   const [newShapeDepth, setNewShapeDepth] = useState("");
   const [newShapeNotchWidth, setNewShapeNotchWidth] = useState(""); // ㄱ자: 잘려나간 모서리, U자: 안쪽 파인 부분
@@ -11085,13 +11111,14 @@ function LayoutSimTab({ managerName = "" }) {
   }, [shapes, shapeSearchQuery]);
 
   // 모형 목록 한 줄(카테고리 펼친 목록·검색 결과 둘 다 이걸로 그린다) — 드래그해서 배치판에 놓는 것도,
-  // 모양별 미리보기(사각형/ㄱ자·U자 다각형/원형/캐드식 의자)도, 삭제 버튼도 여기서 한 군데만 관리한다.
+  // 모양별 미리보기(사각형/ㄱ자·U자 다각형/원형/캐드식 사무의자·회의의자)도, 삭제 버튼도 여기서 한 군데만 관리한다.
   function renderShapeRow(s) {
     const shapeType = s.shape_type || "rect";
     const isPoly = shapeType === "l" || shapeType === "u";
     const isCircle = shapeType === "circle";
     const isRoundEnd = shapeType === "roundend";
     const isChair = shapeType === "chair";
+    const isMeetingChair = shapeType === "meetingchair";
     const previewPoints = isPoly
       ? shapePolygonPoints(shapeType, s.width_cm, s.depth_cm, s.notch_width_cm, s.notch_depth_cm)
           .map((p) => p.join(","))
@@ -11137,6 +11164,10 @@ function LayoutSimTab({ managerName = "" }) {
         ) : isChair ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
             <ChairTopIcon w={s.width_cm} d={s.depth_cm} fill={C.purpleBg} stroke={C.purple} />
+          </svg>
+        ) : isMeetingChair ? (
+          <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
+            <MeetingChairTopIcon w={s.width_cm} d={s.depth_cm} fill={C.purpleBg} stroke={C.purple} />
           </svg>
         ) : (
           <div style={{ width: 14, height: 14, background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 2, flexShrink: 0 }} />
@@ -11837,7 +11868,8 @@ function LayoutSimTab({ managerName = "" }) {
                 { key: "u", label: "U자" },
                 { key: "circle", label: "원형" },
                 { key: "roundend", label: "한쪽둥근" },
-                { key: "chair", label: "의자(캐드형)" },
+                { key: "chair", label: "사무의자(캐드형)" },
+                { key: "meetingchair", label: "회의의자(캐드형)" },
               ].map((opt) => (
                 <button
                   key={opt.key}
@@ -11970,6 +12002,7 @@ function LayoutSimTab({ managerName = "" }) {
               const isCircle = it.shapeType === "circle";
               const isRoundEnd = it.shapeType === "roundend";
               const isChair = it.shapeType === "chair";
+              const isMeetingChair = it.shapeType === "meetingchair";
               const polyPoints = isPoly
                 ? shapePolygonPoints(it.shapeType, it.widthCm, it.depthCm, it.notchWidthCm, it.notchDepthCm)
                     .map((p) => p.join(","))
@@ -12027,6 +12060,10 @@ function LayoutSimTab({ managerName = "" }) {
                     ) : isChair ? (
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={{ display: "block" }}>
                         <ChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
+                      </svg>
+                    ) : isMeetingChair ? (
+                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={{ display: "block" }}>
+                        <MeetingChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
                       </svg>
                     ) : (
                       <div style={{ width: "100%", height: "100%", background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 3, boxSizing: "border-box" }} />
