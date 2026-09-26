@@ -10769,17 +10769,62 @@ function CollectionRequestForm({ initial, prefill, isAdmin, managerName, onCance
   );
 }
 
+// ㄱ자(퍼즐책상 등)·U자(테이블 등) 모형의 외곽선을 그리기 위한 좌표를 계산한다. shapeType이 "rect"가
+// 아니면, 전체 바깥 크기(widthCm×depthCm)에서 안쪽으로 파인 부분(notchWidthCm×notchDepthCm)을 뺀
+// 다각형 좌표를 만든다. "ㄱ"자는 한쪽 모서리를 잘라낸 모양, "U"자는 한쪽 변 가운데를 파낸 모양이다.
+// 실제 가구 도면처럼 정밀하진 않지만, 배치 시뮬레이션에서 크기·모양을 가늠하는 용도로는 충분하다.
+function shapePolygonPoints(shapeType, widthCm, depthCm, notchWidthCm, notchDepthCm) {
+  const W = Number(widthCm) || 0;
+  const D = Number(depthCm) || 0;
+  if (shapeType === "l") {
+    const nw = Math.min(Math.max(Number(notchWidthCm) || 0, 0), Math.max(W - 1, 0));
+    const nd = Math.min(Math.max(Number(notchDepthCm) || 0, 0), Math.max(D - 1, 0));
+    return [
+      [0, 0],
+      [W - nw, 0],
+      [W - nw, nd],
+      [W, nd],
+      [W, D],
+      [0, D],
+    ];
+  }
+  if (shapeType === "u") {
+    const nw = Math.min(Math.max(Number(notchWidthCm) || 0, 0), Math.max(W - 2, 0));
+    const nd = Math.min(Math.max(Number(notchDepthCm) || 0, 0), Math.max(D - 1, 0));
+    const armW = (W - nw) / 2;
+    return [
+      [0, 0],
+      [armW, 0],
+      [armW, nd],
+      [armW + nw, nd],
+      [armW + nw, 0],
+      [W, 0],
+      [W, D],
+      [0, D],
+    ];
+  }
+  return [
+    [0, 0],
+    [W, 0],
+    [W, D],
+    [0, D],
+  ];
+}
+
 // ---------- 배치 시뮬레이션 ----------
-// 공간 크기(가로×세로, m)를 입력하면 그 비율의 네모 박스가 나오고, 미리 등록해둔 모형(품목명+가로×세로)을
-// 드래그앤드랍으로 박스 안에 가져다 놓아볼 수 있다. 모형 크기는 처음 쓸 때 한 번 등록해두면(톤수 기준표와
-// 같은 방식) 다음부터는 목록에서 바로 꺼내 쓸 수 있고, 배치한 결과는 이름을 붙여 저장해뒀다가 나중에 다시
-// 불러올 수 있다.
+// 공간 크기(가로×세로, m)를 입력하면 그 비율의 네모 박스가 나오고, 미리 등록해둔 모형(품목명+가로×세로,
+// 사각형 외에 ㄱ자·U자 모양도 가능)을 드래그앤드랍으로 박스 안에 가져다 놓아볼 수 있다. 모형 크기는
+// 처음 쓸 때 한 번 등록해두면(톤수 기준표와 같은 방식) 다음부터는 목록에서 바로 꺼내 쓸 수 있고, 배치한
+// 결과는 이름을 붙여 저장해뒀다가 나중에 다시 불러올 수 있다.
 function LayoutSimTab({ managerName = "" }) {
   const [shapes, setShapes] = useState([]);
   const [loadingShapes, setLoadingShapes] = useState(true);
   const [newShapeName, setNewShapeName] = useState("");
+  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "u"(U자)
   const [newShapeWidth, setNewShapeWidth] = useState("");
   const [newShapeDepth, setNewShapeDepth] = useState("");
+  const [newShapeNotchWidth, setNewShapeNotchWidth] = useState(""); // ㄱ자: 잘려나간 모서리, U자: 안쪽 파인 부분
+  const [newShapeNotchDepth, setNewShapeNotchDepth] = useState("");
   const [savingShape, setSavingShape] = useState(false);
 
   const [widthInput, setWidthInput] = useState("5");
@@ -10826,24 +10871,47 @@ function LayoutSimTab({ managerName = "" }) {
   async function handleAddShape() {
     const w = Number(newShapeWidth);
     const d = Number(newShapeDepth);
+    const isPoly = newShapeType === "l" || newShapeType === "u";
+    const nw = isPoly ? Number(newShapeNotchWidth) : null;
+    const nd = isPoly ? Number(newShapeNotchDepth) : null;
     if (!newShapeName.trim()) {
       alert("모형 이름을 입력해주세요.");
       return;
     }
     if (!w || !d) {
-      alert("가로·세로 크기(cm)를 입력해주세요.");
+      alert("전체 가로·세로 크기(cm)를 입력해주세요.");
       return;
     }
+    if (isPoly) {
+      if (!nw || !nd) {
+        alert(newShapeType === "l" ? "잘려나간 모서리의 가로·세로 크기(cm)를 입력해주세요." : "안쪽 파인 부분의 가로·세로 크기(cm)를 입력해주세요.");
+        return;
+      }
+      if (nw >= w || nd >= d) {
+        alert("파인 부분 크기는 전체 가로·세로보다 작아야 해요.");
+        return;
+      }
+    }
     setSavingShape(true);
-    const { error } = await supabase.from("layout_shapes").insert({ name: newShapeName.trim(), width_cm: w, depth_cm: d });
+    const { error } = await supabase.from("layout_shapes").insert({
+      name: newShapeName.trim(),
+      shape_type: newShapeType,
+      width_cm: w,
+      depth_cm: d,
+      notch_width_cm: nw,
+      notch_depth_cm: nd,
+    });
     setSavingShape(false);
     if (error) {
       alert("모형 저장 중 오류가 발생했어요: " + error.message);
       return;
     }
     setNewShapeName("");
+    setNewShapeType("rect");
     setNewShapeWidth("");
     setNewShapeDepth("");
+    setNewShapeNotchWidth("");
+    setNewShapeNotchDepth("");
     fetchShapes();
   }
 
@@ -10912,11 +10980,14 @@ function LayoutSimTab({ managerName = "" }) {
           id: nextPlacedId(),
           shapeId: shape.id,
           name: shape.name,
+          shapeType: shape.shape_type || "rect",
           widthCm,
           depthCm,
+          notchWidthCm: shape.notch_width_cm != null ? Number(shape.notch_width_cm) : null,
+          notchDepthCm: shape.notch_depth_cm != null ? Number(shape.notch_depth_cm) : null,
           xCm: Math.max(0, cmX - widthCm / 2),
           yCm: Math.max(0, cmY - depthCm / 2),
-          rotated: false,
+          rotation: 0,
         },
       ]);
     } else if (payload.type === "placed") {
@@ -10934,8 +11005,17 @@ function LayoutSimTab({ managerName = "" }) {
     setPlacedItems((prev) => prev.filter((it) => it.id !== id));
   }
 
+  // 사각형은 0/90도만 돌려도 충분하지만, ㄱ자·U자는 방 구석·방향에 맞춰 4방향 모두 필요해서
+  // 누를 때마다 0→90→180→270→0으로 한 바퀴 돈다. 예전에 저장된 배치(rotated: true/false만 있던
+  // 옛 데이터)도 그대로 이어받을 수 있도록 rotation이 없으면 rotated 값으로 대신 계산한다.
   function handleRotatePlaced(id) {
-    setPlacedItems((prev) => prev.map((it) => (it.id === id ? { ...it, rotated: !it.rotated } : it)));
+    setPlacedItems((prev) =>
+      prev.map((it) => {
+        if (it.id !== id) return it;
+        const current = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
+        return { ...it, rotation: (current + 90) % 360 };
+      })
+    );
   }
 
   function handleClearBoard() {
@@ -11086,63 +11166,129 @@ function LayoutSimTab({ managerName = "" }) {
             <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>아직 등록된 모형이 없어요. 아래에서 추가해보세요.</div>
           ) : (
             <div style={{ marginBottom: 14 }}>
-              {shapes.map((s) => (
-                <div
-                  key={s.id}
-                  draggable
-                  onDragStart={(e) => handleDragStartCatalog(e, s)}
-                  title="끌어서 배치판에 놓으세요"
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "8px 10px",
-                    marginBottom: 6,
-                    border: `1px solid ${C.lineSoft}`,
-                    background: C.bg,
-                    borderRadius: 6,
-                    cursor: "grab",
-                    fontSize: 12.5,
-                  }}
-                >
-                  <span>
-                    {s.name} <span style={{ color: C.muted, fontSize: 11 }}>({s.width_cm}×{s.depth_cm}cm)</span>
-                  </span>
-                  <button
-                    onClick={() => handleDeleteShape(s.id)}
-                    title="모형 삭제"
-                    style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 12 }}
+              {shapes.map((s) => {
+                const shapeType = s.shape_type || "rect";
+                const isPoly = shapeType === "l" || shapeType === "u";
+                const previewPoints = isPoly
+                  ? shapePolygonPoints(shapeType, s.width_cm, s.depth_cm, s.notch_width_cm, s.notch_depth_cm)
+                      .map((p) => p.join(","))
+                      .join(" ")
+                  : null;
+                const sizeLabel = isPoly
+                  ? `${s.width_cm}×${s.depth_cm}cm, 파임 ${s.notch_width_cm}×${s.notch_depth_cm}`
+                  : `${s.width_cm}×${s.depth_cm}cm`;
+                return (
+                  <div
+                    key={s.id}
+                    draggable
+                    onDragStart={(e) => handleDragStartCatalog(e, s)}
+                    title="끌어서 배치판에 놓으세요"
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "8px 10px",
+                      marginBottom: 6,
+                      border: `1px solid ${C.lineSoft}`,
+                      background: C.bg,
+                      borderRadius: 6,
+                      cursor: "grab",
+                      fontSize: 12.5,
+                    }}
                   >
-                    ×
-                  </button>
-                </div>
-              ))}
+                    {isPoly ? (
+                      <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
+                        <polygon points={previewPoints} fill={C.purpleBg} stroke={C.purple} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
+                      </svg>
+                    ) : (
+                      <div style={{ width: 14, height: 14, background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 2, flexShrink: 0 }} />
+                    )}
+                    <span style={{ flex: 1 }}>
+                      {s.name} <span style={{ color: C.muted, fontSize: 11 }}>({sizeLabel})</span>
+                    </span>
+                    <button
+                      onClick={() => handleDeleteShape(s.id)}
+                      title="모형 삭제"
+                      style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 12 }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           )}
           <div style={{ borderTop: `1px solid ${C.lineSoft}`, paddingTop: 10 }}>
             <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>+ 새 모형 추가</div>
             <input
               style={{ ...smallInputStyle, width: "100%", marginBottom: 6, boxSizing: "border-box" }}
-              placeholder="모형 이름 (예: 탑책상)"
+              placeholder="모형 이름 (예: 탑책상, ㄱ자 퍼즐책상)"
               value={newShapeName}
               onChange={(e) => setNewShapeName(e.target.value)}
             />
             <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+              {[
+                { key: "rect", label: "사각형" },
+                { key: "l", label: "ㄱ자" },
+                { key: "u", label: "U자" },
+              ].map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setNewShapeType(opt.key)}
+                  style={{
+                    ...miniBtnStyle,
+                    flex: 1,
+                    padding: "5px 4px",
+                    background: newShapeType === opt.key ? C.ink : "transparent",
+                    color: newShapeType === opt.key ? "#fff" : C.inkSoft,
+                    borderColor: newShapeType === opt.key ? C.ink : C.lineSoft,
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
               <input
                 type="number"
                 style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
-                placeholder="가로(cm)"
+                placeholder="전체 가로(cm)"
                 value={newShapeWidth}
                 onChange={(e) => setNewShapeWidth(e.target.value)}
               />
               <input
                 type="number"
                 style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
-                placeholder="세로(cm)"
+                placeholder="전체 세로(cm)"
                 value={newShapeDepth}
                 onChange={(e) => setNewShapeDepth(e.target.value)}
               />
             </div>
+            {(newShapeType === "l" || newShapeType === "u") && (
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>
+                  {newShapeType === "l" ? "잘려나간 모서리 크기(cm)" : "안쪽 파인 부분 크기(cm)"}
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    type="number"
+                    style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
+                    placeholder="가로(cm)"
+                    value={newShapeNotchWidth}
+                    onChange={(e) => setNewShapeNotchWidth(e.target.value)}
+                  />
+                  <input
+                    type="number"
+                    style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
+                    placeholder="세로(cm)"
+                    value={newShapeNotchDepth}
+                    onChange={(e) => setNewShapeNotchDepth(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
             <button onClick={handleAddShape} disabled={savingShape} style={{ ...miniBtnStyle, width: "100%" }}>
               {savingShape ? "저장 중…" : "+ 모형 추가"}
             </button>
@@ -11169,8 +11315,19 @@ function LayoutSimTab({ managerName = "" }) {
             }}
           >
             {placedItems.map((it) => {
-              const wPx = (it.rotated ? it.depthCm : it.widthCm) * scale;
-              const hPx = (it.rotated ? it.widthCm : it.depthCm) * scale;
+              // 예전에 저장된 배치(rotated: true/false만 있던 옛 데이터)도 그대로 이어받는다.
+              const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
+              const swapped = rotation === 90 || rotation === 270;
+              const outerWPx = (swapped ? it.depthCm : it.widthCm) * scale;
+              const outerHPx = (swapped ? it.widthCm : it.depthCm) * scale;
+              const baseWPx = it.widthCm * scale;
+              const baseHPx = it.depthCm * scale;
+              const isPoly = it.shapeType === "l" || it.shapeType === "u";
+              const polyPoints = isPoly
+                ? shapePolygonPoints(it.shapeType, it.widthCm, it.depthCm, it.notchWidthCm, it.notchDepthCm)
+                    .map((p) => p.join(","))
+                    .join(" ")
+                : null;
               return (
                 <div
                   key={it.id}
@@ -11181,22 +11338,47 @@ function LayoutSimTab({ managerName = "" }) {
                     position: "absolute",
                     left: it.xCm * scale,
                     top: it.yCm * scale,
-                    width: wPx,
-                    height: hPx,
-                    background: C.purpleBg,
-                    border: `1px solid ${C.purple}`,
-                    borderRadius: 3,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 11,
-                    textAlign: "center",
+                    width: outerWPx,
+                    height: outerHPx,
                     cursor: "grab",
-                    overflow: "hidden",
                     userSelect: "none",
                   }}
                 >
-                  <span style={{ pointerEvents: "none" }}>{it.name}</span>
+                  {/* 실제 모양(사각형 또는 ㄱ자/U자 다각형)은 회전 각도만큼 돌리고, 아래 이름표·버튼은
+                      항상 똑바로 보이도록 따로 겹쳐 그린다(글자가 돌아가면 읽기 불편하므로). */}
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "50%",
+                      left: "50%",
+                      width: baseWPx,
+                      height: baseHPx,
+                      transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
+                    }}
+                  >
+                    {isPoly ? (
+                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={{ display: "block" }}>
+                        <polygon points={polyPoints} fill={C.purpleBg} stroke={C.purple} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                      </svg>
+                    ) : (
+                      <div style={{ width: "100%", height: "100%", background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 3, boxSizing: "border-box" }} />
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 11,
+                      textAlign: "center",
+                      overflow: "hidden",
+                      pointerEvents: "none",
+                    }}
+                  >
+                    {it.name}
+                  </div>
                   <button
                     onClick={() => handleRotatePlaced(it.id)}
                     title="90도 회전"
