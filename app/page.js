@@ -10994,36 +10994,39 @@ function roundEndTablePathD(widthCm, depthCm) {
   return `M 0,0 L ${W},0 L ${W},${rectDepth} A ${radius},${radius} 0 0 1 0,${rectDepth} Z`;
 }
 
-// 사무용 의자를 캐드(CAD) 도면처럼 위에서 내려다본 모양으로 그린다. 실제 도면에서 흔히 쓰는 사무의자
-// 기호처럼, 등받이를 각진 사각형이 아니라 둥근 타원 두 쪽이 가운데 얇은 틈(이음선)을 두고 나란히 붙은
-// 모양으로 그리고(메쉬 등받이가 두 쪽으로 나뉘어 보이는 느낌), 그 아래 넓게 둥근 좌판이 등받이와 살짝
-// 겹치며 이어지게 그려서 하나로 뭉쳐 보이게 한다. 회전축(바퀴 달린 의자다리)은 맨 아래 아주 작은 점
-// 하나로만 은은하게 표시한다. width_cm×depth_cm 박스 안에 맞춰 그려서 등받이가 위(0)쪽, 좌판이
-// 아래(depth)쪽을 향하도록 기본 방향을 잡아뒀고, 회전 버튼으로 다른 방향도 그대로 돌릴 수 있다.
+// 사무용 의자를 캐드(CAD) 도면처럼 위에서 내려다본 모양으로 그린다. 사용자가 직접 올려준 참고 도면
+// 이미지(주차배치도 안 의자 기호)를 확대해서 윤곽선을 하나하나 따라가며 확인한 모양 그대로다: 모서리가
+// 큼직하게 둥근 네모(몸통) 위아래로, 몸통보다 살짝 더 넓고 얇은 띠(받침대/캐스터가 몸통 밑에 살짝
+// 가려진 채 앞뒤로만 삐져나와 보이는 부분)가 걸쳐 있는 모양이다. width_cm×depth_cm 박스 안에 맞춰
+// 그려서 이 얇은 띠가 위(0)·아래(depth) 양쪽에 걸리도록 기본 방향을 잡아뒀고, 회전 버튼으로 다른
+// 방향도 그대로 돌릴 수 있다.
+//
+// 얇은 띠(윗띠·아랫띠)와 몸통(둥근 네모)을 "따로따로 테두리선까지 그려 넣은 도형 여러 개"로 겹쳐
+// 그리면, 겹치는 안쪽에서 서로 다른 도형의 테두리선이 그대로 드러나 보여 지저분해진다(예전에 등받이·
+// 좌판을 타원 여러 개로 겹쳐 그리다가 "의자 모양이 이상하다"는 문제가 생겼던 것과 같은 이유). 그래서
+// 그리는 순서를 "얇은 띠 두 개를 먼저 깔고, 그 위에 둥근 네모 몸통을 덮어 그리기"로 정해서, 띠가
+// 몸통과 겹치는 안쪽 부분은 몸통 칠(fill)에 완전히 가려지고, 몸통 바깥으로 삐져나온 부분만 띠로
+// 보이게 했다. 몸통이 불투명하게 덮어버리기만 하면 되므로 별도의 겹침 보정 없이도 안쪽에 지저분한
+// 선이 전혀 생기지 않는다.
 function ChairTopIcon({ w, d, fill, stroke }) {
   const W = Number(w) || 0;
   const D = Number(d) || 0;
   const minWD = Math.min(W, D);
   const strokeW = Math.max(minWD * 0.025, 0.4);
-  // 등받이: 둥근 타원 두 쪽이 가운데 살짝 틈을 두고 나란히 붙는다.
-  const lobeRx = W * 0.245;
-  const lobeRy = D * 0.3;
-  const lobeCy = D * 0.3;
-  const lobeGap = W * 0.02;
-  const lobeCxLeft = W / 2 - lobeRx - lobeGap / 2;
-  const lobeCxRight = W / 2 + lobeRx + lobeGap / 2;
-  // 좌판: 등받이 아래, 넓게 둥근 하나의 타원(등받이와 겹치게 그려서 한 덩어리로 이어 보이게 한다).
-  const seatRx = W * 0.4;
-  const seatRy = D * 0.3;
-  const seatCy = D * 0.68;
-  // 회전축(바퀴 달린 의자다리) — 아주 작은 점 하나로만 은은하게 표시.
-  const baseR = Math.max(minWD * 0.035, 0.5);
+  // 위·아래 얇은 띠 — 폭 전체(W)에 걸쳐 양끝이 둥글게 마무리된 알약 모양.
+  const bandHalfH = D * 0.055;
+  // 몸통(둥근 네모) — 띠 안쪽으로 살짝 들어와서, 띠의 바깥쪽 절반만 몸통 밖으로 남아 보이게 한다.
+  const marginX = W * 0.03;
+  const bodyX = marginX;
+  const bodyW = W - marginX * 2;
+  const bodyY = bandHalfH * 1.15;
+  const bodyH = D - bandHalfH * 1.15 * 2;
+  const bodyRx = Math.min(bodyW, bodyH) * 0.3;
   return (
     <g fill={fill} stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round">
-      <ellipse cx={W / 2} cy={seatCy} rx={seatRx} ry={seatRy} />
-      <ellipse cx={lobeCxLeft} cy={lobeCy} rx={lobeRx} ry={lobeRy} />
-      <ellipse cx={lobeCxRight} cy={lobeCy} rx={lobeRx} ry={lobeRy} />
-      <circle cx={W / 2} cy={D * 0.92} r={baseR} fill={stroke} stroke="none" />
+      <rect x={0} y={0} width={W} height={bandHalfH * 2} rx={bandHalfH} ry={bandHalfH} />
+      <rect x={0} y={D - bandHalfH * 2} width={W} height={bandHalfH * 2} rx={bandHalfH} ry={bandHalfH} />
+      <rect x={bodyX} y={bodyY} width={bodyW} height={bodyH} rx={bodyRx} ry={bodyRx} />
     </g>
   );
 }
@@ -12053,11 +12056,17 @@ function LayoutSimTab({ managerName = "" }) {
           <div className="layoutsim-print-only" style={{ display: "none", fontFamily: serif, fontSize: 16, marginBottom: 8 }}>
             {boardName || "배치 시뮬레이션"} — 공간 {spaceWidthM}m × {spaceDepthM}m ({todayISO()} 기준)
           </div>
+          {/* 줄자를 켜면 버튼 글자가 "줄자"→"줄자 (켜짐)"로 길어지고 "줄자 지우기" 버튼까지 새로 생기는데,
+              예전에는 이 안내문구 칸과 버튼 칸이 폭을 두고 빠듯하게 나눠 쓰고 있어서, 버튼 쪽이 길어지는
+              순간 이 줄 전체가 두 줄로 접히며(flexWrap) 그 아래 배치판(캔버스)이 한 줄만큼 아래로 밀려나
+              보였다. 안내문구 칸에 flex:1 + minWidth:0을 줘서, 버튼이 길어질 땐 안내문구 쪽이 먼저 줄어들며
+              (필요하면 문구 자체가 내부에서 줄바꿈) 흡수하게 하고, 버튼 칸은 flexShrink:0으로 항상 제 크기를
+              유지하게 해서 이 줄 자체가 두 줄로 접히는 일이 없도록 한다. */}
           <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
-            <div style={{ fontSize: 12, color: C.muted }}>
+            <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0 }}>
               공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 한 번 클릭하면 선택되고(테두리 강조), 방향키로 세밀하게 옮길 수 있어요(Shift+방향키는 더 크게).
             </div>
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
               <button
                 onClick={() => setRulerMode((v) => !v)}
                 title="캔버스를 두 번 눌러 두 지점 사이 거리를 재보세요"
@@ -12066,12 +12075,13 @@ function LayoutSimTab({ managerName = "" }) {
                   background: rulerMode ? C.ink : "transparent",
                   color: rulerMode ? "#fff" : C.inkSoft,
                   borderColor: rulerMode ? C.ink : C.lineSoft,
+                  whiteSpace: "nowrap",
                 }}
               >
                 📏 줄자{rulerMode ? " (켜짐)" : ""}
               </button>
               {rulerPoints.length > 0 && (
-                <button onClick={handleClearRuler} style={miniBtnStyle}>줄자 지우기</button>
+                <button onClick={handleClearRuler} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>줄자 지우기</button>
               )}
             </div>
           </div>
