@@ -11242,7 +11242,7 @@ function MeetingChairTopIcon({ w, d, fill, stroke }) {
 // 사각형 외에 ㄱ자·U자 모양도 가능)을 드래그앤드랍으로 박스 안에 가져다 놓아볼 수 있다. 모형 크기는
 // 처음 쓸 때 한 번 등록해두면(톤수 기준표와 같은 방식) 다음부터는 목록에서 바로 꺼내 쓸 수 있고, 배치한
 // 결과는 이름을 붙여 저장해뒀다가 나중에 다시 불러올 수 있다.
-function LayoutSimTab({ managerName = "" }) {
+function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   const [shapes, setShapes] = useState([]);
   const [loadingShapes, setLoadingShapes] = useState(true);
   const [newShapeName, setNewShapeName] = useState("");
@@ -11729,10 +11729,32 @@ function LayoutSimTab({ managerName = "" }) {
   }, []);
 
   // 실제 공간(cm)을 화면에 몇 px로 그릴지 축척을 정한다 — 가로·세로 둘 다 이 최대 크기 안에 들어오도록.
-  // 왼쪽 모형 목록 칸(240px)·여백·바깥 페이지 여백 등을 대략 뺀 만큼을 가로 최대 크기로, 위쪽 안내
-  // 문구·입력칸·툴바가 차지하는 자리를 대략 뺀 만큼을 세로 최대 크기로 쓴다(너무 작아지거나 반대로
-  // 화면이 아주 넓을 때 한없이 커지지 않도록 위아래로 적당히 제한을 둔다).
-  const MAX_CANVAS_W = Math.min(1900, Math.max(520, viewportSize.w - 340));
+  // (버그 수정) "화면에 꽉 차게 키워달라"고 처음 고칠 때는 이 가로 최대 크기를 창 너비(viewportSize.w)
+  // 에서 대략 340px만 빼고 정했는데, 실제로는(메인 시스템 안에서 쓸 때는) 그보다 훨씬 전에 배치판이
+  // 다 못 커지고 막히는 자리가 있었다 — 메인 시스템 화면 전체를 감싸는 바깥 틀 자체가 아무리 넓은
+  // 모니터에서도 가운데 정렬된 채 maxWidth:1600px을 넘지 않고(그 틀의 좌우 여백 48px), 그 안에 왼쪽
+  // 전체 메뉴(232px)와 간격(24px)까지 항상 같이 차지하고 있었다. 그래서 창이 아무리 넓어도 이 탭에게
+  // 실제로 남는 폭은 1600-48-232-24=1296px을 절대 못 넘었는데, 예전 식은 이걸 모르고 훨씬 큰 값
+  // (예: 1920px 창이면 1580px)을 가로 최대 크기로 잡아버려서, 배치판이 실제 남는 자리보다 넓게
+  // 그려지며 옆으로 넘쳐 화면에는 오히려 안 커진 것처럼(또는 가로 스크롤이 생기며) 보였다.
+  // "설치파일" 독립 화면(app/gagu-layout/page.js)은 이런 바깥 틀(전체 메뉴·maxWidth)이 아예 없어서
+  // 그 제한을 안 받으므로, LayoutSimTab을 부르는 쪽에서 insideAppShell(기본 true=메인 시스템)로
+  // 알려주고 그 값에 따라 계산을 달리한다 — 함수 몸통은 두 파일에서 그대로 똑같이 유지하면서도
+  // 각자의 실제 화면 구조에 맞는 값을 쓸 수 있게. 세로는 이런 폭 제한이 없어서 그대로 위쪽 안내
+  // 문구·입력칸·툴바가 차지하는 자리를 대략 뺀 값을 쓴다.
+  const isMobileWidth = viewportSize.w <= 768;
+  const SHAPE_SIDEBAR_W = 240; // 이 탭 안의 "모형 목록" 칸
+  const INNER_GAP = 16; // 모형 목록 칸과 배치판 사이 간격
+  const availableContentW = insideAppShell
+    ? (() => {
+        const OUTER_MAX_CONTENT_W = 1600; // 메인 시스템 바깥 틀의 maxWidth
+        const OUTER_PADDING_X = isMobileWidth ? 24 : 48; // 바깥 틀 좌우 여백(12px*2 / 24px*2)
+        const APP_NAV_W = isMobileWidth ? 0 : 232; // 왼쪽 전체 메뉴(모바일에서는 안 보임)
+        const APP_GAP = isMobileWidth ? 0 : 24; // 전체 메뉴와 본문 사이 간격
+        return Math.min(viewportSize.w, OUTER_MAX_CONTENT_W) - OUTER_PADDING_X - APP_NAV_W - APP_GAP;
+      })()
+    : viewportSize.w - 40; // 독립 화면은 이런 바깥 틀이 없이 padding:20(좌우)만 있음
+  const MAX_CANVAS_W = Math.min(1300, Math.max(360, availableContentW - SHAPE_SIDEBAR_W - INNER_GAP));
   const MAX_CANVAS_H = Math.min(1300, Math.max(420, viewportSize.h - 300));
   const scale = Math.min(MAX_CANVAS_W / (spaceWidthM * 100), MAX_CANVAS_H / (spaceDepthM * 100));
   const canvasWidthPx = spaceWidthM * 100 * scale;
@@ -13251,19 +13273,22 @@ function LayoutSimTab({ managerName = "" }) {
               // 모형 모서리가 이 둥근 테두리 곡선에 걸려 살짝 잘려 보이는 "디자인을 침범하는" 문제가
               // 생겼다. 그래서 테두리는 다시 각지게 되돌렸다 — 벽에 붙는 모형은 늘 각진 모양이라, 테두리도
               // 각져야 서로 부딪히지 않는다.)
-              // ("오른쪽과 하단은 여전히 제품을 먹고 있어" 신고로 원인을 다시 진지하게 파봤다 — 진짜
-              // 원인은 좌표 계산이 아니라 이 배치판에 걸려있던 overflow:hidden 자체였다. 벽에 딱 붙여
-              // 놓은 모형은 그 자체(가로·세로)는 방 안에 정확히 들어가 있는데도, 선택했을 때 생기는
-              // 보라색 테두리(outline)·그림자(boxShadow)는 CSS 규칙상 모형 박스 "바깥"으로 몇 px 더
-              // 번져 나가며 그려진다 — 그런데 배치판에 overflow:hidden이 걸려있으니 그 번져나간
-              // 부분이 딱 배치판 오른쪽·아래쪽 테두리에서 뭉텅 잘려나가 보였던 것이다(왼쪽·위쪽은
-              // 보통 여유 공간이 있어 눈에 덜 띄었을 뿐, 원리는 네 방향 다 같다). 정작 모형이 실제로
-              // 방 밖으로 나가는 것은 아래 moveWithClamp·placeWithSnap·크기조절·회전·방향키가 자리를
-              // 만들 때마다 이미 좌표를 방 안으로 딱 붙여서 막고 있고(각 함수 참고), 방 크기를 줄이거나
-              // 예전 배치안을 불러왔을 때를 위한 안전망 useEffect까지 따로 있어서, "가위로 자르는"
-              // overflow:hidden이 없어도 모형 자체가 진짜로 삐져나오는 일은 생기지 않는다. 그래서
-              // overflow:hidden은 빼고, 선택 테두리·그림자가 배치판 가장자리에서도 잘리지 않고 온전히
-              // 다 보이게 했다.
+              // (여기 overflow를 둘러싸고 정반대 방향의 신고가 두 번 있었다. ① 예전엔 overflow:hidden이
+              // 걸려있었는데, 벽에 딱 붙인 모형을 선택하면 생기는 보라색 테두리·그림자가 모형 박스보다
+              // 몇 px 더 바깥으로 번져 그려지다 보니 배치판 오른쪽·아래쪽 가장자리에서 그 그림자가
+              // 뭉텅 잘려나가 보였다("제품을 먹고 있어" 신고) — 그래서 overflow:hidden을 뺐다. ② 그런데
+              // 그렇게 하니 이번엔 그 번져나간 테두리·그림자(그리고 회전·삭제 버튼까지)가 배치판
+              // 검은 벽 선을 그대로 넘어 방 바깥 여백에 고스란히 보여서 "도면이 튀어 나간다"는 정반대
+              // 신고로 이어졌다(실제로 재현 테스트로도 확인됨). 둘 다 결국 같은 원인(선택 표시가 모형
+              // 박스보다 몇 px 더 크게 그려짐)인데, 그걸 배치판 안에서 자르면 "먹힌 것"처럼 보이고
+              // 안 자르면 "튀어나온 것"처럼 보이는 딜레마였다 — 생각해보면 방의 벽이라는 게 원래
+              // "그 안의 것만 보이고 벽 밖으로는 아무것도 안 보이는" 경계이니, 다시 overflow:hidden을
+              // 두는 쪽이 실제 방의 느낌과도 맞다. 벽에 딱 붙인 모형은 그 벽 쪽 테두리·그림자가 살짝
+              // 안 보일 수 있지만(방 안쪽 다른 3면은 그대로 다 보인다), 그게 "방 밖으로 아무것도
+              // 넘지 않는다"는 원칙에는 훨씬 맞는 모습이다. 확대(줌인)·화면 이동 때 방 전체가 잘리는
+              // 것은 이거와 무관한, 바깥 창(viewportRef)의 overflow:hidden + VIEW_BLEED 여백이 계속
+              // 따로 맡는다.
+              overflow: "hidden",
               backgroundColor: C.panel,
               // 격자(showGrid)와 배경 도면(bgImageUrl)은 각각 있을 수도 없을 수도 있어서, 배경
               // 레이어 목록을 그때그때 다르게 구성한다(CSS는 여러 배경을 쉼표로 겹쳐 그릴 수 있고,
