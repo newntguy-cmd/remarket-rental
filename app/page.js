@@ -11469,11 +11469,10 @@ function LayoutSimTab({ managerName = "" }) {
           .map((p) => p.join(","))
           .join(" ")
       : null;
-    const sizeLabel = isPoly
-      ? `${s.width_cm}×${s.depth_cm}cm, 파임 ${s.notch_width_cm}×${s.notch_depth_cm}`
-      : isCircle && s.width_cm === s.depth_cm
-      ? `지름 ${s.width_cm}cm`
-      : `${s.width_cm}×${s.depth_cm}cm`;
+    // "파임 문구를 아예 없애줘 괜히 헷갈리니까" 요청: ㄱ자·U자 모형도 다른 모형과 똑같이 전체
+    // 가로×세로만 보여주고, 안쪽에 파인 부분의 세부 치수(파임 가로×세로)는 목록에 따로 적지 않는다
+    // (실제 도형 모양·치수 자체는 그대로 유지되고, 목록에 보이는 글자만 간단해짐).
+    const sizeLabel = isCircle && s.width_cm === s.depth_cm ? `지름 ${s.width_cm}cm` : `${s.width_cm}×${s.depth_cm}cm`;
     // 같은 카테고리 안에서 몇 번째인지를 알아야 맨 위/맨 아래에서는 ▲/▼ 버튼을 비활성화할 수 있다.
     const catItems = shapesByCategory[s.category || "기타"] || [s];
     const posInCat = catItems.findIndex((x) => x.id === s.id);
@@ -12691,12 +12690,19 @@ function LayoutSimTab({ managerName = "" }) {
               // 모형 모서리가 이 둥근 테두리 곡선에 걸려 살짝 잘려 보이는 "디자인을 침범하는" 문제가
               // 생겼다. 그래서 테두리는 다시 각지게 되돌렸다 — 벽에 붙는 모형은 늘 각진 모양이라, 테두리도
               // 각져야 서로 부딪히지 않는다.)
-              // 방향키·드래그·크기조절마다 벽 밖으로 못 나가게 좌표를 계산해서 막아두긴 했지만(아래
-              // moveWithClamp 등), 방보다 원래 더 큰 모형을 놓거나 소수점 계산이 딱 안 맞아떨어지는
-              // 아주 드문 경우까지 전부 놓치지 않도록, 배치판 자체에도 "밖으로는 절대 안 보이게"
-              // 가위로 자르는 안전장치(overflow:hidden)를 하나 더 깔아둔다. 이게 있으면 좌표 계산이
-              // 어떻게 되든 모형이 배치판 테두리 밖으로 삐져나와 "보이는" 일 자체가 생기지 않는다.
-              overflow: "hidden",
+              // ("오른쪽과 하단은 여전히 제품을 먹고 있어" 신고로 원인을 다시 진지하게 파봤다 — 진짜
+              // 원인은 좌표 계산이 아니라 이 배치판에 걸려있던 overflow:hidden 자체였다. 벽에 딱 붙여
+              // 놓은 모형은 그 자체(가로·세로)는 방 안에 정확히 들어가 있는데도, 선택했을 때 생기는
+              // 보라색 테두리(outline)·그림자(boxShadow)는 CSS 규칙상 모형 박스 "바깥"으로 몇 px 더
+              // 번져 나가며 그려진다 — 그런데 배치판에 overflow:hidden이 걸려있으니 그 번져나간
+              // 부분이 딱 배치판 오른쪽·아래쪽 테두리에서 뭉텅 잘려나가 보였던 것이다(왼쪽·위쪽은
+              // 보통 여유 공간이 있어 눈에 덜 띄었을 뿐, 원리는 네 방향 다 같다). 정작 모형이 실제로
+              // 방 밖으로 나가는 것은 아래 moveWithClamp·placeWithSnap·크기조절·회전·방향키가 자리를
+              // 만들 때마다 이미 좌표를 방 안으로 딱 붙여서 막고 있고(각 함수 참고), 방 크기를 줄이거나
+              // 예전 배치안을 불러왔을 때를 위한 안전망 useEffect까지 따로 있어서, "가위로 자르는"
+              // overflow:hidden이 없어도 모형 자체가 진짜로 삐져나오는 일은 생기지 않는다. 그래서
+              // overflow:hidden은 빼고, 선택 테두리·그림자가 배치판 가장자리에서도 잘리지 않고 온전히
+              // 다 보이게 했다.
               backgroundColor: C.panel,
               backgroundImage:
                 `repeating-linear-gradient(0deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${scale * 100}px), ` +
