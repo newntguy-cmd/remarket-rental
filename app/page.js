@@ -12251,6 +12251,17 @@ function LayoutSimTab({ managerName = "" }) {
       if (!shape) return;
       const widthCm = Number(shape.width_cm);
       const depthCm = Number(shape.depth_cm);
+      // (신규) 모형이 지금 방보다 가로나 세로가 더 크면 어느 벽에 놓든 왼쪽·위쪽 구석에 고정된 채
+      // 나머지가 방 밖으로 넘어가 보일 수밖에 없다("치수를 mm로 잘못 등록해서 실제보다 10배 큰"
+      // 경우가 대표적 — "가로(cm)"라고 적힌 칸에 실측 도면의 mm 숫자를 그대로 입력하면 이렇게 된다).
+      // 겉보기엔 "벽에 붙였는데도 자꾸 튀어나간다"는 버그처럼 보이지만 실제로는 모형 크기 자체가
+      // 잘못 등록된 것이라, 놓기 전에 바로 알려줘서 헷갈리지 않게 한다.
+      if (widthCm > spaceWidthM * 100 || depthCm > spaceDepthM * 100) {
+        alert(
+          `"${shape.name}"의 등록된 크기(가로 ${widthCm}cm × 세로 ${depthCm}cm)가 지금 방(가로 ${spaceWidthM * 100}cm × 세로 ${spaceDepthM * 100}cm)보다 큽니다.\n\n이대로 놓으면 어느 벽에 붙여도 한쪽 구석에 고정된 채 나머지 부분이 방 밖으로 튀어나와 보여요. 모형 등록 시 실측 도면의 mm 값을 cm 칸에 그대로 입력한 건 아닌지(예: 1400mm → 140cm) 확인해보시거나, 방 크기를 늘려주세요.`
+        );
+        return;
+      }
       const rawX = Math.max(0, cmX - widthCm / 2);
       const rawY = Math.max(0, cmY - depthCm / 2);
       const placed = placeWithSnap(rawX, rawY, widthCm, depthCm, null);
@@ -13387,8 +13398,12 @@ function LayoutSimTab({ managerName = "" }) {
                     // 똑같이 점이 찍힌다.
                     if (rulerMode) {
                       const rect = canvasRef.current.getBoundingClientRect();
-                      const xCm = (e.clientX - rect.left) / scale;
-                      const yCm = (e.clientY - rect.top) / scale;
+                      // (버그 수정) 여기가 줌인 기능을 넣을 때 renderScale로 안 바뀌고 예전 scale로
+                      // 남아있었다 — 확대한 상태에서 모형 위를 클릭해 줄자를 찍으면 실제 클릭한 자리와
+                      // 다른 엉뚱한 cm 좌표로 찍히던 문제라, 빈 캔버스를 클릭할 때(아래 handleCanvasMouseDown
+                      // 쪽)와 똑같이 renderScale 기준으로 맞춘다.
+                      const xCm = (e.clientX - rect.left) / renderScale;
+                      const yCm = (e.clientY - rect.top) / renderScale;
                       const snapped = nearestSnapPoint(xCm, yCm);
                       const px = snapped ? snapped.xCm : xCm;
                       const py = snapped ? snapped.yCm : yCm;
