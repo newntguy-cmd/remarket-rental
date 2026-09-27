@@ -11596,6 +11596,10 @@ function LayoutSimTab({ managerName = "" }) {
     }
     setSpaceWidthM(w);
     setSpaceDepthM(d);
+    // 새로 방을 만들면 이전에 확대·이동해서 보고 있던 화면은 의미가 없으니 다시 방 전체가 딱
+    // 보이는 상태로 되돌린다.
+    setZoomLevel(1);
+    setViewPan({ x: 0, y: 0 });
   }
 
   // 도면 이미지 파일을 고르면 곧바로 Storage에 올리지 않는다 — 축척 맞추기를 끝내기 전에 취소할
@@ -11713,6 +11717,180 @@ function LayoutSimTab({ managerName = "" }) {
   const canvasWidthPx = spaceWidthM * 100 * scale;
   const canvasHeightPx = spaceDepthM * 100 * scale;
 
+  // "마우스 휠로 줌인/줌아웃, 시프트+끌기로 화면 이동" 요청: 위 scale(방 전체를 딱 맞춰 보여주는
+  // 배율)은 그대로 "기본값"으로 두고, 그 위에 곱해지는 확대 배율(zoomLevel)을 하나 더 둔다. 방이
+  // 아주 크면(예: 가로 32m) 딱 맞춰 보이는 배율로는 화면에서 1cm가 채 1px도 안 돼서 정확한 지점을
+  // 클릭하기가 어려운데, 확대하면 그 자리를 훨씬 크게 볼 수 있어 줄자로 정확히 찍거나 모형을 딱
+  // 맞는 자리에 놓기 쉬워진다.
+  const ZOOM_MIN = 1; // 딱 맞춰 보여주는 배율보다 더 축소할 필요는 없다(방 밖에 빈 여백만 늘어남).
+  const ZOOM_MAX = 12;
+  const [zoomLevel, setZoomLevel] = useState(1);
+  // 확대했을 때 "보이는 위치"를 옮기는 값(px). 기본은 방 가운데를 그대로 보여주고, 거기에 이 값을 더해서 옮긴다.
+  const [viewPan, setViewPan] = useState({ x: 0, y: 0 });
+  const [isPanningView, setIsPanningView] = useState(false); // 지금 Shift+끌기로 화면을 옮기는 중인지(커서 모양에만 씀)
+  const viewportRef = useRef(null); // 실제로 눈에 보이는 창(그 밖으로 나간 부분은 잘려서 안 보임)
+  const panDragRef = useRef(null);
+  const suppressClickAfterPanRef = useRef(false); // 화면을 실제로 끌어서 옮긴 뒤에는, 손을 뗀 자리에서 엉뚱하게 모형이 선택/줄자점이 찍히지 않게 그 다음 클릭 한 번을 무시한다.
+
+  // 실제로 화면에 그릴 때 쓰는 배율 = 딱 맞춤 배율(scale) × 확대 배율(zoomLevel). 배치판 위 모든
+  // 모형·줄자·선택 표시·마우스 좌표 계산은 이제 이 값을 기준으로 한다.
+  const renderScale = scale * zoomLevel;
+  // 배치판(canvasRef, 실제 방 크기만큼 그려지는 "내용물")은 확대할수록 커지지만, 그걸 담는 바깥 창
+  // (viewportRef)은 항상 같은 크기로 고정해서 옆 목록 등 다른 화면 배치가 확대 배율에 따라 흔들리지
+  // 않게 한다. VIEW_BLEED는 확대하지 않은 기본 상태에서도 선택된 모형의 테두리·그림자가("오른쪽과
+  // 하단은 여전히 제품을 먹고 있어" 신고로 없앤 overflow:hidden 대신 이번엔 이 여유 공간으로) 창
+  // 가장자리에 잘리지 않도록 두는 안전 여백이다.
+  const VIEW_BLEED = 14;
+  const viewportWidthPx = canvasWidthPx + VIEW_BLEED * 2;
+  const viewportHeightPx = canvasHeightPx + VIEW_BLEED * 2;
+  const worldWidthPx = spaceWidthM * 100 * renderScale;
+  const worldHeightPx = spaceDepthM * 100 * renderScale;
+
+  // 주어진 확대 배율(zoom)·이동값(pan)일 때, 배치판(canvasRef)이 바깥 창(viewportRef) 안에서
+  // 왼쪽/위로 얼마나 떨어진 자리에 놓이는지 계산한다. pan이 (0,0)이면 방 가운데가 창 가운데에
+  // 오도록 두고, 거기에 pan을 더한다 — 마우스 휠 확대(어느 지점을 기준으로 확대할지)와 Shift+끌기
+  // (화면 이동) 양쪽에서 똑같이 이 계산을 써야 화면이 어긋나지 않는다.
+  function computeWorldOffset(zoom, pan) {
+    const renderScaleAt = scale * zoom;
+    const wPx = spaceWidthM * 100 * renderScaleAt;
+    const hPx = spaceDepthM * 100 * renderScaleAt;
+    const baseLeft = VIEW_BLEED - (wPx - canvasWidthPx) / 2;
+    const baseTop = VIEW_BLEED - (hPx - canvasHeightPx) / 2;
+    return { left: baseLeft + pan.x, top: baseTop + pan.y, baseLeft, baseTop, worldWidthPx: wPx, worldHeightPx: hPx, renderScaleAt };
+  }
+  const worldOffset = computeWorldOffset(zoomLevel, viewPan);
+
+  // 화면 이동(pan)이 너무 커져서 방 전체가 창 밖으로 나가버리면("잃어버린" 것처럼 보여서 되돌리기
+  // 어려움) 곤란하므로, 방의 적어도 일부(MIN_OVERLAP_PX)는 항상 창 안에 걸쳐 있도록 막아준다.
+  function clampPan(pan, zoom) {
+    const { worldWidthPx: wPx, worldHeightPx: hPx, baseLeft, baseTop } = computeWorldOffset(zoom, { x: 0, y: 0 });
+    const MIN_OVERLAP_PX = 80;
+    const lowX = Math.min(MIN_OVERLAP_PX - wPx - baseLeft, viewportWidthPx - MIN_OVERLAP_PX - baseLeft);
+    const highX = Math.max(MIN_OVERLAP_PX - wPx - baseLeft, viewportWidthPx - MIN_OVERLAP_PX - baseLeft);
+    const lowY = Math.min(MIN_OVERLAP_PX - hPx - baseTop, viewportHeightPx - MIN_OVERLAP_PX - baseTop);
+    const highY = Math.max(MIN_OVERLAP_PX - hPx - baseTop, viewportHeightPx - MIN_OVERLAP_PX - baseTop);
+    return { x: Math.min(Math.max(pan.x, lowX), highX), y: Math.min(Math.max(pan.y, lowY), highY) };
+  }
+
+  // 배율을 바꿀 때(마우스 휠이든 +/- 버튼이든) 공통으로 쓰는 함수: 기준점(anchorX, anchorY — 창
+  // 안에서의 px 위치)이 배치판의 어느 cm 지점을 가리키고 있었는지 구해두고, 배율을 바꾼 뒤에도 그
+  // cm 지점이 화면의 같은 자리에 그대로 있도록 pan을 다시 계산한다. 이렇게 해야 마우스가 가리키던
+  // 자리를 기준으로 확대되어, 확대할수록 원하는 지점이 화면 밖으로 자꾸 밀려나지 않고 정확히 그
+  // 자리를 계속 파고들어 볼 수 있다.
+  function zoomTo(nextZoomRaw, anchorX, anchorY) {
+    const nextZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, nextZoomRaw));
+    if (nextZoom === zoomLevel) return;
+    const before = computeWorldOffset(zoomLevel, viewPan);
+    const cmX = (anchorX - before.left) / before.renderScaleAt;
+    const cmY = (anchorY - before.top) / before.renderScaleAt;
+    const after = computeWorldOffset(nextZoom, { x: 0, y: 0 });
+    const nextPan = { x: anchorX - cmX * after.renderScaleAt - after.baseLeft, y: anchorY - cmY * after.renderScaleAt - after.baseTop };
+    setZoomLevel(nextZoom);
+    setViewPan(clampPan(nextPan, nextZoom));
+  }
+
+  // 마우스 휠: deltaY(휠을 굴린 정도)에 따라 부드럽게 배율을 바꾸고, 마우스가 가리키던 지점을
+  // 기준으로 확대한다(zoomTo). 이 화면에서 휠은 페이지 스크롤 용도가 아니라 배치판 전용 확대·축소로
+  // 쓰므로 브라우저 기본 동작(페이지 스크롤)은 막아준다. React의 onWheel은 기본적으로
+  // "passive"(preventDefault가 안 먹힘)로 등록돼서, 아래 useEffect로 이 창(viewportRef)에 직접
+  // 리스너를 달아 막는다(passive: false).
+  const wheelHandlerRef = useRef(() => {});
+  wheelHandlerRef.current = function handleCanvasWheel(e) {
+    e.preventDefault();
+    const el = viewportRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const factor = Math.exp(-e.deltaY * 0.0015);
+    zoomTo(zoomLevel * factor, e.clientX - rect.left, e.clientY - rect.top);
+  };
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    function listener(e) {
+      wheelHandlerRef.current(e);
+    }
+    el.addEventListener("wheel", listener, { passive: false });
+    return () => el.removeEventListener("wheel", listener);
+  }, []);
+
+  // 툴바의 확대(+)/축소(-) 버튼 — 마우스 위치 대신 창 가운데를 기준으로 확대·축소한다. "화면 맞춤"은
+  // 방 전체가 다시 딱 보이도록 배율·이동을 처음 상태로 되돌린다.
+  function handleZoomButton(factor) {
+    zoomTo(zoomLevel * factor, viewportWidthPx / 2, viewportHeightPx / 2);
+  }
+  function handleResetView() {
+    setZoomLevel(1);
+    setViewPan({ x: 0, y: 0 });
+  }
+
+  // Shift를 누른 채 배치판 창을 끌면(확대돼서 방의 일부만 보일 때) 그 보이는 위치를 옮긴다. 마퀴
+  // (드래그로 여러 모형 선택)·모형 끌기·크기조절·줄자 찍기 등 기존 동작은 모두 Shift 없이 그대로 쓸
+  // 수 있게, 캡처 단계(bubble 이전)에서 Shift가 눌려있을 때만 가로채서(stopPropagation) 화면 이동으로
+  // 처리하고, 그렇지 않으면 그대로 흘려보내 기존 동작에 아무 영향이 없게 한다. 딱 맞춰 보이는
+  // 배율(zoomLevel<=1)에서는 옮겨봐도 더 볼 게 없어 의미가 없으므로 그때는 가로채지 않는다(그러면
+  // 예전처럼 Shift+끌기가 빈 캔버스 마퀴 선택으로 그대로 동작한다 — 다만 마퀴에 무언가를 "더하는"
+  // 동작의 단축키는 아래에서 Ctrl(⌘)로 옮겨졌다. Shift는 이제 "화면 이동" 전용으로 통일한다).
+  function handleViewportMouseDownCapture(e) {
+    if (!e.shiftKey || e.button !== 0 || zoomLevel <= 1) return;
+    e.preventDefault();
+    e.stopPropagation();
+    panDragRef.current = { startClientX: e.clientX, startClientY: e.clientY, startPan: { x: viewPan.x, y: viewPan.y }, moved: false };
+    setIsPanningView(true);
+  }
+  // 실제로 화면을 끌어서(moved) 옮긴 뒤에는, 마우스를 뗀 그 자리에서 클릭 이벤트가 한 번 더 발생해도
+  // (예: 모형 위에서 손을 뗀 경우) 무시한다 — 화면을 옮기려던 것뿐인데 그 자리의 모형이 선택되거나
+  // 줄자 점이 찍혀버리는 것을 막는다.
+  function handleViewportClickCapture(e) {
+    if (!suppressClickAfterPanRef.current) return;
+    suppressClickAfterPanRef.current = false;
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  useEffect(() => {
+    function onPanMove(e) {
+      const drag = panDragRef.current;
+      if (!drag) return;
+      const dx = e.clientX - drag.startClientX;
+      const dy = e.clientY - drag.startClientY;
+      if (Math.hypot(dx, dy) > 2) drag.moved = true;
+      setViewPan(clampPan({ x: drag.startPan.x + dx, y: drag.startPan.y + dy }, zoomLevel));
+    }
+    function onPanUp() {
+      const drag = panDragRef.current;
+      if (!drag) return;
+      if (drag.moved) suppressClickAfterPanRef.current = true;
+      panDragRef.current = null;
+      setIsPanningView(false);
+    }
+    window.addEventListener("mousemove", onPanMove);
+    window.addEventListener("mouseup", onPanUp);
+    return () => {
+      window.removeEventListener("mousemove", onPanMove);
+      window.removeEventListener("mouseup", onPanUp);
+    };
+  }, [zoomLevel]);
+
+  // 방 크기를 바꾸거나(handleCreateSpace) 확대 배율이 바뀔 때마다, 지금 이동값(pan)이 여전히 유효한
+  // 범위 안에 있는지 다시 확인해서 벗어나 있으면 안쪽으로 당겨온다(방을 작게 줄였는데 예전 이동값이
+  // 그대로 남아 방이 화면 밖으로 나가버리는 것을 막는 안전망).
+  useEffect(() => {
+    setViewPan((prev) => clampPan(prev, zoomLevel));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spaceWidthM, spaceDepthM, zoomLevel]);
+
+  // 줄자 모드에서 지금 마우스가 배치판의 정확히 어느 cm 지점을 가리키고 있는지 실시간으로 보여주는
+  // 상태("줄자 기능을 좀 더 고급지게" 요청) — 확대한 상태에서 점을 찍기 전에 좌표를 먼저 눈으로
+  // 확인할 수 있어서 더 정확하게 찍을 수 있다.
+  const [hoverCm, setHoverCm] = useState(null);
+  useEffect(() => {
+    if (!rulerMode) setHoverCm(null);
+  }, [rulerMode]);
+  function handleCanvasMouseMoveForRuler(e) {
+    if (!rulerMode || !canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    setHoverCm({ xCm: (e.clientX - rect.left) / renderScale, yCm: (e.clientY - rect.top) / renderScale });
+  }
+
   // 모형 목록(왼쪽)에서 새로 끌어올 때 — 드래그하는 게 "카탈로그의 어떤 모형"인지만 담아 보낸다.
   function handleDragStartCatalog(e, shape) {
     e.dataTransfer.setData("text/plain", JSON.stringify({ type: "catalog", shapeId: shape.id }));
@@ -11722,8 +11900,8 @@ function LayoutSimTab({ managerName = "" }) {
   // 지점을 잡았는지(offset)도 같이 담아서, 놓았을 때 모형이 마우스 쪽으로 툭 튀지 않고 자연스럽게 옮겨지게 한다.
   function handleDragStartPlaced(e, placed) {
     const rect = e.currentTarget.getBoundingClientRect();
-    const offsetXCm = (e.clientX - rect.left) / scale;
-    const offsetYCm = (e.clientY - rect.top) / scale;
+    const offsetXCm = (e.clientX - rect.left) / renderScale;
+    const offsetYCm = (e.clientY - rect.top) / renderScale;
     e.dataTransfer.setData("text/plain", JSON.stringify({ type: "placed", placedId: placed.id, offsetXCm, offsetYCm }));
   }
 
@@ -11731,7 +11909,7 @@ function LayoutSimTab({ managerName = "" }) {
   // 그 변에 딱 붙여준다(왼쪽/오른쪽/위/아래로 붙이기, 변끼리 줄맞추기). 세로 범위가 겹칠 때만 좌우로,
   // 가로 범위가 겹칠 때만 위아래로 붙이는 게 자연스러워서 그 경우에만 후보로 고려한다.
   function snapPlacement(xCm, yCm, wCm, hCm, excludeId) {
-    const thresholdCm = 15 / scale;
+    const thresholdCm = 15 / renderScale;
     let snappedX = xCm;
     let snappedY = yCm;
     let bestXDist = thresholdCm;
@@ -11936,8 +12114,8 @@ function LayoutSimTab({ managerName = "" }) {
       return;
     }
     const rect = canvasRef.current.getBoundingClientRect();
-    const cmX = (e.clientX - rect.left) / scale;
-    const cmY = (e.clientY - rect.top) / scale;
+    const cmX = (e.clientX - rect.left) / renderScale;
+    const cmY = (e.clientY - rect.top) / renderScale;
 
     if (payload.type === "catalog") {
       const shape = shapes.find((s) => s.id === payload.shapeId);
@@ -12067,8 +12245,8 @@ function LayoutSimTab({ managerName = "" }) {
     function onResizeMove(e) {
       const drag = resizeDragRef.current;
       if (!drag) return;
-      const dxCm = (e.clientX - drag.startX) / scale;
-      const dyCm = (e.clientY - drag.startY) / scale;
+      const dxCm = (e.clientX - drag.startX) / renderScale;
+      const dyCm = (e.clientY - drag.startY) / renderScale;
       let newWidthCm = Math.max(10, drag.swapped ? drag.startWidthCm + dyCm : drag.startWidthCm + dxCm);
       let newDepthCm = Math.max(10, drag.swapped ? drag.startDepthCm + dxCm : drag.startDepthCm + dyCm);
       // 손잡이가 오른쪽 아래에 있어 왼쪽·위쪽 위치(xCm/yCm)는 그대로인 채 커지므로, 화면에 보이는
@@ -12099,7 +12277,7 @@ function LayoutSimTab({ managerName = "" }) {
       window.removeEventListener("mousemove", onResizeMove);
       window.removeEventListener("mouseup", onResizeUp);
     };
-  }, [scale, spaceWidthM, spaceDepthM]);
+  }, [renderScale, spaceWidthM, spaceDepthM]);
 
   function startResizePlaced(it, swapped) {
     return (e) => {
@@ -12249,6 +12427,8 @@ function LayoutSimTab({ managerName = "" }) {
     setBgImageUrl(null);
     setBgImagePath(null);
     setShowGrid(true);
+    setZoomLevel(1);
+    setViewPan({ x: 0, y: 0 });
   }
 
   // 줄자로 찍을 수 있는 "끝점" 후보: 놓인 모형들의 네 모서리(회전된 상태면 화면에 보이는 대로).
@@ -12272,7 +12452,7 @@ function LayoutSimTab({ managerName = "" }) {
   // 클릭 지점 근처(화면 기준 12px 안)에 모형 끝점이 있으면 그 점에 딱 맞춰 찍는다("끝점 인식") —
   // 손으로 정확히 모서리를 맞추기 어려운 걸 보완해준다. 근처에 없으면 클릭한 자리 그대로 찍는다.
   function nearestSnapPoint(xCm, yCm) {
-    const thresholdCm = 12 / scale;
+    const thresholdCm = 12 / renderScale;
     let best = null;
     let bestDist = thresholdCm;
     for (const p of rulerSnapPoints) {
@@ -12319,20 +12499,22 @@ function LayoutSimTab({ managerName = "" }) {
   //  1) 거의 안 움직이고 손을 뗐으면("그냥 클릭") — 줄자 모드면 그 자리에 점을 찍고(예전 handleCanvasClick과
   //     같은 동작), 아니면 선택만 해제한다.
   //  2) 어느 정도 끌고 손을 뗐으면(마퀴/드래그 선택) — 그 사각 범위에 걸리는 모형을 한꺼번에 선택한다.
-  //     Shift를 누른 채로 하면 지금 선택돼 있던 것에 더한다.
+  //     Ctrl(맥은 ⌘)을 누른 채로 하면 지금 선택돼 있던 것에 더한다("이전엔 Shift+끌기였는데, 이제
+  //     Shift+끌기는 화면 확대 상태에서 보이는 위치를 옮기는 데 쓰여서 Ctrl로 옮겼다).
   // 모형이나 그 위의 버튼을 눌렀을 때는 그 모형의 onClick이 stopPropagation을 하므로 여기 로직과는
   // 상관없이 그쪽 클릭 처리(선택/그룹 선택)가 그대로 동작한다 — 여기서는 실제로 캔버스 배경 자체를
-  // 누른 경우(e.target === canvasRef.current)만 걸러서 처리한다.
+  // 누른 경우(e.target === canvasRef.current)만 걸러서 처리한다. Shift를 누른 채 누른 경우는(확대
+  // 상태에서) 위 handleViewportMouseDownCapture가 화면 이동으로 먼저 가로채서 여기까지 오지 않는다.
   function handleCanvasMouseDown(e) {
     if (e.target !== canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
     marqueeDragRef.current = {
       startClientX: e.clientX,
       startClientY: e.clientY,
-      startXCm: (e.clientX - rect.left) / scale,
-      startYCm: (e.clientY - rect.top) / scale,
+      startXCm: (e.clientX - rect.left) / renderScale,
+      startYCm: (e.clientY - rect.top) / renderScale,
       moved: false,
-      shiftKey: e.shiftKey,
+      addToSelection: e.ctrlKey || e.metaKey,
     };
   }
 
@@ -12350,8 +12532,8 @@ function LayoutSimTab({ managerName = "" }) {
       if (distPx > 3) drag.moved = true;
       if (!drag.moved) return;
       const rect = canvasRef.current.getBoundingClientRect();
-      const curXCm = (e.clientX - rect.left) / scale;
-      const curYCm = (e.clientY - rect.top) / scale;
+      const curXCm = (e.clientX - rect.left) / renderScale;
+      const curYCm = (e.clientY - rect.top) / renderScale;
       const next = {
         xCm: Math.min(drag.startXCm, curXCm),
         yCm: Math.min(drag.startYCm, curYCm),
@@ -12370,13 +12552,13 @@ function LayoutSimTab({ managerName = "" }) {
       setMarqueeRect(null);
 
       if (!drag.moved || !finalRect) {
-        // "그냥 클릭"으로 본다: 줄자 모드면 그 자리에 점을 찍고, 아니면(Shift를 누르지 않은 한) 선택을 해제한다.
+        // "그냥 클릭"으로 본다: 줄자 모드면 그 자리에 점을 찍고, 아니면(Ctrl을 누르지 않은 한) 선택을 해제한다.
         if (rulerMode) {
           const snapped = nearestSnapPoint(drag.startXCm, drag.startYCm);
           const xCm = snapped ? snapped.xCm : drag.startXCm;
           const yCm = snapped ? snapped.yCm : drag.startYCm;
           addRulerPoint(xCm, yCm);
-        } else if (!drag.shiftKey) {
+        } else if (!drag.addToSelection) {
           setSelectedPlacedIds(new Set());
         }
         return;
@@ -12395,7 +12577,7 @@ function LayoutSimTab({ managerName = "" }) {
           hitIds.add(it.id);
         }
       }
-      setSelectedPlacedIds((prev) => (drag.shiftKey ? new Set([...prev, ...hitIds]) : hitIds));
+      setSelectedPlacedIds((prev) => (drag.addToSelection ? new Set([...prev, ...hitIds]) : hitIds));
     }
     window.addEventListener("mousemove", onMarqueeMove);
     window.addEventListener("mouseup", onMarqueeUp);
@@ -12403,7 +12585,7 @@ function LayoutSimTab({ managerName = "" }) {
       window.removeEventListener("mousemove", onMarqueeMove);
       window.removeEventListener("mouseup", onMarqueeUp);
     };
-  }, [scale, rulerMode, placedItems]);
+  }, [renderScale, rulerMode, placedItems]);
 
   // 줄자: 캔버스를 누를 때마다(정확히는, 거의 안 끈 채로 손을 뗄 때마다) 점을 하나씩 찍고, 두 점이
   // 모이면 그 사이 실제 거리를 계산해 보여준다. 세 번째부터는 이전 측정을 지우고 새로 잰다(위
@@ -12484,6 +12666,9 @@ function LayoutSimTab({ managerName = "" }) {
     }
     // 컬럼이 아직 없던 예전 배치안(show_grid가 없음, undefined)은 격자를 보여주던 그대로 true로 둔다.
     setShowGrid(data.show_grid !== false);
+    // 불러온 배치안은 항상 방 전체가 딱 보이는 배율로 시작한다(확대·이동 상태는 저장하지 않음).
+    setZoomLevel(1);
+    setViewPan({ x: 0, y: 0 });
   }
 
   async function handleDeleteBoard(id) {
@@ -12795,7 +12980,7 @@ function LayoutSimTab({ managerName = "" }) {
               유지하게 해서 이 줄 자체가 두 줄로 접히는 일이 없도록 한다. */}
           <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
             <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0 }}>
-              공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요. 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요.
+              공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요(Ctrl+끌면 기존 선택에 더하기). 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요. 마우스 휠로 확대·축소할 수 있고, 확대한 상태에서는 Shift를 누른 채 끌면 화면을 이동할 수 있어요.
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
               <button
@@ -12813,6 +12998,14 @@ function LayoutSimTab({ managerName = "" }) {
               </button>
               {rulerPoints.length > 0 && (
                 <button onClick={handleClearRuler} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>줄자 지우기</button>
+              )}
+              {/* "줄자 기능을 좀 더 고급지게" 요청: 줄자 모드에서 점을 찍기 전에, 지금 마우스가 배치판의
+                  정확히 어느 cm 위치를 가리키고 있는지 실시간으로 보여준다. 확대해서 정확한 자리를
+                  찾는 걸 도와준다. */}
+              {rulerMode && hoverCm && (
+                <span style={{ fontSize: 11, color: C.inkSoft, whiteSpace: "nowrap" }}>
+                  → {hoverCm.xCm.toFixed(1)}cm, {hoverCm.yCm.toFixed(1)}cm
+                </span>
               )}
               {/* "이미지 임포트" 요청: 실제 도면(사진·스캔) 파일을 올려서 배경으로 깔아두고, 그 위에
                   정확한 축척으로 모형을 배치할 수 있다. 파일을 고르면 바로 올라가지 않고 먼저 축척
@@ -12841,6 +13034,35 @@ function LayoutSimTab({ managerName = "" }) {
               >
                 # 격자{showGrid ? " (켜짐)" : " (꺼짐)"}
               </button>
+              {/* "마우스 휠로 줌인/줌아웃" 요청: 휠 말고도 버튼으로 확대·축소할 수 있게 하고, 지금
+                  배율(%)을 숫자로도 보여준다. 방을 딱 맞춰 보는 상태(100%)가 아닐 때만 "화면 맞춤"
+                  버튼이 나타나 언제든 원래 화면으로 되돌릴 수 있다. */}
+              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <button
+                  onClick={() => handleZoomButton(1 / 1.25)}
+                  disabled={zoomLevel <= ZOOM_MIN}
+                  title="화면 축소"
+                  style={{ ...miniBtnStyle, padding: "4px 9px", opacity: zoomLevel <= ZOOM_MIN ? 0.4 : 1 }}
+                >
+                  −
+                </button>
+                <span style={{ fontSize: 11, color: C.inkSoft, minWidth: 36, textAlign: "center" }}>
+                  {Math.round(zoomLevel * 100)}%
+                </span>
+                <button
+                  onClick={() => handleZoomButton(1.25)}
+                  disabled={zoomLevel >= ZOOM_MAX}
+                  title="화면 확대"
+                  style={{ ...miniBtnStyle, padding: "4px 9px", opacity: zoomLevel >= ZOOM_MAX ? 0.4 : 1 }}
+                >
+                  ＋
+                </button>
+                {(zoomLevel !== 1 || viewPan.x !== 0 || viewPan.y !== 0) && (
+                  <button onClick={handleResetView} title="방 전체가 다시 딱 보이도록 되돌려요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
+                    화면 맞춤
+                  </button>
+                )}
+              </div>
             </div>
           </div>
           {/* (예전엔 선택 도구모음을 배치판 "위"에 별도 줄로 두고, 선택 여부에 따라 minHeight+
@@ -12852,15 +13074,38 @@ function LayoutSimTab({ managerName = "" }) {
               absolute)로 떠 있는 오버레이로 옮겼다 — 이러면 선택된 게 없을 때는 배치판 바로 위에
               빈 공간이 전혀 없이 붙고, 선택했을 때만 배치판 왼쪽 위에 살짝 떠서 나타날 뿐 배치판
               자체의 위치·크기는 절대 흔들리지 않는다. */}
+          {/* "마우스 휠로 줌인/줌아웃, 시프트+끌기로 화면 이동" 요청: 배치판(canvasRef)을 감싸는 바깥
+              창(viewportRef)을 하나 더 두었다. 이 창은 항상 같은 크기(딱 맞춤 배율 기준 + 여유
+              VIEW_BLEED)로 고정돼 있어서 확대해도 옆 화면 배치가 흔들리지 않고, 확대돼서 방보다
+              커진 배치판은 이 창 밖으로 나간 부분만 잘려서(overflow:hidden) 안 보인다 — 확대하지
+              않은 기본 상태에서는 배치판이 이 창보다 항상 작아서(VIEW_BLEED만큼 여유가 있어서)
+              선택 테두리·그림자가 잘리는 일은 없다(overflow:hidden을 없앤 원래 취지 그대로). 마우스
+              휠(wheel)과 Shift+끌기(pan)는 이 창에서 받아서 처리한다. */}
+          <div
+            ref={viewportRef}
+            onMouseDownCapture={handleViewportMouseDownCapture}
+            onClickCapture={handleViewportClickCapture}
+            style={{
+              position: "relative",
+              width: viewportWidthPx,
+              height: viewportHeightPx,
+              overflow: "hidden",
+              cursor: isPanningView ? "grabbing" : "default",
+              touchAction: "none",
+            }}
+          >
           <div
             ref={canvasRef}
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleCanvasDrop}
             onMouseDown={handleCanvasMouseDown}
+            onMouseMove={handleCanvasMouseMoveForRuler}
             style={{
-              position: "relative",
-              width: canvasWidthPx,
-              height: canvasHeightPx,
+              position: "absolute",
+              left: worldOffset.left,
+              top: worldOffset.top,
+              width: worldWidthPx,
+              height: worldHeightPx,
               border: `2px solid ${C.ink}`,
               // (디자인 다듬기로 한때 배치판 테두리를 둥글렸었는데, 모형을 벽에 딱 붙여 놓으면 각진
               // 모형 모서리가 이 둥근 테두리 곡선에 걸려 살짝 잘려 보이는 "디자인을 침범하는" 문제가
@@ -12883,15 +13128,16 @@ function LayoutSimTab({ managerName = "" }) {
               // 격자(showGrid)와 배경 도면(bgImageUrl)은 각각 있을 수도 없을 수도 있어서, 배경
               // 레이어 목록을 그때그때 다르게 구성한다(CSS는 여러 배경을 쉼표로 겹쳐 그릴 수 있고,
               // 먼저 적은 게 위로 온다 — 그래서 격자를 도면 사진보다 앞에 적어 항상 사진 위에 격자가
-              // 겹쳐 보이게 한다). 도면 사진은 배치판 전체 크기(canvasWidthPx×canvasHeightPx)에 꽉
-              // 차게 늘려서(backgroundSize: 100% 100%) 그리는데, 이게 바로 축척 맞추기에서 방
-              // 크기(spaceWidthM/spaceDepthM)를 도면의 실제 크기와 똑같이 맞춰두는 이유다 — 그래야
-              // 사진과 배치판의 눈금(cm)이 정확히 겹친다.
+              // 겹쳐 보이게 한다). 도면 사진은 배치판 전체 크기(worldWidthPx×worldHeightPx, 확대
+              // 배율에 따라 커짐)에 꽉 차게 늘려서(backgroundSize: 100% 100%) 그리는데, 이게 바로
+              // 축척 맞추기에서 방 크기(spaceWidthM/spaceDepthM)를 도면의 실제 크기와 똑같이 맞춰두는
+              // 이유다 — 그래야 사진과 배치판의 눈금(cm)이 확대해도 항상 정확히 겹친다(격자 한 칸도
+              // renderScale 기준이라 확대할수록 커진다).
               ...(() => {
                 const gridLayers = showGrid
                   ? [
-                      `repeating-linear-gradient(0deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${scale * 100}px)`,
-                      `repeating-linear-gradient(90deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${scale * 100}px)`,
+                      `repeating-linear-gradient(0deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${renderScale * 100}px)`,
+                      `repeating-linear-gradient(90deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${renderScale * 100}px)`,
                     ]
                   : [];
                 const imageLayers = bgImageUrl ? [`url(${bgImageUrl})`] : [];
@@ -12977,10 +13223,10 @@ function LayoutSimTab({ managerName = "" }) {
               // 예전에 저장된 배치(rotated: true/false만 있던 옛 데이터)도 그대로 이어받는다.
               const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
               const swapped = rotation === 90 || rotation === 270;
-              const outerWPx = (swapped ? it.depthCm : it.widthCm) * scale;
-              const outerHPx = (swapped ? it.widthCm : it.depthCm) * scale;
-              const baseWPx = it.widthCm * scale;
-              const baseHPx = it.depthCm * scale;
+              const outerWPx = (swapped ? it.depthCm : it.widthCm) * renderScale;
+              const outerHPx = (swapped ? it.widthCm : it.depthCm) * renderScale;
+              const baseWPx = it.widthCm * renderScale;
+              const baseHPx = it.depthCm * renderScale;
               const isPoly = it.shapeType === "l" || it.shapeType === "u";
               const isCircle = it.shapeType === "circle";
               const isRoundEnd = it.shapeType === "roundend";
@@ -13040,8 +13286,8 @@ function LayoutSimTab({ managerName = "" }) {
                   }
                   style={{
                     position: "absolute",
-                    left: it.xCm * scale,
-                    top: it.yCm * scale,
+                    left: it.xCm * renderScale,
+                    top: it.yCm * renderScale,
                     width: outerWPx,
                     height: outerHPx,
                     cursor: rulerMode ? "crosshair" : "grab",
@@ -13186,10 +13432,10 @@ function LayoutSimTab({ managerName = "" }) {
                 className="layoutsim-no-print"
                 style={{
                   position: "absolute",
-                  left: marqueeRect.xCm * scale,
-                  top: marqueeRect.yCm * scale,
-                  width: marqueeRect.wCm * scale,
-                  height: marqueeRect.hCm * scale,
+                  left: marqueeRect.xCm * renderScale,
+                  top: marqueeRect.yCm * renderScale,
+                  width: marqueeRect.wCm * renderScale,
+                  height: marqueeRect.hCm * renderScale,
                   background: "rgba(107, 92, 165, 0.12)",
                   border: `1px dashed ${C.purple}`,
                   pointerEvents: "none",
@@ -13205,8 +13451,8 @@ function LayoutSimTab({ managerName = "" }) {
                   className="layoutsim-no-print"
                   style={{
                     position: "absolute",
-                    left: p.xCm * scale - 3,
-                    top: p.yCm * scale - 3,
+                    left: p.xCm * renderScale - 3,
+                    top: p.yCm * renderScale - 3,
                     width: 6,
                     height: 6,
                     borderRadius: "50%",
@@ -13223,8 +13469,8 @@ function LayoutSimTab({ managerName = "" }) {
                 key={`ruler-pt-${idx}`}
                 style={{
                   position: "absolute",
-                  left: p.xCm * scale - 4,
-                  top: p.yCm * scale - 4,
+                  left: p.xCm * renderScale - 4,
+                  top: p.yCm * renderScale - 4,
                   width: 8,
                   height: 8,
                   borderRadius: "50%",
@@ -13236,15 +13482,15 @@ function LayoutSimTab({ managerName = "" }) {
             ))}
             {rulerPoints.length === 2 && (
               <svg
-                width={canvasWidthPx}
-                height={canvasHeightPx}
+                width={worldWidthPx}
+                height={worldHeightPx}
                 style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
               >
                 <line
-                  x1={rulerPoints[0].xCm * scale}
-                  y1={rulerPoints[0].yCm * scale}
-                  x2={rulerPoints[1].xCm * scale}
-                  y2={rulerPoints[1].yCm * scale}
+                  x1={rulerPoints[0].xCm * renderScale}
+                  y1={rulerPoints[0].yCm * renderScale}
+                  x2={rulerPoints[1].xCm * renderScale}
+                  y2={rulerPoints[1].yCm * renderScale}
                   stroke="#e11d48"
                   strokeWidth={2}
                   strokeDasharray="6,4"
@@ -13256,8 +13502,8 @@ function LayoutSimTab({ managerName = "" }) {
                 className="layoutsim-no-print"
                 style={{
                   position: "absolute",
-                  left: ((rulerPoints[0].xCm + rulerPoints[1].xCm) / 2) * scale,
-                  top: ((rulerPoints[0].yCm + rulerPoints[1].yCm) / 2) * scale,
+                  left: ((rulerPoints[0].xCm + rulerPoints[1].xCm) / 2) * renderScale,
+                  top: ((rulerPoints[0].yCm + rulerPoints[1].yCm) / 2) * renderScale,
                   transform: "translate(-50%, -50%)",
                   background: "#e11d48",
                   color: "#fff",
@@ -13272,6 +13518,7 @@ function LayoutSimTab({ managerName = "" }) {
                 {rulerDistanceCm >= 100 ? `${(rulerDistanceCm / 100).toFixed(2)}m (${rulerDistanceCm.toFixed(0)}cm)` : `${rulerDistanceCm.toFixed(1)}cm`}
               </div>
             )}
+          </div>
           </div>
         </div>
       </div>
