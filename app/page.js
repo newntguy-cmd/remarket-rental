@@ -10994,39 +10994,57 @@ function roundEndTablePathD(widthCm, depthCm) {
   return `M 0,0 L ${W},0 L ${W},${rectDepth} A ${radius},${radius} 0 0 1 0,${rectDepth} Z`;
 }
 
-// 사무용 의자를 캐드(CAD) 도면처럼 위에서 내려다본 모양으로 그린다. 사용자가 직접 올려준 참고 도면
-// 이미지(주차배치도 안 의자 기호)를 확대해서 윤곽선을 하나하나 따라가며 확인한 모양 그대로다: 모서리가
-// 큼직하게 둥근 네모(몸통) 위아래로, 몸통보다 살짝 더 넓고 얇은 띠(받침대/캐스터가 몸통 밑에 살짝
-// 가려진 채 앞뒤로만 삐져나와 보이는 부분)가 걸쳐 있는 모양이다. width_cm×depth_cm 박스 안에 맞춰
-// 그려서 이 얇은 띠가 위(0)·아래(depth) 양쪽에 걸리도록 기본 방향을 잡아뒀고, 회전 버튼으로 다른
+// 사무용 의자를 캐드(CAD) 도면처럼 위에서 내려다본 모양으로 그린다. 사용자가 직접 올려준 참고 이미지
+// (주차배치도 안 의자 기호 — 의자가 옆으로 돌아간 채 찍혀 있었다)를 확대해서 확인해보니 "방석과 헤드가
+// 있고 양옆에 팔걸이가 있는" 사무의자를 위에서 본 모습이었다: 둥근 네모 두 덩어리(헤드/등받이 + 방석)가
+// 위아래로 살짝 겹치며 붙어 있고, 그 좌우로 가늘고 긴 타원 모양 팔걸이가 볼록하게 튀어나와 있다. 좌판
+// 앞쪽엔 쿠션 경계를 나타내는 얇은 곡선이 하나 더 있다. width_cm×depth_cm 박스 안에 맞춰 그려서
+// 등받이(헤드)가 위(0)쪽, 좌판이 아래(depth)쪽을 향하도록 기본 방향을 잡아뒀고, 회전 버튼으로 다른
 // 방향도 그대로 돌릴 수 있다.
 //
-// 얇은 띠(윗띠·아랫띠)와 몸통(둥근 네모)을 "따로따로 테두리선까지 그려 넣은 도형 여러 개"로 겹쳐
-// 그리면, 겹치는 안쪽에서 서로 다른 도형의 테두리선이 그대로 드러나 보여 지저분해진다(예전에 등받이·
-// 좌판을 타원 여러 개로 겹쳐 그리다가 "의자 모양이 이상하다"는 문제가 생겼던 것과 같은 이유). 그래서
-// 그리는 순서를 "얇은 띠 두 개를 먼저 깔고, 그 위에 둥근 네모 몸통을 덮어 그리기"로 정해서, 띠가
-// 몸통과 겹치는 안쪽 부분은 몸통 칠(fill)에 완전히 가려지고, 몸통 바깥으로 삐져나온 부분만 띠로
-// 보이게 했다. 몸통이 불투명하게 덮어버리기만 하면 되므로 별도의 겹침 보정 없이도 안쪽에 지저분한
-// 선이 전혀 생기지 않는다.
+// 팔걸이(타원)와 몸통(둥근 네모 두 덩어리)을 "따로따로 테두리선까지 그려 넣은 도형 여러 개"로 서로
+// 크게 겹치게 그리면, 겹치는 안쪽에서 서로 다른 도형의 테두리선이 그대로 드러나 보여 지저분해진다
+// (예전에 "의자 모양이 이상하다"는 문제가 생겼던 것과 같은 이유). 그래서 팔걸이 타원의 중심을 몸통의
+// 옆면 선에 딱 맞춰 둬서, 타원이 가장 볼록한 세로 가운데 부분만 몸통 밖으로 자연스럽게 튀어나오고
+// (여기는 겹치는 도형이 없어 깨끗함), 위아래로 갈수록 타원이 점점 좁아지면서 몸통 테두리 안쪽으로
+// 들어가는 부분은 나중에 그려지는 몸통(둥근 네모)이 통째로 덮어 가리도록 했다. 이러면 별도의 겹침
+// 보정 없이도 안쪽에 지저분한 선이 생기지 않는다.
 function ChairTopIcon({ w, d, fill, stroke }) {
   const W = Number(w) || 0;
   const D = Number(d) || 0;
   const minWD = Math.min(W, D);
   const strokeW = Math.max(minWD * 0.025, 0.4);
-  // 위·아래 얇은 띠 — 폭 전체(W)에 걸쳐 양끝이 둥글게 마무리된 알약 모양.
-  const bandHalfH = D * 0.055;
-  // 몸통(둥근 네모) — 띠 안쪽으로 살짝 들어와서, 띠의 바깥쪽 절반만 몸통 밖으로 남아 보이게 한다.
-  const marginX = W * 0.03;
-  const bodyX = marginX;
-  const bodyW = W - marginX * 2;
-  const bodyY = bandHalfH * 1.15;
-  const bodyH = D - bandHalfH * 1.15 * 2;
-  const bodyRx = Math.min(bodyW, bodyH) * 0.3;
+
+  // 팔걸이(양옆) — 세로로 길고 가느다란 타원. 중심을 몸통 옆면에 둬서 세로 가운데만 볼록하게 삐져나온다.
+  const armRx = W * 0.09;
+  const armRy = D * 0.42;
+  const bodyW = W * 0.74;
+  const bodyX = (W - bodyW) / 2;
+
+  // 몸통 = 헤드(위, 등받이) + 좌판(아래) 두 덩어리가 가운데서 살짝 겹치며 만난다.
+  const marginY = D * 0.03;
+  const bodyTop = marginY;
+  const bodyBottom = D - marginY;
+  const lobeH = (bodyBottom - bodyTop) * 0.56;
+  const headY = bodyTop;
+  const seatY = bodyBottom - lobeH;
+  const lobeRx = Math.min(bodyW, lobeH) * 0.34;
+
+  // 좌판 앞쪽 쿠션 경계선 — 참고 이미지에 있는, 좌판 아래쪽의 살짝 휘어진 얇은 곡선 하나.
+  const seamY = seatY + lobeH * 0.72;
+  const seamHalfW = bodyW * 0.28;
+
   return (
     <g fill={fill} stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round">
-      <rect x={0} y={0} width={W} height={bandHalfH * 2} rx={bandHalfH} ry={bandHalfH} />
-      <rect x={0} y={D - bandHalfH * 2} width={W} height={bandHalfH * 2} rx={bandHalfH} ry={bandHalfH} />
-      <rect x={bodyX} y={bodyY} width={bodyW} height={bodyH} rx={bodyRx} ry={bodyRx} />
+      <ellipse cx={bodyX} cy={D / 2} rx={armRx} ry={armRy} />
+      <ellipse cx={W - bodyX} cy={D / 2} rx={armRx} ry={armRy} />
+      <rect x={bodyX} y={headY} width={bodyW} height={lobeH} rx={lobeRx} ry={lobeRx} />
+      <rect x={bodyX} y={seatY} width={bodyW} height={lobeH} rx={lobeRx} ry={lobeRx} />
+      <path
+        d={`M ${W / 2 - seamHalfW} ${seamY} Q ${W / 2} ${seamY + strokeW * 1.4} ${W / 2 + seamHalfW} ${seamY}`}
+        fill="none"
+        strokeWidth={strokeW * 0.75}
+      />
     </g>
   );
 }
@@ -11086,9 +11104,19 @@ function LayoutSimTab({ managerName = "" }) {
     nextPlacedIdRef.current += 1;
     return `p${nextPlacedIdRef.current}`;
   };
-  // 키보드로 옮기려면 "지금 어떤 모형을 고른 상태인지"가 있어야 해서, 모형을 누르면 선택되고
-  // 빈 캔버스를 누르면 선택이 풀리게 한다(선택된 모형은 테두리를 강조해서 보여준다).
-  const [selectedPlacedId, setSelectedPlacedId] = useState(null);
+  // 키보드로 옮기려면 "지금 어떤 모형을(들) 고른 상태인지"가 있어야 해서, 모형을 누르면 선택되고
+  // 빈 캔버스를 누르면 선택이 풀리게 한다(선택된 모형은 테두리를 강조해서 보여준다). 마우스로 캔버스의
+  // 빈 자리를 끌면(마퀴/드래그 선택) 그 사각 범위 안에 걸리는 모형을 한꺼번에 여러 개 선택할 수 있고,
+  // 여러 개를 묶어서(그룹화) 같이 움직이거나 복사·붙여넣기 할 수도 있어서 하나짜리 id 대신 Set으로 관리한다.
+  const [selectedPlacedIds, setSelectedPlacedIds] = useState(() => new Set());
+  // 캔버스의 빈 자리를 눌러서 끄는 드래그 선택(마퀴) 상태. moved:false인 채로 손을 떼면 "그냥 클릭"으로
+  // 본다(선택 해제 또는 줄자 찍기).
+  const marqueeDragRef = useRef(null);
+  const marqueeRectRef = useRef(null); // marqueeRect state와 같은 값을 들고 있는 ref(마우스를 뗀 순간 최신값을 바로 읽기 위함)
+  const [marqueeRect, setMarqueeRect] = useState(null); // { xCm, yCm, wCm, hCm } | null
+  // Ctrl+C로 복사해둔 모형(들)을 임시로 담아두는 곳(화면에는 안 보임). 여러 개를 함께 복사하면
+  // 서로의 상대적인 위치(간격)를 그대로 유지해서 붙여넣을 수 있도록 원래 좌표를 그대로 저장해둔다.
+  const clipboardRef = useRef([]);
 
   const [boards, setBoards] = useState([]);
   const [currentBoardId, setCurrentBoardId] = useState(null);
@@ -11391,11 +11419,14 @@ function LayoutSimTab({ managerName = "" }) {
 
   // 자석 스냅으로도 다른 모형과 겹친 채로 남아있으면(예: 다른 모형 한가운데에 떨어뜨린 경우),
   // 겹친 폭·높이 중 더 적게 밀어내도 되는 방향으로 딱 붙을 때까지 밀어내서 서로 영역을 침범하지 않게 한다.
+  // excludeId는 보통 모형 하나의 id(문자열/숫자)지만, 그룹(또는 여러 개를 선택해 한꺼번에 옮길 때)은
+  // 그룹에 속한 모든 모형 id 배열을 넘겨서, 그룹 안 모형끼리는 서로 겹침 검사를 하지 않도록 한다.
   function resolveOverlap(xCm, yCm, wCm, hCm, excludeId) {
+    const excludeSet = new Set(Array.isArray(excludeId) ? excludeId : [excludeId]);
     let x = xCm;
     let y = yCm;
     for (const other of placedItems) {
-      if (other.id === excludeId) continue;
+      if (excludeSet.has(other.id)) continue;
       const rotation = other.rotation != null ? other.rotation : other.rotated ? 90 : 0;
       const swapped = rotation === 90 || rotation === 270;
       const ow = swapped ? other.depthCm : other.widthCm;
@@ -11488,6 +11519,38 @@ function LayoutSimTab({ managerName = "" }) {
     });
   }, [spaceWidthM, spaceDepthM, placedItems]);
 
+  // 이 모형을 끌 때 "같이 움직여야 하는" 모형 id들을 구한다. 여러 개를 선택해둔 상태에서 그 중 하나를
+  // 끌면 선택된 전체가 같이 움직이고(피피티·피그마 등에서 흔한 동작), 그게 아니면 그룹으로 묶어둔
+  // 모형이라면 그 그룹 전체가, 둘 다 아니면 자기 자신만 움직인다.
+  function getMoveGroupIds(it) {
+    if (selectedPlacedIds.size > 1 && selectedPlacedIds.has(it.id)) return [...selectedPlacedIds];
+    if (it.groupId) return placedItems.filter((p) => p.groupId === it.groupId).map((p) => p.id);
+    return [it.id];
+  }
+
+  // 그룹(또는 여러 개 선택)을 한 덩어리로 옮길 때, 그 중 하나라도 벽에 닿으면 전체가 그 자리에서 같이
+  // 멈추도록(따로따로 벽에서 멈추면 대열이 흐트러져 보이므로) dx/dy를 모두에게 공통으로 적용해도 되는
+  // 값으로 줄여준다.
+  function clampGroupDelta(memberIds, dx, dy) {
+    let cdx = dx;
+    let cdy = dy;
+    for (const id of memberIds) {
+      const m = placedItems.find((p) => p.id === id);
+      if (!m) continue;
+      const rotation = m.rotation != null ? m.rotation : m.rotated ? 90 : 0;
+      const swapped = rotation === 90 || rotation === 270;
+      const wCm = swapped ? m.depthCm : m.widthCm;
+      const hCm = swapped ? m.widthCm : m.depthCm;
+      const maxX = Math.max(0, spaceWidthM * 100 - wCm);
+      const maxY = Math.max(0, spaceDepthM * 100 - hCm);
+      if (m.xCm + cdx < 0) cdx = -m.xCm;
+      if (m.xCm + cdx > maxX) cdx = maxX - m.xCm;
+      if (m.yCm + cdy < 0) cdy = -m.yCm;
+      if (m.yCm + cdy > maxY) cdy = maxY - m.yCm;
+    }
+    return { dx: cdx, dy: cdy };
+  }
+
   function handleCanvasDrop(e) {
     e.preventDefault();
     let payload;
@@ -11523,6 +11586,7 @@ function LayoutSimTab({ managerName = "" }) {
           yCm: placed.yCm,
           rotation: 0,
           flipped: false,
+          groupId: null,
         },
       ]);
     } else if (payload.type === "placed") {
@@ -11534,14 +11598,55 @@ function LayoutSimTab({ managerName = "" }) {
       const hCm = swapped ? moving.widthCm : moving.depthCm;
       const rawX = Math.max(0, cmX - (payload.offsetXCm || 0));
       const rawY = Math.max(0, cmY - (payload.offsetYCm || 0));
-      const placed = placeWithSnap(rawX, rawY, wCm, hCm, moving.id);
-      setPlacedItems((prev) => prev.map((it) => (it.id === payload.placedId ? { ...it, xCm: placed.xCm, yCm: placed.yCm } : it)));
+      const moveGroupIds = getMoveGroupIds(moving);
+      if (moveGroupIds.length > 1) {
+        // 여러 개(선택 전체 또는 그룹)를 한꺼번에 옮길 때는 자석처럼 붙거나(snap) 서로 밀어내는 동작은
+        // 하지 않는다(그러면 모형들 사이의 간격·대열이 흐트러지므로) — 대표로 잡은 모형이 옮겨진 만큼
+        // 나머지도 똑같이 옮기고, 벽에 닿으면 전체가 같은 자리에서 함께 멈춘다.
+        const dx = rawX - moving.xCm;
+        const dy = rawY - moving.yCm;
+        const { dx: cdx, dy: cdy } = clampGroupDelta(moveGroupIds, dx, dy);
+        setPlacedItems((prev) => prev.map((it) => (moveGroupIds.includes(it.id) ? { ...it, xCm: it.xCm + cdx, yCm: it.yCm + cdy } : it)));
+      } else {
+        const placed = placeWithSnap(rawX, rawY, wCm, hCm, moving.id);
+        setPlacedItems((prev) => prev.map((it) => (it.id === payload.placedId ? { ...it, xCm: placed.xCm, yCm: placed.yCm } : it)));
+      }
     }
   }
 
   function handleRemovePlaced(id) {
     setPlacedItems((prev) => prev.filter((it) => it.id !== id));
-    setSelectedPlacedId((prev) => (prev === id ? null : prev));
+    setSelectedPlacedIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }
+
+  // 여러 개를 골라둔 채로 한꺼번에 지우기(선택 도구모음의 "삭제" 버튼).
+  function handleRemoveSelected() {
+    if (selectedPlacedIds.size === 0) return;
+    setPlacedItems((prev) => prev.filter((it) => !selectedPlacedIds.has(it.id)));
+    setSelectedPlacedIds(new Set());
+  }
+
+  // 두 개 이상 선택한 상태에서 "그룹화"를 누르면 같은 groupId를 부여해서, 이후로는 그 중 하나만 눌러도
+  // 전체가 같이 선택되고, 하나를 끌면 전체가 같이 움직인다.
+  function handleGroupSelected() {
+    if (selectedPlacedIds.size < 2) return;
+    const gid = `g${Date.now()}`;
+    setPlacedItems((prev) => prev.map((it) => (selectedPlacedIds.has(it.id) ? { ...it, groupId: gid } : it)));
+  }
+
+  // 선택한 모형(들)이 속한 그룹을 통째로 풀어준다(그 그룹의 다른 모형이 지금 선택 안 되어 있어도 같이 풀린다).
+  function handleUngroupSelected() {
+    const groupIdsToClear = new Set();
+    for (const it of placedItems) {
+      if (selectedPlacedIds.has(it.id) && it.groupId) groupIdsToClear.add(it.groupId);
+    }
+    if (groupIdsToClear.size === 0) return;
+    setPlacedItems((prev) => prev.map((it) => (it.groupId && groupIdsToClear.has(it.groupId) ? { ...it, groupId: null } : it)));
   }
 
   // 사각형은 0/90도만 돌려도 충분하지만, ㄱ자·U자는 방 구석·방향에 맞춰 4방향 모두 필요해서
@@ -11593,8 +11698,13 @@ function LayoutSimTab({ managerName = "" }) {
       // 손잡이가 오른쪽 아래에 있어 왼쪽·위쪽 위치(xCm/yCm)는 그대로인 채 커지므로, 화면에 보이는
       // 가로·세로(swapped 반영)가 배치판 오른쪽·아래쪽 벽을 넘지 않도록 커지는 만큼만 제한한다.
       // (하단·우측을 침범하지 않게: 크기 조절로 방 밖까지 늘어나던 문제를 막는다.)
-      const maxOnScreenW = Math.max(10, spaceWidthM * 100 - drag.xCm);
-      const maxOnScreenH = Math.max(10, spaceDepthM * 100 - drag.yCm);
+      // (버그 수정) 여기 있던 Math.max(10, ...)는 "최소 10cm는 늘어날 수 있게"라는 의도였는데, 하필
+      // 벽까지 남은 실제 공간이 10cm보다 더 좁은 자리(예: 벽에서 3cm만 남은 자리)에서는 그 "최소 10cm"가
+      // 오히려 실제로 남은 공간(3cm)보다 더 크게 잡혀버려서, 크기 조절로 모형이 방보다 더 커지며 벽을
+      // 넘어가 버렸다. 여기서는 "늘어날 수 있는 최소 보장 크기"가 아니라 "벽까지 실제로 남은 공간"을
+      // 구하는 것이므로, 남은 공간이 아무리 좁아도(심지어 0에 가까워도) 그 실제 값을 그대로 써야 한다.
+      const maxOnScreenW = Math.max(0, spaceWidthM * 100 - drag.xCm);
+      const maxOnScreenH = Math.max(0, spaceDepthM * 100 - drag.yCm);
       if (drag.swapped) {
         newDepthCm = Math.min(newDepthCm, maxOnScreenW);
         newWidthCm = Math.min(newWidthCm, maxOnScreenH);
@@ -11623,43 +11733,93 @@ function LayoutSimTab({ managerName = "" }) {
     };
   }
 
-  // 키보드 화살표로 선택한 모형을 옮긴다. 기본 5cm씩, Shift를 누르면 20cm씩 움직이고, 마우스로 끌 때와
-  // 똑같이 다른 모형과 안 겹치게·배치판 밖으로 못 나가게 제한(moveWithClamp)을 그대로 적용해서 마우스
-  // 없이도 세밀하게 위치를 맞출 수 있게 한다. 단, 벽·다른 모형에 자석처럼 달라붙는 동작(placeWithSnap의
-  // snapPlacement)은 일부러 적용하지 않는다 — 벽에 붙은 모형을 방향키로 떼어내려 해도 움직인 거리가
-  // 자석 범위 안이면 도로 끌려가서 "붙은 뒤에는 움직이지 않는" 것처럼 보이기 때문이다. 이름 입력칸 등
-  // 다른 곳에 포커스가 가 있을 때는 그 칸의 원래 동작(커서 이동)을 방해하지 않도록 건드리지 않는다.
-  // Escape를 누르면 선택만 해제한다.
+  // 키보드 화살표로 선택한 모형(들)을 옮긴다. 기본 5cm씩, Shift를 누르면 20cm씩 움직이고, 하나만
+  // 골랐고 그룹도 아니면 마우스로 끌 때와 똑같이 다른 모형과 안 겹치게·배치판 밖으로 못 나가게
+  // 제한(moveWithClamp)을 그대로 적용해서 마우스 없이도 세밀하게 위치를 맞출 수 있게 한다. 단,
+  // 벽·다른 모형에 자석처럼 달라붙는 동작(placeWithSnap의 snapPlacement)은 일부러 적용하지 않는다 —
+  // 벽에 붙은 모형을 방향키로 떼어내려 해도 움직인 거리가 자석 범위 안이면 도로 끌려가서 "붙은 뒤에는
+  // 움직이지 않는" 것처럼 보이기 때문이다. 여러 개를 골랐거나 그룹으로 묶어둔 모형이면 대열이
+  // 흐트러지지 않게 전체를 한 덩어리로 같이 옮긴다. 이름 입력칸 등 다른 곳에 포커스가 가 있을 때는
+  // 그 칸의 원래 동작(커서 이동, 복사·붙여넣기)을 방해하지 않도록 건드리지 않는다. Escape를 누르면
+  // 선택만 해제한다. Ctrl+C(맥은 Cmd+C)/Ctrl+V(맥은 Cmd+V)로 선택한 모형(들)을 복사·붙여넣기할 수 있다.
   useEffect(() => {
     function onKeyDown(e) {
-      if (!selectedPlacedId) return;
       const tag = document.activeElement && document.activeElement.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
+        if (selectedPlacedIds.size === 0) return;
+        e.preventDefault();
+        // 여러 개를 같이 복사해두면, 붙여넣을 때 서로의 간격을 그대로 유지할 수 있도록 원래 좌표를
+        // 그대로 담아둔다(붙여넣을 때 한꺼번에 같은 만큼만 이동시킨다).
+        clipboardRef.current = placedItems.filter((it) => selectedPlacedIds.has(it.id)).map((it) => ({ ...it }));
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+        if (clipboardRef.current.length === 0) return;
+        e.preventDefault();
+        const offsetCm = 20; // 원래 자리에 딱 겹치면 뭐가 새로 생겼는지 안 보이니 살짝 오른쪽 아래로 떨어뜨려 놓는다.
+        const newGroupId = clipboardRef.current.length > 1 ? `g${Date.now()}` : null;
+        const newIds = [];
+        const newItems = clipboardRef.current.map((src) => {
+          const rotation = src.rotation != null ? src.rotation : src.rotated ? 90 : 0;
+          const swapped = rotation === 90 || rotation === 270;
+          const wCm = swapped ? src.depthCm : src.widthCm;
+          const hCm = swapped ? src.widthCm : src.depthCm;
+          const maxX = Math.max(0, spaceWidthM * 100 - wCm);
+          const maxY = Math.max(0, spaceDepthM * 100 - hCm);
+          const id = nextPlacedId();
+          newIds.push(id);
+          return {
+            ...src,
+            id,
+            groupId: newGroupId,
+            xCm: Math.min(Math.max(0, src.xCm + offsetCm), maxX),
+            yCm: Math.min(Math.max(0, src.yCm + offsetCm), maxY),
+          };
+        });
+        setPlacedItems((prev) => [...prev, ...newItems]);
+        setSelectedPlacedIds(new Set(newIds));
+        return;
+      }
+
+      if (selectedPlacedIds.size === 0) return;
       if (e.key === "Escape") {
-        setSelectedPlacedId(null);
+        setSelectedPlacedIds(new Set());
         return;
       }
       if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
-      const it = placedItems.find((p) => p.id === selectedPlacedId);
-      if (!it) return;
       e.preventDefault();
       const step = e.shiftKey ? 20 : 5;
-      const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
-      const swapped = rotation === 90 || rotation === 270;
-      const wCm = swapped ? it.depthCm : it.widthCm;
-      const hCm = swapped ? it.widthCm : it.depthCm;
       let dx = 0;
       let dy = 0;
       if (e.key === "ArrowUp") dy = -step;
       else if (e.key === "ArrowDown") dy = step;
       else if (e.key === "ArrowLeft") dx = -step;
       else if (e.key === "ArrowRight") dx = step;
-      const placed = moveWithClamp(it.xCm + dx, it.yCm + dy, wCm, hCm, it.id);
-      setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, xCm: placed.xCm, yCm: placed.yCm } : p)));
+
+      if (selectedPlacedIds.size === 1) {
+        const it = placedItems.find((p) => selectedPlacedIds.has(p.id));
+        if (!it) return;
+        if (!it.groupId) {
+          const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
+          const swapped = rotation === 90 || rotation === 270;
+          const wCm = swapped ? it.depthCm : it.widthCm;
+          const hCm = swapped ? it.widthCm : it.depthCm;
+          const placed = moveWithClamp(it.xCm + dx, it.yCm + dy, wCm, hCm, it.id);
+          setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, xCm: placed.xCm, yCm: placed.yCm } : p)));
+          return;
+        }
+      }
+      const anyItem = placedItems.find((p) => selectedPlacedIds.has(p.id));
+      if (!anyItem) return;
+      const memberIds = getMoveGroupIds(anyItem);
+      const { dx: cdx, dy: cdy } = clampGroupDelta(memberIds, dx, dy);
+      setPlacedItems((prev) => prev.map((p) => (memberIds.includes(p.id) ? { ...p, xCm: p.xCm + cdx, yCm: p.yCm + cdy } : p)));
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedPlacedId, placedItems, spaceWidthM, spaceDepthM]);
+  }, [selectedPlacedIds, placedItems, spaceWidthM, spaceDepthM]);
 
   function handleClearBoard() {
     if (placedItems.length > 0 && !confirm("현재 배치를 전부 지우고 새로 시작할까요? (저장하지 않은 배치는 사라져요)")) return;
@@ -11667,7 +11827,7 @@ function LayoutSimTab({ managerName = "" }) {
     setCurrentBoardId(null);
     setBoardName("");
     setRulerPoints([]);
-    setSelectedPlacedId(null);
+    setSelectedPlacedIds(new Set());
   }
 
   // 줄자로 찍을 수 있는 "끝점" 후보: 놓인 모형들의 네 모서리(회전된 상태면 화면에 보이는 대로).
@@ -11704,22 +11864,103 @@ function LayoutSimTab({ managerName = "" }) {
     return best;
   }
 
-  // 줄자: 캔버스를 누를 때마다 점을 하나씩 찍고, 두 점이 모이면 그 사이 실제 거리를 계산해 보여준다.
-  // 세 번째 클릭부터는 이전 측정을 지우고 새로 잰다.
-  function handleCanvasClick(e) {
-    // 빈 캔버스(모형이 없는 곳)를 누르면 선택을 해제한다. 모형 자체를 눌렀을 때는 그 모형의 onClick이
-    // stopPropagation을 해서 여기까지 올라오지 않으므로, 선택이 계속 유지된다.
-    setSelectedPlacedId(null);
-    if (!rulerMode) return;
-    const rect = canvasRef.current.getBoundingClientRect();
-    const rawXCm = (e.clientX - rect.left) / scale;
-    const rawYCm = (e.clientY - rect.top) / scale;
-    const snapped = nearestSnapPoint(rawXCm, rawYCm);
-    const xCm = snapped ? snapped.xCm : rawXCm;
-    const yCm = snapped ? snapped.yCm : rawYCm;
-    setRulerPoints((prev) => (prev.length >= 2 ? [{ xCm, yCm }] : [...prev, { xCm, yCm }]));
+  // 회전된 상태(swapped)까지 반영해서, 화면에 실제로 보이는 모형의 사각 범위(cm)를 구한다 — 마퀴
+  // 선택에서 "이 범위 안에 걸리는 모형"을 판단할 때 쓴다.
+  function itemOnScreenBox(it) {
+    const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
+    const swapped = rotation === 90 || rotation === 270;
+    const wCm = swapped ? it.depthCm : it.widthCm;
+    const hCm = swapped ? it.widthCm : it.depthCm;
+    return { left: it.xCm, top: it.yCm, right: it.xCm + wCm, bottom: it.yCm + hCm };
   }
 
+  // 캔버스의 빈 자리(모형이 없는 곳)를 마우스로 누르는 동작 하나로 세 가지 경우를 모두 처리한다:
+  //  1) 거의 안 움직이고 손을 뗐으면("그냥 클릭") — 줄자 모드면 그 자리에 점을 찍고(예전 handleCanvasClick과
+  //     같은 동작), 아니면 선택만 해제한다.
+  //  2) 어느 정도 끌고 손을 뗐으면(마퀴/드래그 선택) — 그 사각 범위에 걸리는 모형을 한꺼번에 선택한다.
+  //     Shift를 누른 채로 하면 지금 선택돼 있던 것에 더한다.
+  // 모형이나 그 위의 버튼을 눌렀을 때는 그 모형의 onClick이 stopPropagation을 하므로 여기 로직과는
+  // 상관없이 그쪽 클릭 처리(선택/그룹 선택)가 그대로 동작한다 — 여기서는 실제로 캔버스 배경 자체를
+  // 누른 경우(e.target === canvasRef.current)만 걸러서 처리한다.
+  function handleCanvasMouseDown(e) {
+    if (e.target !== canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    marqueeDragRef.current = {
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startXCm: (e.clientX - rect.left) / scale,
+      startYCm: (e.clientY - rect.top) / scale,
+      moved: false,
+      shiftKey: e.shiftKey,
+    };
+  }
+
+  useEffect(() => {
+    function onMarqueeMove(e) {
+      const drag = marqueeDragRef.current;
+      if (!drag || !canvasRef.current) return;
+      const distPx = Math.hypot(e.clientX - drag.startClientX, e.clientY - drag.startClientY);
+      if (distPx > 3) drag.moved = true;
+      if (!drag.moved) return;
+      const rect = canvasRef.current.getBoundingClientRect();
+      const curXCm = (e.clientX - rect.left) / scale;
+      const curYCm = (e.clientY - rect.top) / scale;
+      const next = {
+        xCm: Math.min(drag.startXCm, curXCm),
+        yCm: Math.min(drag.startYCm, curYCm),
+        wCm: Math.abs(curXCm - drag.startXCm),
+        hCm: Math.abs(curYCm - drag.startYCm),
+      };
+      marqueeRectRef.current = next;
+      setMarqueeRect(next);
+    }
+    function onMarqueeUp() {
+      const drag = marqueeDragRef.current;
+      if (!drag) return;
+      marqueeDragRef.current = null;
+      const finalRect = marqueeRectRef.current;
+      marqueeRectRef.current = null;
+      setMarqueeRect(null);
+
+      if (!drag.moved || !finalRect) {
+        // "그냥 클릭"으로 본다: 줄자 모드면 그 자리에 점을 찍고, 아니면(Shift를 누르지 않은 한) 선택을 해제한다.
+        if (rulerMode) {
+          const snapped = nearestSnapPoint(drag.startXCm, drag.startYCm);
+          const xCm = snapped ? snapped.xCm : drag.startXCm;
+          const yCm = snapped ? snapped.yCm : drag.startYCm;
+          setRulerPoints((prev) => (prev.length >= 2 ? [{ xCm, yCm }] : [...prev, { xCm, yCm }]));
+        } else if (!drag.shiftKey) {
+          setSelectedPlacedIds(new Set());
+        }
+        return;
+      }
+
+      const hitIds = new Set();
+      for (const it of placedItems) {
+        const box = itemOnScreenBox(it);
+        const overlaps = box.left < finalRect.xCm + finalRect.wCm && box.right > finalRect.xCm && box.top < finalRect.yCm + finalRect.hCm && box.bottom > finalRect.yCm;
+        if (!overlaps) continue;
+        if (it.groupId) {
+          placedItems.forEach((p) => {
+            if (p.groupId === it.groupId) hitIds.add(p.id);
+          });
+        } else {
+          hitIds.add(it.id);
+        }
+      }
+      setSelectedPlacedIds((prev) => (drag.shiftKey ? new Set([...prev, ...hitIds]) : hitIds));
+    }
+    window.addEventListener("mousemove", onMarqueeMove);
+    window.addEventListener("mouseup", onMarqueeUp);
+    return () => {
+      window.removeEventListener("mousemove", onMarqueeMove);
+      window.removeEventListener("mouseup", onMarqueeUp);
+    };
+  }, [scale, rulerMode, placedItems]);
+
+  // 줄자: 캔버스를 누를 때마다(정확히는, 거의 안 끈 채로 손을 뗄 때마다) 점을 하나씩 찍고, 두 점이
+  // 모이면 그 사이 실제 거리를 계산해 보여준다. 세 번째부터는 이전 측정을 지우고 새로 잰다(위
+  // handleCanvasMouseDown/onMarqueeUp에서 처리).
   function handleClearRuler() {
     setRulerPoints([]);
   }
@@ -11800,6 +12041,15 @@ function LayoutSimTab({ managerName = "" }) {
           #layoutsim-print-area { position: absolute; top: 0; left: 0; width: 100%; padding: 12px; }
           .layoutsim-no-print { display: none !important; }
           .layoutsim-print-only { display: block !important; }
+        }
+        /* 배치판 위 모형을 마우스로 가리키면 살짝 떠 보이도록(elevation) 그림자를 키워서, 지금 어떤
+           모형 위에 있는지 더 또렷하게 느껴지게 한다. 이미 선택된 모형은 선택 강조(보라색 테두리+글로우)가
+           우선이라 이 hover 그림자를 덮어 그대로 유지한다. */
+        .layoutsim-placed-item:hover {
+          box-shadow: 0 3px 8px rgba(28, 43, 58, 0.22) !important;
+        }
+        .layoutsim-placed-item.layoutsim-placed-item--selected:hover {
+          box-shadow: 0 0 0 5px rgba(107, 92, 165, 0.16), 0 3px 8px rgba(28, 43, 58, 0.26) !important;
         }
       `}</style>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>배치 시뮬레이션</div>
@@ -12064,7 +12314,7 @@ function LayoutSimTab({ managerName = "" }) {
               유지하게 해서 이 줄 자체가 두 줄로 접히는 일이 없도록 한다. */}
           <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
             <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0 }}>
-              공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 한 번 클릭하면 선택되고(테두리 강조), 방향키로 세밀하게 옮길 수 있어요(Shift+방향키는 더 크게).
+              공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요. 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요.
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
               <button
@@ -12085,21 +12335,59 @@ function LayoutSimTab({ managerName = "" }) {
               )}
             </div>
           </div>
+          {/* 하나 이상 선택돼 있을 때만 나타나는 작은 도구모음 — 여러 개를 묶어서 그룹으로 만들거나
+              풀고, 한꺼번에 지우거나 선택을 해제할 수 있다. */}
+          {selectedPlacedIds.size > 0 && (
+            <div
+              className="layoutsim-no-print"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                marginBottom: 6,
+                padding: "6px 10px",
+                background: C.purpleBg,
+                border: `1px solid ${C.purple}`,
+                borderRadius: 8,
+                flexWrap: "wrap",
+              }}
+            >
+              <span style={{ fontSize: 12, color: C.purple, fontWeight: 600 }}>
+                {selectedPlacedIds.size}개 선택됨
+              </span>
+              {selectedPlacedIds.size >= 2 && (
+                <button onClick={handleGroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🔗 그룹화</button>
+              )}
+              {placedItems.some((it) => selectedPlacedIds.has(it.id) && it.groupId) && (
+                <button onClick={handleUngroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>⛓️‍💥 그룹 해제</button>
+              )}
+              <button onClick={handleRemoveSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🗑 삭제</button>
+              <button onClick={() => setSelectedPlacedIds(new Set())} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>선택 해제</button>
+            </div>
+          )}
           <div
             ref={canvasRef}
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleCanvasDrop}
-            onClick={handleCanvasClick}
+            onMouseDown={handleCanvasMouseDown}
             style={{
               position: "relative",
               width: canvasWidthPx,
               height: canvasHeightPx,
               border: `2px solid ${C.ink}`,
+              borderRadius: 10,
+              // 방향키·드래그·크기조절마다 벽 밖으로 못 나가게 좌표를 계산해서 막아두긴 했지만(아래
+              // moveWithClamp 등), 방보다 원래 더 큰 모형을 놓거나 소수점 계산이 딱 안 맞아떨어지는
+              // 아주 드문 경우까지 전부 놓치지 않도록, 배치판 자체에도 "밖으로는 절대 안 보이게"
+              // 가위로 자르는 안전장치(overflow:hidden)를 하나 더 깔아둔다. 이게 있으면 좌표 계산이
+              // 어떻게 되든 모형이 배치판 테두리 밖으로 삐져나와 "보이는" 일 자체가 생기지 않는다.
+              overflow: "hidden",
               backgroundColor: C.panel,
               backgroundImage:
                 `repeating-linear-gradient(0deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${scale * 100}px), ` +
                 `repeating-linear-gradient(90deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${scale * 100}px)`,
               cursor: rulerMode ? "crosshair" : "default",
+              boxShadow: "inset 0 1px 4px rgba(28,43,58,0.06)",
             }}
           >
             {placedItems.map((it) => {
@@ -12120,17 +12408,30 @@ function LayoutSimTab({ managerName = "" }) {
                     .map((p) => p.join(","))
                     .join(" ")
                 : null;
-              const isSelected = it.id === selectedPlacedId;
+              const isSelected = selectedPlacedIds.has(it.id);
+              const isGrouped = !!it.groupId;
               return (
                 <div
                   key={it.id}
+                  className={`layoutsim-placed-item${isSelected ? " layoutsim-placed-item--selected" : ""}`}
                   draggable
                   onDragStart={(e) => handleDragStartPlaced(e, it)}
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedPlacedId(it.id);
+                    // 그룹으로 묶인 모형이면 하나만 눌러도 그룹 전체가 같이 선택된다. Shift를 누른 채
+                    // 클릭하면 지금 선택 상태에 더하거나(없던 것) 빼는(있던 것) "토글"로 동작한다.
+                    const groupIds = it.groupId ? placedItems.filter((p) => p.groupId === it.groupId).map((p) => p.id) : [it.id];
+                    setSelectedPlacedIds((prev) => {
+                      if (e.shiftKey) {
+                        const next = new Set(prev);
+                        const allIn = groupIds.every((id) => next.has(id));
+                        groupIds.forEach((id) => (allIn ? next.delete(id) : next.add(id)));
+                        return next;
+                      }
+                      return new Set(groupIds);
+                    });
                   }}
-                  title={`${it.name} (${it.widthCm}×${it.depthCm}cm) — 눌러서 선택 후 방향키로 이동(Shift+방향키는 크게), 끌어서 옮기거나 모서리를 끌어 크기 조절, 버튼으로 회전·삭제`}
+                  title={`${it.name} (${it.widthCm}×${it.depthCm}cm)${isGrouped ? " · 그룹" : ""} — 눌러서 선택(Shift+클릭으로 여러 개, 빈 곳을 끌면 마퀴 선택) 후 방향키로 이동(Shift+방향키는 크게), 끌어서 옮기거나 모서리를 끌어 크기 조절, 버튼으로 회전·삭제, Ctrl+C/Ctrl+V로 복사`}
                   style={{
                     position: "absolute",
                     left: it.xCm * scale,
@@ -12139,9 +12440,11 @@ function LayoutSimTab({ managerName = "" }) {
                     height: outerHPx,
                     cursor: "grab",
                     userSelect: "none",
-                    outline: isSelected ? `2px solid ${C.purple}` : "none",
-                    outlineOffset: 1,
-                    boxShadow: isSelected ? "0 0 0 4px rgba(124, 58, 237, 0.15)" : "none",
+                    borderRadius: 3,
+                    transition: "box-shadow 120ms ease, outline-color 120ms ease",
+                    outline: isSelected ? `2px solid ${C.purple}` : isGrouped ? `1.5px dashed ${C.purple}` : "none",
+                    outlineOffset: isSelected ? 1 : 2,
+                    boxShadow: isSelected ? "0 0 0 5px rgba(107, 92, 165, 0.16), 0 2px 6px rgba(28,43,58,0.18)" : "0 1px 3px rgba(28,43,58,0.12)",
                     zIndex: isSelected ? 1 : 0,
                   }}
                 >
@@ -12264,6 +12567,23 @@ function LayoutSimTab({ managerName = "" }) {
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 12.5, pointerEvents: "none" }}>
                 왼쪽 모형 목록에서 끌어다 놓아보세요
               </div>
+            )}
+            {/* 빈 곳을 끌어서 여러 모형을 한꺼번에 고르는 중(마퀴/드래그 선택)일 때, 지금 끌고 있는
+                사각 범위를 옅은 보라색으로 보여준다. 클릭·드래그를 막지 않도록 pointerEvents는 항상 none. */}
+            {marqueeRect && (
+              <div
+                className="layoutsim-no-print"
+                style={{
+                  position: "absolute",
+                  left: marqueeRect.xCm * scale,
+                  top: marqueeRect.yCm * scale,
+                  width: marqueeRect.wCm * scale,
+                  height: marqueeRect.hCm * scale,
+                  background: "rgba(107, 92, 165, 0.12)",
+                  border: `1px dashed ${C.purple}`,
+                  pointerEvents: "none",
+                }}
+              />
             )}
             {/* 줄자 모드일 때는 모형 끝점(모서리)마다 옅은 점을 미리 보여줘서, 어디를 누르면
                 딱 붙는지("끝점 인식") 미리 알 수 있게 한다. */}
