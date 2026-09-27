@@ -11616,11 +11616,11 @@ function LayoutSimTab({ managerName = "" }) {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      // 축척 맞추기 화면에 너무 크게 뜨지 않도록, 미리보기는 최대 640×440px 안에 들어오게 줄여서
-      // 보여준다(원본 사진 파일 자체는 그대로 두고 화면 표시 비율만 줄이는 것).
-      const CALIB_MAX_W = 640;
-      const CALIB_MAX_H = 440;
-      const previewScale = Math.min(CALIB_MAX_W / img.naturalWidth, CALIB_MAX_H / img.naturalHeight, 1);
+      // "도면 업로드 화면도 크게" 요청: 미리보기의 "기본(확대 전) 크기"는 창 크기에 맞춰 정한
+      // 미리보기 창(CALIB_VIEWPORT_W×H) 안에 들어오게 줄인다(원본 사진 파일 자체는 그대로 두고
+      // 화면 표시 비율만 줄이는 것 — 이 비율(previewScale)은 이후 실제 거리 계산에도 그대로 쓰인다).
+      // 더 세밀하게 보고 싶으면 모달 안에서 마우스 휠로 추가 확대할 수 있다.
+      const previewScale = Math.min(CALIB_VIEWPORT_W / img.naturalWidth, CALIB_VIEWPORT_H / img.naturalHeight, 1);
       setCalibrating({
         file,
         url,
@@ -11632,6 +11632,8 @@ function LayoutSimTab({ managerName = "" }) {
         points: [],
       });
       setCalibDistanceInput("");
+      setCalibZoom(1);
+      setCalibPan({ x: 0, y: 0 });
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
@@ -11710,9 +11712,28 @@ function LayoutSimTab({ managerName = "" }) {
     setBgImagePath(null);
   }
 
-  // 실제 공간(cm)을 화면에 몇 px로 그릴지 축척을 정한다 — 가로·세로 둘 다 정해둔 최대 크기 안에 들어오도록.
-  const MAX_CANVAS_W = 760;
-  const MAX_CANVAS_H = 520;
+  // "전체판 자체가 너무 협소해 크게 키워줘 화면에 꽉차게" 요청: 배치판을 늘 고정된 크기(760×520px)로만
+  // 보여주지 않고, 지금 보고 있는 브라우저 창 크기에 맞춰 화면을 최대한 꽉 채우도록 한다. 서버에서
+  // 미리 그려질 때는 창 크기를 알 수 없어서(typeof window === "undefined") 일단 적당한 기본값으로
+  // 그려두고, 화면에 실제로 뜬 뒤(useEffect, 클라이언트에서만 실행됨) 진짜 창 크기로 바로 다시
+  // 계산한다 — 이렇게 해야 서버가 미리 그린 화면과 처음 뜨는 화면이 같아서 화면이 깜빡이며 어긋나는
+  // 일이 없다. 창 크기를 바꾸면(resize) 그때그때 다시 계산해서 항상 화면에 꽉 차게 보여준다.
+  const [viewportSize, setViewportSize] = useState({ w: 1400, h: 900 });
+  useEffect(() => {
+    function updateViewportSize() {
+      setViewportSize({ w: window.innerWidth, h: window.innerHeight });
+    }
+    updateViewportSize();
+    window.addEventListener("resize", updateViewportSize);
+    return () => window.removeEventListener("resize", updateViewportSize);
+  }, []);
+
+  // 실제 공간(cm)을 화면에 몇 px로 그릴지 축척을 정한다 — 가로·세로 둘 다 이 최대 크기 안에 들어오도록.
+  // 왼쪽 모형 목록 칸(240px)·여백·바깥 페이지 여백 등을 대략 뺀 만큼을 가로 최대 크기로, 위쪽 안내
+  // 문구·입력칸·툴바가 차지하는 자리를 대략 뺀 만큼을 세로 최대 크기로 쓴다(너무 작아지거나 반대로
+  // 화면이 아주 넓을 때 한없이 커지지 않도록 위아래로 적당히 제한을 둔다).
+  const MAX_CANVAS_W = Math.min(1900, Math.max(520, viewportSize.w - 340));
+  const MAX_CANVAS_H = Math.min(1300, Math.max(420, viewportSize.h - 300));
   const scale = Math.min(MAX_CANVAS_W / (spaceWidthM * 100), MAX_CANVAS_H / (spaceDepthM * 100));
   const canvasWidthPx = spaceWidthM * 100 * scale;
   const canvasHeightPx = spaceDepthM * 100 * scale;
@@ -11890,6 +11911,114 @@ function LayoutSimTab({ managerName = "" }) {
     const rect = canvasRef.current.getBoundingClientRect();
     setHoverCm({ xCm: (e.clientX - rect.left) / renderScale, yCm: (e.clientY - rect.top) / renderScale });
   }
+
+  // "도면 업로드 화면도 크게 만들어서 줌인/아웃 기능 넣어줘 세부적으로 거리 체킹 가능하게" 요청:
+  // 축척 맞추기 모달의 도면 미리보기 자리도 배치판처럼 창 크기에 맞춰 크게 잡고(CALIB_VIEWPORT_W/H),
+  // 마우스 휠로 확대해서 두 지점을 더 정확히 찍을 수 있게 한다. 확대·이동 계산 방식은 위 배치판의
+  // zoomLevel/viewPan과 같은 원리이지만, 여기서는 방 벽(overflow:hidden으로 잘려도 문제없는 그냥
+  // 사진)이라 VIEW_BLEED·clampPan 같은 안전장치까지는 필요 없어 좀 더 단순하게 뒀다.
+  const CALIB_ZOOM_MIN = 1;
+  const CALIB_ZOOM_MAX = 12;
+  const CALIB_VIEWPORT_W = Math.min(1400, Math.max(480, viewportSize.w - 160));
+  const CALIB_VIEWPORT_H = Math.min(760, Math.max(360, viewportSize.h - 300));
+  const [calibZoom, setCalibZoom] = useState(1);
+  const [calibPan, setCalibPan] = useState({ x: 0, y: 0 });
+  const [isCalibPanning, setIsCalibPanning] = useState(false);
+  const calibViewportRef = useRef(null);
+  const calibPanDragRef = useRef(null);
+  const suppressCalibClickRef = useRef(false);
+
+  // 확대 배율(zoom)·이동값(pan)에 따라, 도면 사진이 미리보기 창(CALIB_VIEWPORT_W×H) 안에서 얼마나
+  // 떨어진 자리에 놓이는지 계산한다. pan이 (0,0)이면 사진이 창 가운데 오도록 두고, 거기에 pan을 더한다.
+  function computeCalibOffset(zoom, pan) {
+    const w = (calibrating ? calibrating.previewW : 0) * zoom;
+    const h = (calibrating ? calibrating.previewH : 0) * zoom;
+    const baseLeft = (CALIB_VIEWPORT_W - w) / 2;
+    const baseTop = (CALIB_VIEWPORT_H - h) / 2;
+    return { left: baseLeft + pan.x, top: baseTop + pan.y, baseLeft, baseTop, w, h };
+  }
+  // 마우스 휠(또는 확대·축소 버튼)로 배율을 바꿀 때, 기준점(anchorX, anchorY — 미리보기 창 안에서의
+  // px 위치)이 가리키던 사진 위 지점이 배율이 바뀐 뒤에도 화면의 같은 자리에 그대로 있도록 pan을
+  // 다시 계산한다(마우스가 가리키던 지점을 기준으로 확대).
+  function calibZoomTo(nextZoomRaw, anchorX, anchorY) {
+    if (!calibrating) return;
+    const nextZoom = Math.min(CALIB_ZOOM_MAX, Math.max(CALIB_ZOOM_MIN, nextZoomRaw));
+    if (nextZoom === calibZoom) return;
+    const before = computeCalibOffset(calibZoom, calibPan);
+    const pxX = (anchorX - before.left) / calibZoom;
+    const pxY = (anchorY - before.top) / calibZoom;
+    const after = computeCalibOffset(nextZoom, { x: 0, y: 0 });
+    setCalibZoom(nextZoom);
+    setCalibPan({ x: anchorX - pxX * nextZoom - after.baseLeft, y: anchorY - pxY * nextZoom - after.baseTop });
+  }
+  const calibWheelHandlerRef = useRef(() => {});
+  calibWheelHandlerRef.current = function handleCalibWheel(e) {
+    if (!calibrating) return;
+    e.preventDefault();
+    const el = calibViewportRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const factor = Math.exp(-e.deltaY * 0.0015);
+    calibZoomTo(calibZoom * factor, e.clientX - rect.left, e.clientY - rect.top);
+  };
+  // 모달은 파일을 고를 때만 뜨고 평소엔 없어서(calibViewportRef.current가 그때만 생김), 모달이
+  // 열리고 닫힐 때마다(!!calibrating이 바뀔 때마다) 리스너를 다시 달아준다.
+  useEffect(() => {
+    const el = calibViewportRef.current;
+    if (!el) return;
+    function listener(e) {
+      calibWheelHandlerRef.current(e);
+    }
+    el.addEventListener("wheel", listener, { passive: false });
+    return () => el.removeEventListener("wheel", listener);
+  }, [!!calibrating]);
+  function handleCalibZoomButton(factor) {
+    calibZoomTo(calibZoom * factor, CALIB_VIEWPORT_W / 2, CALIB_VIEWPORT_H / 2);
+  }
+  function handleCalibResetView() {
+    setCalibZoom(1);
+    setCalibPan({ x: 0, y: 0 });
+  }
+  // 배치판과 마찬가지로 Shift+끌기로 화면을 이동한다(확대된 상태에서만). 점 찍기(onClick)와 헷갈리지
+  // 않도록 캡처 단계에서 Shift가 눌려있을 때만 가로채고, 실제로 끌어서 옮긴 뒤에는 그 다음 클릭
+  // 한 번을 무시해서 엉뚱한 자리에 점이 찍히지 않게 한다(배치판의 handleViewportMouseDownCapture와 같은 원리).
+  function handleCalibMouseDownCapture(e) {
+    if (!e.shiftKey || e.button !== 0 || calibZoom <= 1) return;
+    e.preventDefault();
+    e.stopPropagation();
+    calibPanDragRef.current = { startClientX: e.clientX, startClientY: e.clientY, startPan: { x: calibPan.x, y: calibPan.y }, moved: false };
+    setIsCalibPanning(true);
+  }
+  function handleCalibClickCapture(e) {
+    if (!suppressCalibClickRef.current) return;
+    suppressCalibClickRef.current = false;
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  useEffect(() => {
+    function onCalibPanMove(e) {
+      const drag = calibPanDragRef.current;
+      if (!drag) return;
+      const dx = e.clientX - drag.startClientX;
+      const dy = e.clientY - drag.startClientY;
+      if (Math.hypot(dx, dy) > 2) drag.moved = true;
+      setCalibPan({ x: drag.startPan.x + dx, y: drag.startPan.y + dy });
+    }
+    function onCalibPanUp() {
+      const drag = calibPanDragRef.current;
+      if (!drag) return;
+      if (drag.moved) suppressCalibClickRef.current = true;
+      calibPanDragRef.current = null;
+      setIsCalibPanning(false);
+    }
+    window.addEventListener("mousemove", onCalibPanMove);
+    window.addEventListener("mouseup", onCalibPanUp);
+    return () => {
+      window.removeEventListener("mousemove", onCalibPanMove);
+      window.removeEventListener("mouseup", onCalibPanUp);
+    };
+  }, []);
+  const calibOffset = calibrating ? computeCalibOffset(calibZoom, calibPan) : null;
 
   // 모형 목록(왼쪽)에서 새로 끌어올 때 — 드래그하는 게 "카탈로그의 어떤 모형"인지만 담아 보낸다.
   function handleDragStartCatalog(e, shape) {
@@ -13545,69 +13674,111 @@ function LayoutSimTab({ managerName = "" }) {
               background: "#fff",
               borderRadius: 8,
               padding: 20,
-              maxWidth: 680,
+              maxWidth: CALIB_VIEWPORT_W + 40,
               width: "100%",
               boxShadow: "0 8px 30px rgba(0,0,0,0.3)",
             }}
           >
             <div style={{ fontFamily: serif, fontSize: 15, marginBottom: 8, color: C.ink }}>도면 축척 맞추기</div>
             <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>
-              {calibrating.points.length === 0 && "도면 위에서 실제 거리를 알고 있는 두 지점을 순서대로 클릭해주세요(예: 문 폭 양쪽 끝, 벽 모서리 사이 등)."}
+              {calibrating.points.length === 0 && "도면 위에서 실제 거리를 알고 있는 두 지점을 순서대로 클릭해주세요(예: 문 폭 양쪽 끝, 벽 모서리 사이 등). 정확히 찍기 어려우면 마우스 휠로 확대해서 세밀하게 찍을 수 있어요."}
               {calibrating.points.length === 1 && "이제 두 번째 지점을 클릭해주세요."}
               {calibrating.points.length === 2 && "두 지점 사이의 실제 거리를 입력하고 '적용'을 눌러주세요."}
             </div>
+            {/* "도면 업로드 화면도 크게 만들어서 줌인/아웃 기능 넣어줘 세부적으로 거리 체킹 가능하게"
+                요청: 배치판과 같은 방식(마우스 휠 확대 + 확대한 상태에서 Shift+끌기로 이동)을 이 미리보기
+                에도 적용했다 — 두 지점을 세밀하게 찍어야 축척이 정확해지므로, 특히 이 화면에서 정밀한
+                확대가 중요하다. */}
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+              <button
+                onClick={() => handleCalibZoomButton(1 / 1.25)}
+                disabled={calibZoom <= CALIB_ZOOM_MIN}
+                title="도면 축소"
+                style={{ ...miniBtnStyle, padding: "4px 9px", opacity: calibZoom <= CALIB_ZOOM_MIN ? 0.4 : 1 }}
+              >
+                −
+              </button>
+              <span style={{ fontSize: 11, color: C.inkSoft, minWidth: 36, textAlign: "center" }}>{Math.round(calibZoom * 100)}%</span>
+              <button
+                onClick={() => handleCalibZoomButton(1.25)}
+                disabled={calibZoom >= CALIB_ZOOM_MAX}
+                title="도면 확대"
+                style={{ ...miniBtnStyle, padding: "4px 9px", opacity: calibZoom >= CALIB_ZOOM_MAX ? 0.4 : 1 }}
+              >
+                ＋
+              </button>
+              {(calibZoom !== 1 || calibPan.x !== 0 || calibPan.y !== 0) && (
+                <button onClick={handleCalibResetView} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>화면 맞춤</button>
+              )}
+              <span style={{ fontSize: 11, color: C.muted }}>마우스 휠로 확대·축소, 확대한 상태에서 Shift+끌면 화면 이동</span>
+            </div>
             <div
+              ref={calibViewportRef}
+              onMouseDownCapture={handleCalibMouseDownCapture}
+              onClickCapture={handleCalibClickCapture}
               style={{
                 position: "relative",
+                width: CALIB_VIEWPORT_W,
+                height: CALIB_VIEWPORT_H,
                 border: `1px solid ${C.lineSoft}`,
-                display: "inline-block",
-                cursor: calibrating.points.length < 2 ? "crosshair" : "default",
-                maxWidth: "100%",
-              }}
-              onClick={(e) => {
-                if (calibrating.points.length >= 2) return;
-                const rect = e.currentTarget.getBoundingClientRect();
-                const xPx = e.clientX - rect.left;
-                const yPx = e.clientY - rect.top;
-                setCalibrating((prev) => ({ ...prev, points: [...prev.points, { xPx, yPx }] }));
+                overflow: "hidden",
+                background: C.bg,
+                cursor: isCalibPanning ? "grabbing" : calibrating.points.length < 2 ? "crosshair" : "default",
               }}
             >
-              <img
-                src={calibrating.url}
-                alt="배경 도면 미리보기"
-                draggable={false}
-                style={{ display: "block", width: calibrating.previewW, height: calibrating.previewH, maxWidth: "100%" }}
-              />
-              {calibrating.points.map((p, i) => (
-                <div
-                  key={i}
-                  style={{
-                    position: "absolute",
-                    left: p.xPx - 5,
-                    top: p.yPx - 5,
-                    width: 10,
-                    height: 10,
-                    borderRadius: "50%",
-                    background: C.purple,
-                    border: "2px solid #fff",
-                    boxShadow: "0 0 0 1px rgba(0,0,0,0.3)",
-                    pointerEvents: "none",
-                  }}
+              <div
+                style={{
+                  position: "absolute",
+                  left: calibOffset.left,
+                  top: calibOffset.top,
+                  width: calibOffset.w,
+                  height: calibOffset.h,
+                }}
+                onClick={(e) => {
+                  if (calibrating.points.length >= 2) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const xPx = (e.clientX - rect.left) / calibZoom;
+                  const yPx = (e.clientY - rect.top) / calibZoom;
+                  setCalibrating((prev) => ({ ...prev, points: [...prev.points, { xPx, yPx }] }));
+                }}
+              >
+                <img
+                  src={calibrating.url}
+                  alt="배경 도면 미리보기"
+                  draggable={false}
+                  style={{ display: "block", width: calibOffset.w, height: calibOffset.h }}
                 />
-              ))}
-              {calibrating.points.length === 2 && (
-                <svg style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
-                  <line
-                    x1={calibrating.points[0].xPx}
-                    y1={calibrating.points[0].yPx}
-                    x2={calibrating.points[1].xPx}
-                    y2={calibrating.points[1].yPx}
-                    stroke={C.purple}
-                    strokeWidth={2}
-                    strokeDasharray="4 3"
+                {calibrating.points.map((p, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      position: "absolute",
+                      left: p.xPx * calibZoom - 5,
+                      top: p.yPx * calibZoom - 5,
+                      width: 10,
+                      height: 10,
+                      borderRadius: "50%",
+                      background: C.purple,
+                      border: "2px solid #fff",
+                      boxShadow: "0 0 0 1px rgba(0,0,0,0.3)",
+                      pointerEvents: "none",
+                    }}
                   />
-                </svg>
-              )}
+                ))}
+                {calibrating.points.length === 2 && (
+                  <svg style={{ position: "absolute", top: 0, left: 0, width: calibOffset.w, height: calibOffset.h, pointerEvents: "none" }}>
+                    <line
+                      x1={calibrating.points[0].xPx * calibZoom}
+                      y1={calibrating.points[0].yPx * calibZoom}
+                      x2={calibrating.points[1].xPx * calibZoom}
+                      y2={calibrating.points[1].yPx * calibZoom}
+                      stroke={C.purple}
+                      strokeWidth={2}
+                      strokeDasharray="4 3"
+                    />
+                  </svg>
+                )}
+              </div>
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12, flexWrap: "wrap" }}>
               {calibrating.points.length === 2 && (
