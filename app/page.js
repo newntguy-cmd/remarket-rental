@@ -11920,6 +11920,12 @@ function LayoutSimTab({ managerName = "" }) {
     function onMarqueeMove(e) {
       const drag = marqueeDragRef.current;
       if (!drag || !canvasRef.current) return;
+      // 줄자 모드에서는 마퀴(드래그 선택) 자체를 아예 하지 않는다 — "줄자 사용이 불편하다, 클릭하면
+      // 전체선택과 맞물린다"는 신고의 원인이, 점을 정확히 찍으려고 클릭하는 순간 손이 살짝 떨려서
+      // 몇 px만 움직여도 그게 "드래그"로 인식되어 마퀴 선택(여러 모형이 한꺼번에 선택됨)으로 바뀌어
+      // 버리는 것이었다. 줄자 모드일 때는 아무리 움직여도 moved를 true로 만들지 않고 마퀴 사각형도
+      // 그리지 않아서, 손을 떼는 순간 항상(예전처럼) "그냥 클릭"으로만 처리되어 그 자리에 점이 찍힌다.
+      if (rulerMode) return;
       const distPx = Math.hypot(e.clientX - drag.startClientX, e.clientY - drag.startClientY);
       if (distPx > 3) drag.moved = true;
       if (!drag.moved) return;
@@ -12143,8 +12149,18 @@ function LayoutSimTab({ managerName = "" }) {
         </div>
       )}
 
+      {/* 모형 목록(왼쪽)과 배치판(오른쪽)을 나란히 두 칸으로 배치한다. "배치판이 오른쪽에 있어야
+          배치가 되는데 아래로 내려가 있다"는 신고를 보고 확인해보니, 오른쪽 칸(#layoutsim-print-area)
+          에 너비를 전혀 지정해두지 않아서 생긴 문제였다 — 그 안의 안내문구(공간 5m × 4m... 로 시작하는
+          긴 문장)가 줄바꿈 없이 한 줄로 다 펼쳐졌을 때의 폭을 기준으로 이 칸의 "선호 폭"이 계산되다보니
+          몇 천 px에 달하는 값이 나왔고, flexWrap:"wrap" 때문에 그 폭을 감당 못 해 왼쪽 모형 목록 칸과
+          같은 줄에 못 들어가고 그 아래 줄로 통째로 밀려났던 것이다(화면이 아무리 넓어도 항상 아래로
+          내려가 보였던 이유). 오른쪽 칸에 flex:"1 1 480px"(남는 공간을 차지하되 필요하면 480px까지는
+          줄어들 수 있음)와 minWidth:0(안내문구의 긴 텍스트 때문에 폭이 무한정 커지지 않게 막음)을 줘서
+          평소엔 모형 목록 옆 오른쪽에 나란히 붙게 하고, 화면이 아주 좁을 때만(모바일 등) 그 아래로
+          자연스럽게 줄바꿈되게 했다. */}
       <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div className="layoutsim-no-print" style={{ width: 240, border: `1px solid ${C.line}`, background: C.panel, padding: 14 }}>
+        <div className="layoutsim-no-print" style={{ width: 240, flexShrink: 0, border: `1px solid ${C.line}`, background: C.panel, padding: 14 }}>
           <div style={{ fontFamily: serif, fontSize: 14, marginBottom: 10 }}>모형 목록</div>
           {loadingShapes ? (
             <div style={{ fontSize: 12.5, color: C.muted }}>불러오는 중…</div>
@@ -12324,7 +12340,7 @@ function LayoutSimTab({ managerName = "" }) {
           </div>
         </div>
 
-        <div id="layoutsim-print-area">
+        <div id="layoutsim-print-area" style={{ flex: "1 1 480px", minWidth: 0 }}>
           {/* 인쇄/PDF로 저장할 때는 화면의 안내문구 대신 이 제목만 보이게 한다(평소엔 숨겨둠). */}
           <div className="layoutsim-print-only" style={{ display: "none", fontFamily: serif, fontSize: 16, marginBottom: 8 }}>
             {boardName || "배치 시뮬레이션"} — 공간 {spaceWidthM}m × {spaceDepthM}m ({todayISO()} 기준)
@@ -12455,10 +12471,29 @@ function LayoutSimTab({ managerName = "" }) {
                 <div
                   key={it.id}
                   className={`layoutsim-placed-item${isSelected ? " layoutsim-placed-item--selected" : ""}`}
-                  draggable
+                  // 줄자 모드에서는 끌기(draggable)를 꺼둔다 — 브라우저 기본 드래그가 살짝이라도
+                  // 시작되면 그 순간 클릭(onClick)이 아예 안 먹히는 경우가 있어서, 정확히 점을 찍으려는
+                  // 클릭이 모형을 옮기는 동작으로 오인되지 않게 막는다.
+                  draggable={!rulerMode}
                   onDragStart={(e) => handleDragStartPlaced(e, it)}
                   onClick={(e) => {
                     e.stopPropagation();
+                    // 줄자 모드일 때는 모형을 클릭해도 선택하지 않고, 그 자리(가장 가까운 모형 끝점에
+                    // 딱 맞춰서)에 줄자 점을 찍는다. 실제로 거리를 재고 싶은 지점은 대부분 모형의
+                    // 모서리라서, 모형 위를 클릭하면 늘 "선택"으로 처리되던 것이 "줄자 사용이 불편하다"
+                    // 신고의 또 다른 원인이었다 — 모형이 아니라 빈 캔버스를 정확히 클릭해야만 줄자가
+                    // 먹혔기 때문이다. 이제는 줄자 모드에서는 모형 위든 빈 곳이든 어디를 클릭해도
+                    // 똑같이 점이 찍힌다.
+                    if (rulerMode) {
+                      const rect = canvasRef.current.getBoundingClientRect();
+                      const xCm = (e.clientX - rect.left) / scale;
+                      const yCm = (e.clientY - rect.top) / scale;
+                      const snapped = nearestSnapPoint(xCm, yCm);
+                      const px = snapped ? snapped.xCm : xCm;
+                      const py = snapped ? snapped.yCm : yCm;
+                      setRulerPoints((prev) => (prev.length >= 2 ? [{ xCm: px, yCm: py }] : [...prev, { xCm: px, yCm: py }]));
+                      return;
+                    }
                     // 그룹으로 묶인 모형이면 하나만 눌러도 그룹 전체가 같이 선택된다. Shift를 누른 채
                     // 클릭하면 지금 선택 상태에 더하거나(없던 것) 빼는(있던 것) "토글"로 동작한다.
                     const groupIds = it.groupId ? placedItems.filter((p) => p.groupId === it.groupId).map((p) => p.id) : [it.id];
@@ -12472,14 +12507,18 @@ function LayoutSimTab({ managerName = "" }) {
                       return new Set(groupIds);
                     });
                   }}
-                  title={`${it.name} (${it.widthCm}×${it.depthCm}cm)${isGrouped ? " · 그룹" : ""} — 눌러서 선택(Shift+클릭으로 여러 개, 빈 곳을 끌면 마퀴 선택) 후 방향키로 이동(Shift+방향키는 크게), 끌어서 옮기거나 모서리를 끌어 크기 조절, 버튼으로 회전·삭제, Ctrl+C/Ctrl+V로 복사`}
+                  title={
+                    rulerMode
+                      ? "줄자 모드 — 클릭하면 이 모형의 가장 가까운 모서리에 점이 찍혀요"
+                      : `${it.name} (${it.widthCm}×${it.depthCm}cm)${isGrouped ? " · 그룹" : ""} — 눌러서 선택(Shift+클릭으로 여러 개, 빈 곳을 끌면 마퀴 선택) 후 방향키로 이동(Shift+방향키는 크게), 끌어서 옮기거나 모서리를 끌어 크기 조절, 버튼으로 회전·삭제, Ctrl+C/Ctrl+V로 복사`
+                  }
                   style={{
                     position: "absolute",
                     left: it.xCm * scale,
                     top: it.yCm * scale,
                     width: outerWPx,
                     height: outerHPx,
-                    cursor: "grab",
+                    cursor: rulerMode ? "crosshair" : "grab",
                     userSelect: "none",
                     borderRadius: 3,
                     transition: "box-shadow 120ms ease, outline-color 120ms ease",
