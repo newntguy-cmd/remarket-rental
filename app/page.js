@@ -11036,8 +11036,13 @@ function ChairTopIcon({ w, d, fill, stroke }) {
 
   return (
     <g fill={fill} stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round">
-      <ellipse cx={bodyX} cy={D / 2} rx={armRx} ry={armRy} />
-      <ellipse cx={W - bodyX} cy={D / 2} rx={armRx} ry={armRy} />
+      {/* 팔걸이는 원래 몸통과 같은 색으로 꽉 채워 그렸는데, 사용자가 "손잡이(팔걸이) 부분이 다 칠해져
+          있는데 이거 빈공간으로 해달라"고 요청 — 실제 사무의자 팔걸이는 안쪽이 뚫린 가느다란 손잡이
+          형태이지, 속이 꽉 찬 덩어리가 아니기 때문이다. fill을 none으로 바꿔서 몸통 밖으로 볼록 튀어난
+          부분(겹치는 도형이 없는 자리)은 테두리선만 있는 빈 손잡이 모양으로 보이게 하고, 몸통과 겹치는
+          안쪽 절반은 여전히 나중에 그려지는 몸통(rect)이 그대로 덮어 가려서 지저분한 선이 남지 않는다. */}
+      <ellipse cx={bodyX} cy={D / 2} rx={armRx} ry={armRy} fill="none" />
+      <ellipse cx={W - bodyX} cy={D / 2} rx={armRx} ry={armRy} fill="none" />
       <rect x={bodyX} y={headY} width={bodyW} height={lobeH} rx={lobeRx} ry={lobeRx} />
       <rect x={bodyX} y={seatY} width={bodyW} height={lobeH} rx={lobeRx} ry={lobeRx} />
       <path
@@ -11049,22 +11054,38 @@ function ChairTopIcon({ w, d, fill, stroke }) {
   );
 }
 
-// 회의실·테이블 앞에 놓는 회의(응접)의자를 위에서 내려다본 모양으로 그린다. 개인 책상 앞 사무의자
-// (ChairTopIcon, 등받이가 두 쪽 타원으로 나뉘고 회전축 표시가 있음)와 다르게, 회의의자는 대개 바퀴 없이
-// 등받이·좌판이 하나로 매끈하게 이어진 단순한 모양이라 도면에서도 둥근 타원 하나만으로 표시하는 게
-// 일반적이다. 가운데 얇은 선 하나로 등받이·좌판이 나뉘는 느낌만 살짝 주고, 이 단순함 자체가 "책상 앞
-// 사무의자"와 "테이블 앞 회의의자"를 한눈에 구분하는 표시가 된다.
+// 회의실·테이블 앞에 놓는 회의(응접)의자를 위에서 내려다본 모양으로 그린다. "그냥 둥글게만 되어있음
+// <-- 첨부한 회의의자 이미지로 수정" 요청을 받고, 사용자가 올려준 참고 아이콘(87×87px 흑백 CAD
+// 기호)을 확대·윤곽선(contour) 분석해서 구조를 다시 확인했다: 둥근 배럴(모서리를 큼직하게 둥글린
+// 사각형에 가까운, 타원보다는 각진) 몸통 안에, 몸통 중심에서 왼쪽으로 살짝 치우친 자리에 세로로 긴
+// 사각형(등받이·좌판의 이음새/쿠션 경계를 나타냄) 하나가 겹쳐 있고, 그 사각형의 위아래 끝이 몸통의
+// 둥근 곡선보다 살짝 더 길게 튀어나와 작은 사각 탭처럼 보인다(참고 이미지에서 위아래로 삐죽 나온
+// 부분). 몸통은 채워 그리고, 이음새 사각형은 안이 빈 채(fill:none)로 그 위에 겹쳐서, 몸통과 겹치는
+// 가운데 부분은 얇은 선(솔기)처럼, 몸통 곡선 밖으로 나가는 위아래 부분만 자연스럽게 작은 빈 탭처럼
+// 보이게 했다(사무의자 팔걸이와 같은 "속이 빈 손잡이" 원리).
 function MeetingChairTopIcon({ w, d, fill, stroke }) {
   const W = Number(w) || 0;
   const D = Number(d) || 0;
   const minWD = Math.min(W, D);
   const strokeW = Math.max(minWD * 0.025, 0.4);
-  const rx = W * 0.46;
-  const ry = D * 0.47;
+
+  // 몸통: 위아래로 살짝 여백을 두고, 좌우로는 폭에 거의 맞춰 그린 큼직하게 둥근 사각형(배럴 모양).
+  const marginY = D * 0.08;
+  const bodyY = marginY;
+  const bodyH = D - marginY * 2;
+  const bodyRx = W * 0.24;
+  const bodyRy = bodyH * 0.32;
+
+  // 등받이·좌판 이음새: 몸통 가운데보다 살짝 왼쪽에 치우친 세로 사각형. 위아래로는 몸통 여백(marginY)
+  // 만큼 몸통 곡선 밖으로 튀어나가도록 0~D 전체 높이로 그린다(캔버스 밖으로는 못 나가므로, 튀어나오는
+  // 정도는 딱 이 여백만큼이 최대치다).
+  const seamX = W * 0.3;
+  const seamW = W * 0.36;
+
   return (
-    <g fill={fill} stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round">
-      <ellipse cx={W / 2} cy={D / 2} rx={rx} ry={ry} />
-      <line x1={W * 0.14} y1={D * 0.42} x2={W * 0.86} y2={D * 0.42} stroke={stroke} strokeWidth={strokeW * 0.7} />
+    <g stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round">
+      <rect x={0} y={bodyY} width={W} height={bodyH} rx={bodyRx} ry={bodyRy} fill={fill} />
+      <rect x={seamX} y={0} width={seamW} height={D} fill="none" />
     </g>
   );
 }
@@ -12217,14 +12238,16 @@ function LayoutSimTab({ managerName = "" }) {
               onChange={(e) => setNewShapeName(e.target.value)}
             />
             <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+              {/* "ㄱ자·U자·한쪽둥근"은 새로 추가하는 화면에서는 더 이상 고를 수 없게 뺐다(요청: "새 모형
+                  추가에서 ㄱ자 U자 한쪽둥근 없애주고"). 예전에 이미 이 모양으로 등록해둔 모형·배치판은
+                  그대로 남아있고 화면에도 그대로 나오므로(isPoly/isRoundEnd 렌더 로직은 그대로 둠),
+                  기존 데이터에는 영향이 없다 — 앞으로 "새로" 만들 때만 이 세 가지를 선택할 수 없다.
+                  "(캐드형)"이라는 표기도 사무의자·회의의자 둘 다 없앴다(요청: "(캐드형)이라는 글자 없애주고"). */}
               {[
                 { key: "rect", label: "사각형" },
-                { key: "l", label: "ㄱ자" },
-                { key: "u", label: "U자" },
                 { key: "circle", label: "원형" },
-                { key: "roundend", label: "한쪽둥근" },
-                { key: "chair", label: "사무의자(캐드형)" },
-                { key: "meetingchair", label: "회의의자(캐드형)" },
+                { key: "chair", label: "사무의자" },
+                { key: "meetingchair", label: "회의의자" },
               ].map((opt) => (
                 <button
                   key={opt.key}
@@ -12335,36 +12358,43 @@ function LayoutSimTab({ managerName = "" }) {
               )}
             </div>
           </div>
-          {/* 하나 이상 선택돼 있을 때만 나타나는 작은 도구모음 — 여러 개를 묶어서 그룹으로 만들거나
-              풀고, 한꺼번에 지우거나 선택을 해제할 수 있다. */}
-          {selectedPlacedIds.size > 0 && (
-            <div
-              className="layoutsim-no-print"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                marginBottom: 6,
-                padding: "6px 10px",
-                background: C.purpleBg,
-                border: `1px solid ${C.purple}`,
-                borderRadius: 8,
-                flexWrap: "wrap",
-              }}
-            >
-              <span style={{ fontSize: 12, color: C.purple, fontWeight: 600 }}>
-                {selectedPlacedIds.size}개 선택됨
-              </span>
-              {selectedPlacedIds.size >= 2 && (
-                <button onClick={handleGroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🔗 그룹화</button>
-              )}
-              {placedItems.some((it) => selectedPlacedIds.has(it.id) && it.groupId) && (
-                <button onClick={handleUngroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>⛓️‍💥 그룹 해제</button>
-              )}
-              <button onClick={handleRemoveSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🗑 삭제</button>
-              <button onClick={() => setSelectedPlacedIds(new Set())} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>선택 해제</button>
-            </div>
-          )}
+          {/* 선택 도구모음 — 여러 개를 묶어서 그룹으로 만들거나 풀고, 한꺼번에 지우거나 선택을 해제할
+              수 있다. "선택된 게 있을 때만" 이 div 자체를 넣었다 뺐다 하면(조건부 마운트), 모형을 하나
+              클릭할 때마다 이 줄이 생겼다 없어졌다 하면서 바로 아래 배치판(캔버스)이 그 줄 높이만큼
+              아래로 밀렸다 올라왔다 하는 문제가 있었다("배치도 자꾸 아래로 내려간다"는 신고의 원인).
+              그래서 이 div는 선택 여부와 상관없이 항상 그 자리에 그려서 높이를 고정해두고, 선택된 게
+              없을 때는 minHeight로 자리만 차지한 채 안 보이게만(visibility:hidden) 해서 배치판 위치가
+              절대 흔들리지 않게 했다(줄자 버튼 줄을 두 줄로 안 접히게 했던 것과 같은 원리). */}
+          <div
+            className="layoutsim-no-print"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              marginBottom: 6,
+              padding: "6px 10px",
+              background: C.purpleBg,
+              border: `1px solid ${C.purple}`,
+              borderRadius: 8,
+              flexWrap: "wrap",
+              minHeight: 34,
+              boxSizing: "border-box",
+              visibility: selectedPlacedIds.size > 0 ? "visible" : "hidden",
+              pointerEvents: selectedPlacedIds.size > 0 ? "auto" : "none",
+            }}
+          >
+            <span style={{ fontSize: 12, color: C.purple, fontWeight: 600 }}>
+              {selectedPlacedIds.size}개 선택됨
+            </span>
+            {selectedPlacedIds.size >= 2 && (
+              <button onClick={handleGroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🔗 그룹화</button>
+            )}
+            {placedItems.some((it) => selectedPlacedIds.has(it.id) && it.groupId) && (
+              <button onClick={handleUngroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>⛓️‍💥 그룹 해제</button>
+            )}
+            <button onClick={handleRemoveSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🗑 삭제</button>
+            <button onClick={() => setSelectedPlacedIds(new Set())} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>선택 해제</button>
+          </div>
           <div
             ref={canvasRef}
             onDragOver={(e) => e.preventDefault()}
@@ -12375,7 +12405,10 @@ function LayoutSimTab({ managerName = "" }) {
               width: canvasWidthPx,
               height: canvasHeightPx,
               border: `2px solid ${C.ink}`,
-              borderRadius: 10,
+              // (디자인 다듬기로 한때 배치판 테두리를 둥글렸었는데, 모형을 벽에 딱 붙여 놓으면 각진
+              // 모형 모서리가 이 둥근 테두리 곡선에 걸려 살짝 잘려 보이는 "디자인을 침범하는" 문제가
+              // 생겼다. 그래서 테두리는 다시 각지게 되돌렸다 — 벽에 붙는 모형은 늘 각진 모양이라, 테두리도
+              // 각져야 서로 부딪히지 않는다.)
               // 방향키·드래그·크기조절마다 벽 밖으로 못 나가게 좌표를 계산해서 막아두긴 했지만(아래
               // moveWithClamp 등), 방보다 원래 더 큰 모형을 놓거나 소수점 계산이 딱 안 맞아떨어지는
               // 아주 드문 경우까지 전부 놓치지 않도록, 배치판 자체에도 "밖으로는 절대 안 보이게"
@@ -12538,7 +12571,12 @@ function LayoutSimTab({ managerName = "" }) {
                   </button>
                   {/* 크기 조절 손잡이: 오른쪽 아래 모서리를 끌면 가로·세로가 바뀐다. 이 손잡이에서 시작한
                       드래그는 항목 전체를 옮기는 draggable 동작이나 줄자 클릭으로 잘못 이어지지 않도록
-                      막아준다(stopPropagation + dragstart 취소). */}
+                      막아준다(stopPropagation + dragstart 취소). 예전에는 bottom/right를 -4로 줘서 이
+                      손잡이가 모형 박스 밖으로 살짝 삐져나오게 그렸는데, 배치판에 overflow:hidden 안전
+                      장치를 추가한 뒤로 모형이 배치판 아래·오른쪽 벽에 딱 붙었을 때 이 손잡이의 튀어나온
+                      부분이 그 안전장치에 잘려서 반쪽만 보이는 등 "디자인을 침범하는" 것처럼 보이는
+                      문제가 있었다. 그래서 손잡이를 모형 박스 안쪽에 완전히 들어오도록(0,0 기준) 옮겨서,
+                      모형이 배치판 어느 벽에 붙어 있어도 손잡이가 잘리는 일이 없게 했다. */}
                   <div
                     onMouseDown={startResizePlaced(it, swapped)}
                     onDragStart={(e) => {
@@ -12550,8 +12588,8 @@ function LayoutSimTab({ managerName = "" }) {
                     className="layoutsim-no-print"
                     style={{
                       position: "absolute",
-                      bottom: -4,
-                      right: -4,
+                      bottom: 0,
+                      right: 0,
                       width: 10,
                       height: 10,
                       borderRadius: 2,
