@@ -1974,9 +1974,10 @@ function Dashboard({ profile, onLogout }) {
   // "배치 시뮬레이션을 견적서 업로드 메뉴 위(전체 2번째)로 옮겨달라"는 요청에 따라, 원래
   // "품목별데이터/톤수/배송비" 다음(견적서 업로드 앞)에 있던 것을 여기(품목별데이터/톤수/배송비 바로
   // 다음, 견적서 업로드 바로 앞)로 옮겼다. 순서만 바뀐 것이고 각 메뉴의 key·화면은 그대로다.
+  // 그 뒤 문구도 "배치 시뮬레이션" → "가구배치(시뮬레이션)"으로 바뀌었다(key는 그대로 layoutSim).
   const menuItems = [
     ...(isStaff ? [{ key: "quickcalc", label: "품목별데이터/톤수/배송비" }] : []),
-    ...(isStaff ? [{ key: "layoutSim", label: "배치 시뮬레이션" }] : []),
+    ...(isStaff ? [{ key: "layoutSim", label: "가구배치(시뮬레이션)" }] : []),
     ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
     ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
     ...(isStaff ? [{ key: "purchases", label: "구매내역" }] : []),
@@ -12245,7 +12246,7 @@ function LayoutSimTab({ managerName = "" }) {
           box-shadow: 0 0 0 5px rgba(107, 92, 165, 0.16), 0 3px 8px rgba(28, 43, 58, 0.26) !important;
         }
       `}</style>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>배치 시뮬레이션</div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>가구배치(시뮬레이션)</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         현장 공간 크기를 입력하고, 왼쪽 모형 목록에서 원하는 걸 끌어다 놓아보세요. 처음 쓰는 모형은 가로·세로 크기(cm)를
         한 번 등록해두면 다음부터 목록에 계속 남아있어요. 배치가 마음에 들면 이름을 붙여 저장해두고 나중에 다시 불러올 수 있어요.
@@ -12509,7 +12510,7 @@ function LayoutSimTab({ managerName = "" }) {
         <div id="layoutsim-print-area" style={{ flex: "1 1 480px", minWidth: 0 }}>
           {/* 인쇄/PDF로 저장할 때는 화면의 안내문구 대신 이 제목만 보이게 한다(평소엔 숨겨둠). */}
           <div className="layoutsim-print-only" style={{ display: "none", fontFamily: serif, fontSize: 16, marginBottom: 8 }}>
-            {boardName || "배치 시뮬레이션"} — 공간 {spaceWidthM}m × {spaceDepthM}m ({todayISO()} 기준)
+            {boardName || "가구배치(시뮬레이션)"} — 공간 {spaceWidthM}m × {spaceDepthM}m ({todayISO()} 기준)
           </div>
           {/* 줄자를 켜면 버튼 글자가 "줄자"→"줄자 (켜짐)"로 길어지고 "줄자 지우기" 버튼까지 새로 생기는데,
               예전에는 이 안내문구 칸과 버튼 칸이 폭을 두고 빠듯하게 나눠 쓰고 있어서, 버튼 쪽이 길어지는
