@@ -12358,43 +12358,15 @@ function LayoutSimTab({ managerName = "" }) {
               )}
             </div>
           </div>
-          {/* 선택 도구모음 — 여러 개를 묶어서 그룹으로 만들거나 풀고, 한꺼번에 지우거나 선택을 해제할
-              수 있다. "선택된 게 있을 때만" 이 div 자체를 넣었다 뺐다 하면(조건부 마운트), 모형을 하나
-              클릭할 때마다 이 줄이 생겼다 없어졌다 하면서 바로 아래 배치판(캔버스)이 그 줄 높이만큼
-              아래로 밀렸다 올라왔다 하는 문제가 있었다("배치도 자꾸 아래로 내려간다"는 신고의 원인).
-              그래서 이 div는 선택 여부와 상관없이 항상 그 자리에 그려서 높이를 고정해두고, 선택된 게
-              없을 때는 minHeight로 자리만 차지한 채 안 보이게만(visibility:hidden) 해서 배치판 위치가
-              절대 흔들리지 않게 했다(줄자 버튼 줄을 두 줄로 안 접히게 했던 것과 같은 원리). */}
-          <div
-            className="layoutsim-no-print"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              marginBottom: 6,
-              padding: "6px 10px",
-              background: C.purpleBg,
-              border: `1px solid ${C.purple}`,
-              borderRadius: 8,
-              flexWrap: "wrap",
-              minHeight: 34,
-              boxSizing: "border-box",
-              visibility: selectedPlacedIds.size > 0 ? "visible" : "hidden",
-              pointerEvents: selectedPlacedIds.size > 0 ? "auto" : "none",
-            }}
-          >
-            <span style={{ fontSize: 12, color: C.purple, fontWeight: 600 }}>
-              {selectedPlacedIds.size}개 선택됨
-            </span>
-            {selectedPlacedIds.size >= 2 && (
-              <button onClick={handleGroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🔗 그룹화</button>
-            )}
-            {placedItems.some((it) => selectedPlacedIds.has(it.id) && it.groupId) && (
-              <button onClick={handleUngroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>⛓️‍💥 그룹 해제</button>
-            )}
-            <button onClick={handleRemoveSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🗑 삭제</button>
-            <button onClick={() => setSelectedPlacedIds(new Set())} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>선택 해제</button>
-          </div>
+          {/* (예전엔 선택 도구모음을 배치판 "위"에 별도 줄로 두고, 선택 여부에 따라 minHeight+
+              visibility로 자리만 차지한 채 숨겼었다. 그런데 그렇게 하면 선택된 게 하나도 없을 때도
+              그 줄의 자리(높이)가 항상 예약돼 있어서, 배치판이 그 예약된 높이만큼 아래로 내려와
+              보이는 문제가 있었다("배치표 내려와 있다"는 신고). 배치판을 정말로 "위에 고정"시키려면
+              그 줄 자체가 배치판 앞에서 layout 공간을 차지하지 않아야 하므로, 도구모음을 배치판보다
+              먼저 그리는 대신 배치판(canvasRef, 이미 position:relative) 안쪽에 절대좌표(position:
+              absolute)로 떠 있는 오버레이로 옮겼다 — 이러면 선택된 게 없을 때는 배치판 바로 위에
+              빈 공간이 전혀 없이 붙고, 선택했을 때만 배치판 왼쪽 위에 살짝 떠서 나타날 뿐 배치판
+              자체의 위치·크기는 절대 흔들리지 않는다. */}
           <div
             ref={canvasRef}
             onDragOver={(e) => e.preventDefault()}
@@ -12423,6 +12395,42 @@ function LayoutSimTab({ managerName = "" }) {
               boxShadow: "inset 0 1px 4px rgba(28,43,58,0.06)",
             }}
           >
+            {/* 선택 도구모음 — 여러 개를 묶어서 그룹으로 만들거나 풀고, 한꺼번에 지우거나 선택을 해제할
+                수 있다. 배치판(canvasRef) 안쪽에 position:absolute로 떠 있는 오버레이라서, 선택된 게
+                있을 때만 조건부로 그려도(마운트/언마운트) 배치판 자체의 크기·위치에는 전혀 영향을
+                주지 않는다(배치판이 항상 같은 자리에 "고정"돼 있음). */}
+            {selectedPlacedIds.size > 0 && (
+              <div
+                className="layoutsim-no-print"
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  left: 8,
+                  zIndex: 40,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "6px 10px",
+                  background: C.purpleBg,
+                  border: `1px solid ${C.purple}`,
+                  borderRadius: 8,
+                  flexWrap: "wrap",
+                  boxShadow: "0 2px 6px rgba(28,43,58,0.18)",
+                }}
+              >
+                <span style={{ fontSize: 12, color: C.purple, fontWeight: 600 }}>
+                  {selectedPlacedIds.size}개 선택됨
+                </span>
+                {selectedPlacedIds.size >= 2 && (
+                  <button onClick={handleGroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🔗 그룹화</button>
+                )}
+                {placedItems.some((it) => selectedPlacedIds.has(it.id) && it.groupId) && (
+                  <button onClick={handleUngroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>⛓️‍💥 그룹 해제</button>
+                )}
+                <button onClick={handleRemoveSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🗑 삭제</button>
+                <button onClick={() => setSelectedPlacedIds(new Set())} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>선택 해제</button>
+              </div>
+            )}
             {placedItems.map((it) => {
               // 예전에 저장된 배치(rotated: true/false만 있던 옛 데이터)도 그대로 이어받는다.
               const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
