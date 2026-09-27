@@ -11315,6 +11315,21 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 올리면 격자가 사진을 가려 지저분해 보일 수 있어서 자동으로 꺼주지만, 언제든 버튼으로 다시 켤 수 있다.
   const [showGrid, setShowGrid] = useState(true);
 
+  // "전체보기 버튼 만들어서 시야확보를 좋게해주고" 요청: 켜면 이 화면(모형 목록+배치판)이 메인
+  // 시스템의 바깥 틀(최대폭 1600px, 왼쪽 전체 메뉴)까지 다 걷어내고 화면 전체를 덮는 오버레이로
+  // 떠서, 그만큼 배치판도 더 크게 그릴 수 있다(아래 MAX_CANVAS_W/H 계산에서 isFullView일 때는
+  // insideAppShell 여부와 상관없이 이 오버레이 자신의 여백만 뺀다). Esc를 누르거나 버튼을 다시
+  // 누르면 원래 화면으로 돌아온다.
+  const [isFullView, setIsFullView] = useState(false);
+  useEffect(() => {
+    if (!isFullView) return;
+    function onKeyDown(e) {
+      if (e.key === "Escape") setIsFullView(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isFullView]);
+
   const canvasRef = useRef(null);
 
   useEffect(() => {
@@ -11745,22 +11760,27 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   const isMobileWidth = viewportSize.w <= 768;
   const SHAPE_SIDEBAR_W = 240; // 이 탭 안의 "모형 목록" 칸
   const INNER_GAP = 16; // 모형 목록 칸과 배치판 사이 간격
-  const availableContentW = insideAppShell
-    ? (() => {
+  // "전체보기" 버튼(isFullView)을 켜면 이 화면 자체가 바깥 틀을 벗어난 전체 화면 오버레이로 뜨므로,
+  // insideAppShell(메인 시스템이냐)과 상관없이 독립 화면과 똑같은 식(오버레이 자신의 여백만 뺌)을 쓴다.
+  const escapesOuterShell = isFullView || !insideAppShell;
+  const availableContentW = escapesOuterShell
+    ? viewportSize.w - 40 // 독립 화면·전체보기는 이런 바깥 틀이 없이 자기 padding(좌우)만 있음
+    : (() => {
         const OUTER_MAX_CONTENT_W = 1600; // 메인 시스템 바깥 틀의 maxWidth
         const OUTER_PADDING_X = isMobileWidth ? 24 : 48; // 바깥 틀 좌우 여백(12px*2 / 24px*2)
         const APP_NAV_W = isMobileWidth ? 0 : 232; // 왼쪽 전체 메뉴(모바일에서는 안 보임)
         const APP_GAP = isMobileWidth ? 0 : 24; // 전체 메뉴와 본문 사이 간격
         return Math.min(viewportSize.w, OUTER_MAX_CONTENT_W) - OUTER_PADDING_X - APP_NAV_W - APP_GAP;
-      })()
-    : viewportSize.w - 40; // 독립 화면은 이런 바깥 틀이 없이 padding:20(좌우)만 있음
+      })();
   // (더 키워달라는 요청 — 화면 캡처에 빨간 테두리로 "이만큼까지는 커져도 된다"고 직접 표시해주심)
   // 위에서 이미 바깥 틀·메뉴·모형 목록 칸까지 다 뺀 "실제로 남는 공간"을 정확히 구했는데, 여기서
   // 또 한 번 1300px로 눌러버리고 있었다 — 그래서 넓은 모니터에서는 실제 남는 자리가 1300px보다
   // 훨씬 넓어도 배치판은 딱 1300px에서 멈추고 그 오른쪽이 빈 채로 남았다. 위에서 구한 실제 남는
   // 공간을 그대로 최대 크기로 쓰도록 이 인위적인 1300 상한을 없앴다(가로세로 모두).
   const MAX_CANVAS_W = Math.max(360, availableContentW - SHAPE_SIDEBAR_W - INNER_GAP);
-  const MAX_CANVAS_H = Math.max(420, viewportSize.h - 300);
+  // 전체보기일 때는 위쪽 안내문구·툴바가 더 작게 잡혀 있어서(아래 오버레이 자체 여백만 있음) 세로도
+  // 조금 더 넉넉하게 쓸 수 있다.
+  const MAX_CANVAS_H = Math.max(420, viewportSize.h - (isFullView ? 220 : 300));
   const scale = Math.min(MAX_CANVAS_W / (spaceWidthM * 100), MAX_CANVAS_H / (spaceDepthM * 100));
   const canvasWidthPx = spaceWidthM * 100 * scale;
   const canvasHeightPx = spaceDepthM * 100 * scale;
@@ -12865,7 +12885,21 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   }
 
   return (
-    <div>
+    <div
+      className="layoutsim-full-view-wrap"
+      style={
+        isFullView
+          ? {
+              position: "fixed",
+              inset: 0,
+              zIndex: 500,
+              background: C.bg,
+              padding: "14px 20px",
+              overflow: "auto",
+            }
+          : undefined
+      }
+    >
       <style>{`
         @media print {
           @page { size: landscape; margin: 10mm; }
@@ -13241,6 +13275,23 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     화면 맞춤
                   </button>
                 )}
+                {/* "전체보기 버튼 만들어서 시야확보를 좋게해주고" 요청: 눌러서 켜면 위쪽 전체 메뉴·페이지
+                    여백까지 걷어낸 전체 화면 오버레이로 배치판을 띄워, 배치판 자체를 더 크게 볼 수 있게
+                    한다(위 MAX_CANVAS_W/H가 isFullView를 반영해 그만큼 더 크게 계산됨). Esc로도 닫힌다. */}
+                <button
+                  onClick={() => setIsFullView((v) => !v)}
+                  title={isFullView ? "전체보기를 끄고 원래 화면으로 돌아가요(Esc)" : "배치판을 화면 전체로 크게 봐요"}
+                  className="layoutsim-no-print"
+                  style={{
+                    ...miniBtnStyle,
+                    whiteSpace: "nowrap",
+                    background: isFullView ? C.ink : "transparent",
+                    color: isFullView ? "#fff" : C.inkSoft,
+                    borderColor: isFullView ? C.ink : C.lineSoft,
+                  }}
+                >
+                  {isFullView ? "⤡ 전체보기 닫기" : "⤢ 전체보기"}
+                </button>
               </div>
             </div>
           </div>
@@ -13421,6 +13472,19 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 : null;
               const isSelected = selectedPlacedIds.has(it.id);
               const isGrouped = !!it.groupId;
+              // (버그 수정) "잘라낸 부분이 바탕화면 색상과 매끄럽게 연결이 안됨 / 잘라낸 듯한 이미지로
+              // 보이지 않게" 신고 — ㄱ자·U자처럼 실제 모양이 네모난 바깥 박스(outerWPx×outerHPx)보다
+              // 작게 파인 모형은, 선택했을 때의 보라색 테두리·글로우가 이 바깥 박스 전체(파인 부분까지)를
+              // 그대로 감싸고 있었다. 그러다 보니 파인 자리는 아무 칠도 안 된 채(배치판 바탕이 그대로
+              // 비쳐 보임) 그 위로만 네모반듯한 보라색 테두리가 지나가서, 마치 이미지를 네모나게 잘라
+              // 붙였다가 그 잘린 자리만 배경과 안 맞아 뜬 것처럼 보였다. 원, 반원 테이블(roundend),
+              // 의자류도 정도만 다를 뿐 같은 문제(둥근 모양 바깥의 네 귀퉁이가 안 칠해짐)를 안고 있다.
+              // 그래서 이런 모양들은 바깥 네모 박스에는 더 이상 테두리·글로우를 주지 않고, 실제 모양을
+              // 그리는 SVG 쪽에(파인 부분·둥근 모서리를 그대로 따라가도록) 선택 표시를 옮겼다.
+              const isNonRectShape = isPoly || isCircle || isRoundEnd || isChair || isMeetingChair;
+              const shapeStrokeWidth = isSelected ? 3 : isGrouped ? 2 : 1;
+              const shapeStrokeDasharray = isGrouped && !isSelected ? "4 3" : undefined;
+              const shapeSvgStyle = { display: "block", ...(isSelected ? { filter: "drop-shadow(0 0 4px rgba(107,92,165,0.6))" } : {}) };
               return (
                 <div
                   key={it.id}
@@ -13480,9 +13544,13 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     userSelect: "none",
                     borderRadius: 3,
                     transition: "box-shadow 120ms ease, outline-color 120ms ease",
-                    outline: isSelected ? `2px solid ${C.purple}` : isGrouped ? `1.5px dashed ${C.purple}` : "none",
+                    outline: isNonRectShape ? "none" : isSelected ? `2px solid ${C.purple}` : isGrouped ? `1.5px dashed ${C.purple}` : "none",
                     outlineOffset: isSelected ? 1 : 2,
-                    boxShadow: isSelected ? "0 0 0 5px rgba(107, 92, 165, 0.16), 0 2px 6px rgba(28,43,58,0.18)" : "0 1px 3px rgba(28,43,58,0.12)",
+                    boxShadow: isNonRectShape
+                      ? "0 1px 3px rgba(28,43,58,0.12)"
+                      : isSelected
+                      ? "0 0 0 5px rgba(107, 92, 165, 0.16), 0 2px 6px rgba(28,43,58,0.18)"
+                      : "0 1px 3px rgba(28,43,58,0.12)",
                     zIndex: isSelected ? 1 : 0,
                   }}
                 >
@@ -13499,23 +13567,46 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     }}
                   >
                     {isPoly ? (
-                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={{ display: "block" }}>
-                        <polygon points={polyPoints} fill={C.purpleBg} stroke={C.purple} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
+                        <polygon
+                          points={polyPoints}
+                          fill={C.purpleBg}
+                          stroke={C.purple}
+                          strokeWidth={shapeStrokeWidth}
+                          strokeDasharray={shapeStrokeDasharray}
+                          vectorEffect="non-scaling-stroke"
+                        />
                       </svg>
                     ) : isCircle ? (
-                      <svg width={baseWPx} height={baseHPx} style={{ display: "block" }}>
-                        <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={C.purpleBg} stroke={C.purple} strokeWidth={1} />
+                      <svg width={baseWPx} height={baseHPx} style={shapeSvgStyle}>
+                        <ellipse
+                          cx="50%"
+                          cy="50%"
+                          rx="50%"
+                          ry="50%"
+                          fill={C.purpleBg}
+                          stroke={C.purple}
+                          strokeWidth={shapeStrokeWidth}
+                          strokeDasharray={shapeStrokeDasharray}
+                        />
                       </svg>
                     ) : isRoundEnd ? (
-                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={{ display: "block" }}>
-                        <path d={roundEndTablePathD(it.widthCm, it.depthCm)} fill={C.purpleBg} stroke={C.purple} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
+                        <path
+                          d={roundEndTablePathD(it.widthCm, it.depthCm)}
+                          fill={C.purpleBg}
+                          stroke={C.purple}
+                          strokeWidth={shapeStrokeWidth}
+                          strokeDasharray={shapeStrokeDasharray}
+                          vectorEffect="non-scaling-stroke"
+                        />
                       </svg>
                     ) : isChair ? (
-                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={{ display: "block" }}>
+                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
                         <ChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
                       </svg>
                     ) : isMeetingChair ? (
-                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={{ display: "block" }}>
+                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
                         <MeetingChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
                       </svg>
                     ) : (
