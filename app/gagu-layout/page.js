@@ -812,8 +812,13 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         return Math.min(viewportSize.w, OUTER_MAX_CONTENT_W) - OUTER_PADDING_X - APP_NAV_W - APP_GAP;
       })()
     : viewportSize.w - 40; // 독립 화면은 이런 바깥 틀이 없이 padding:20(좌우)만 있음
-  const MAX_CANVAS_W = Math.min(1300, Math.max(360, availableContentW - SHAPE_SIDEBAR_W - INNER_GAP));
-  const MAX_CANVAS_H = Math.min(1300, Math.max(420, viewportSize.h - 300));
+  // (더 키워달라는 요청 — 화면 캡처에 빨간 테두리로 "이만큼까지는 커져도 된다"고 직접 표시해주심)
+  // 위에서 이미 바깥 틀·메뉴·모형 목록 칸까지 다 뺀 "실제로 남는 공간"을 정확히 구했는데, 여기서
+  // 또 한 번 1300px로 눌러버리고 있었다 — 그래서 넓은 모니터에서는 실제 남는 자리가 1300px보다
+  // 훨씬 넓어도 배치판은 딱 1300px에서 멈추고 그 오른쪽이 빈 채로 남았다. 위에서 구한 실제 남는
+  // 공간을 그대로 최대 크기로 쓰도록 이 인위적인 1300 상한을 없앴다(가로세로 모두).
+  const MAX_CANVAS_W = Math.max(360, availableContentW - SHAPE_SIDEBAR_W - INNER_GAP);
+  const MAX_CANVAS_H = Math.max(420, viewportSize.h - 300);
   const scale = Math.min(MAX_CANVAS_W / (spaceWidthM * 100), MAX_CANVAS_H / (spaceDepthM * 100));
   const canvasWidthPx = spaceWidthM * 100 * scale;
   const canvasHeightPx = spaceDepthM * 100 * scale;
@@ -881,6 +886,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   function zoomTo(nextZoomRaw, anchorX, anchorY) {
     const nextZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, nextZoomRaw));
     if (nextZoom === zoomLevel) return;
+    // (버그 수정) "줌 아웃하면 원래 상태로 돌아와야 하는데 안 된다" 신고 — 마우스가 가리키던 지점을
+    // 기준으로 계산하는 이 방식은, 확대한 채로 이리저리 옮겨본(pan) 다음 휠로 다시 딱 맞춤 배율까지
+    // 줌아웃해도 그 계산식 자체가 pan을 0으로 되돌려줄 이유가 없어서, 방이 화면에 다 들어오는데도
+    // 살짝 치우친 채로 멈춰 있었다(clampPan도 "방이 화면 밖으로 아예 안 나가게"만 막을 뿐, 방이 이미
+    // 다 들어와 있을 땐 가운데로 되돌리지 않는다). 다 줌아웃해서 딱 맞춤 배율(ZOOM_MIN)로 돌아오면
+    // "화면 맞춤" 버튼(handleResetView)과 똑같이 pan도 무조건 처음 상태(0,0, 방 가운데)로 고정한다 —
+    // 그래야 어디를 기준으로 줌아웃했든 항상 같은 자리로 돌아온다.
+    if (nextZoom <= ZOOM_MIN) {
+      setZoomLevel(nextZoom);
+      setViewPan({ x: 0, y: 0 });
+      return;
+    }
     const before = computeWorldOffset(zoomLevel, viewPan);
     const cmX = (anchorX - before.left) / before.renderScaleAt;
     const cmY = (anchorY - before.top) / before.renderScaleAt;
