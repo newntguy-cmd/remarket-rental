@@ -11885,6 +11885,26 @@ function LayoutSimTab({ managerName = "" }) {
     return best;
   }
 
+  // 줄자 점을 하나 추가한다. "줄자는 처음 찍었던 점에서 동서남북(가로·세로) 직선으로만 움직이게"
+  // 요청대로, 첫 번째 점은 그대로 찍히지만 두 번째 점은 첫 점 기준으로 대각선이 되지 않게 보정한다 —
+  // 첫 점에서 가로로 더 많이 움직였으면 세로 좌표를 첫 점과 똑같이 맞추고(완전히 가로선), 세로로 더
+  // 많이 움직였으면 가로 좌표를 첫 점과 똑같이 맞춘다(완전히 세로선). 이렇게 하면 두 점을 잇는 선이
+  // 항상 반듯한 가로선 또는 세로선이 되어, 방 가로·세로 길이나 벽 사이 거리를 잴 때 손이 살짝
+  // 삐뚤어져도 비스듬한 값이 나오지 않는다. 세 번째 클릭부터는(이미 두 점이 있으면) 이전 측정을
+  // 지우고 그 자리를 새 첫 점으로 삼아 다시 잰다(기존 동작 그대로).
+  function addRulerPoint(xCm, yCm) {
+    setRulerPoints((prev) => {
+      if (prev.length === 1) {
+        const first = prev[0];
+        const dx = Math.abs(xCm - first.xCm);
+        const dy = Math.abs(yCm - first.yCm);
+        const second = dx >= dy ? { xCm, yCm: first.yCm } : { xCm: first.xCm, yCm };
+        return [first, second];
+      }
+      return prev.length >= 2 ? [{ xCm, yCm }] : [...prev, { xCm, yCm }];
+    });
+  }
+
   // 회전된 상태(swapped)까지 반영해서, 화면에 실제로 보이는 모형의 사각 범위(cm)를 구한다 — 마퀴
   // 선택에서 "이 범위 안에 걸리는 모형"을 판단할 때 쓴다.
   function itemOnScreenBox(it) {
@@ -11955,7 +11975,7 @@ function LayoutSimTab({ managerName = "" }) {
           const snapped = nearestSnapPoint(drag.startXCm, drag.startYCm);
           const xCm = snapped ? snapped.xCm : drag.startXCm;
           const yCm = snapped ? snapped.yCm : drag.startYCm;
-          setRulerPoints((prev) => (prev.length >= 2 ? [{ xCm, yCm }] : [...prev, { xCm, yCm }]));
+          addRulerPoint(xCm, yCm);
         } else if (!drag.shiftKey) {
           setSelectedPlacedIds(new Set());
         }
@@ -12491,7 +12511,7 @@ function LayoutSimTab({ managerName = "" }) {
                       const snapped = nearestSnapPoint(xCm, yCm);
                       const px = snapped ? snapped.xCm : xCm;
                       const py = snapped ? snapped.yCm : yCm;
-                      setRulerPoints((prev) => (prev.length >= 2 ? [{ xCm: px, yCm: py }] : [...prev, { xCm: px, yCm: py }]));
+                      addRulerPoint(px, py);
                       return;
                     }
                     // 그룹으로 묶인 모형이면 하나만 눌러도 그룹 전체가 같이 선택된다. Shift를 누른 채
