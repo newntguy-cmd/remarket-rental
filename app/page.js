@@ -11300,6 +11300,21 @@ function LayoutSimTab({ managerName = "" }) {
   const [rulerMode, setRulerMode] = useState(false);
   const [rulerPoints, setRulerPoints] = useState([]); // [{xCm, yCm}] 0~2개
 
+  // "이미지 임포트" 요청: 실제 도면(사진·스캔 등)을 배경으로 깔아두고 그 위에 정확한 축척으로 모형을
+  // 배치할 수 있게 한다. 도면을 올리면 그 안에서 실제 거리를 아는 두 지점을 순서대로 찍고 그 실제
+  // 거리(cm)를 입력하는 "축척 맞추기" 과정을 거치는데, 그 비율로 도면 전체의 실제 가로·세로(cm)를
+  // 계산해서 공간 크기(spaceWidthM/spaceDepthM)에 그대로 맞춰준다 — 그러면 이후 배치판 위에 이미지가
+  // 그 실제 크기로 깔리고, 다른 모형들과 같은 눈금(cm)으로 정확히 겹쳐 보인다.
+  const [bgImageUrl, setBgImageUrl] = useState(null); // 화면에 보여줄 blob: URL
+  const [bgImagePath, setBgImagePath] = useState(null); // Storage(layout-images 버킷)에 저장된 경로 — 배치안을 저장할 때 이 경로를 같이 저장해서, 나중에 다시 불러올 때 재사용한다.
+  // 축척 맞추기 진행 중 상태(모달) — null이면 진행 중이 아님.
+  const [calibrating, setCalibrating] = useState(null); // { file, url, naturalW, naturalH, previewW, previewH, previewScale, points: [{xPx,yPx}] }
+  const [calibDistanceInput, setCalibDistanceInput] = useState("");
+  const [applyingCalibration, setApplyingCalibration] = useState(false);
+  // "바둑판 없애기 넣기" 요청: 배치판의 눈금(격자) 배경을 껐다 켰다 할 수 있게 한다. 도면 사진을
+  // 올리면 격자가 사진을 가려 지저분해 보일 수 있어서 자동으로 꺼주지만, 언제든 버튼으로 다시 켤 수 있다.
+  const [showGrid, setShowGrid] = useState(true);
+
   const canvasRef = useRef(null);
 
   useEffect(() => {
@@ -11581,6 +11596,114 @@ function LayoutSimTab({ managerName = "" }) {
     }
     setSpaceWidthM(w);
     setSpaceDepthM(d);
+  }
+
+  // 도면 이미지 파일을 고르면 곧바로 Storage에 올리지 않는다 — 축척 맞추기를 끝내기 전에 취소할
+  // 수도 있어서, 일단 브라우저 안에서만(blob: URL) 미리 보여주고 실제 업로드는 축척을 확정한
+  // 뒤(handleApplyCalibration)에만 한다.
+  function handleBgImageFileSelected(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      alert("이미지 파일(JPG, PNG 등)만 올릴 수 있어요.");
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      // 축척 맞추기 화면에 너무 크게 뜨지 않도록, 미리보기는 최대 640×440px 안에 들어오게 줄여서
+      // 보여준다(원본 사진 파일 자체는 그대로 두고 화면 표시 비율만 줄이는 것).
+      const CALIB_MAX_W = 640;
+      const CALIB_MAX_H = 440;
+      const previewScale = Math.min(CALIB_MAX_W / img.naturalWidth, CALIB_MAX_H / img.naturalHeight, 1);
+      setCalibrating({
+        file,
+        url,
+        naturalW: img.naturalWidth,
+        naturalH: img.naturalHeight,
+        previewW: img.naturalWidth * previewScale,
+        previewH: img.naturalHeight * previewScale,
+        previewScale,
+        points: [],
+      });
+      setCalibDistanceInput("");
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      alert("이미지를 불러오는 데 실패했어요. 다른 파일로 시도해주세요.");
+    };
+    img.src = url;
+  }
+
+  // 축척 맞추기 모달에서 두 지점을 찍은 뒤 실제 거리(cm)를 입력하고 "적용"을 누르면 여기로 온다.
+  // 화면에 보이는(줄어든) 미리보기 위에서 찍은 두 점 사이 거리를, previewScale로 나눠서 원본 사진의
+  // "진짜" 픽셀 거리로 되돌린 다음, 입력받은 실제 거리(cm)와 비교해 "원본 사진 1px = 몇 cm"인지를
+  // 구한다. 그 값에 원본 사진의 가로·세로 픽셀 수를 곱하면 도면 전체의 실제 가로·세로(cm)가 나오고,
+  // 그걸 그대로 공간 크기(spaceWidthM/spaceDepthM)에 맞춰서 이후 배치판 위에 사진이 실제 크기로
+  // 깔리게 한다.
+  async function handleApplyCalibration() {
+    if (!calibrating || calibrating.points.length !== 2) return;
+    const distCm = Number(calibDistanceInput);
+    if (!distCm || distCm <= 0) {
+      alert("두 지점 사이의 실제 거리(cm)를 입력해주세요.");
+      return;
+    }
+    const [p1, p2] = calibrating.points;
+    const displayedPxDist = Math.hypot(p2.xPx - p1.xPx, p2.yPx - p1.yPx);
+    if (displayedPxDist < 2) {
+      alert("두 지점이 너무 가까워요. 다시 찍어주세요.");
+      return;
+    }
+    const naturalPxDist = displayedPxDist / calibrating.previewScale;
+    const cmPerNaturalPx = distCm / naturalPxDist;
+    const imageRealWidthCm = calibrating.naturalW * cmPerNaturalPx;
+    const imageRealHeightCm = calibrating.naturalH * cmPerNaturalPx;
+    const newWidthM = Math.round((imageRealWidthCm / 100) * 100) / 100;
+    const newDepthM = Math.round((imageRealHeightCm / 100) * 100) / 100;
+    if (!newWidthM || !newDepthM || newWidthM <= 0 || newDepthM <= 0) {
+      alert("계산된 공간 크기가 올바르지 않아요. 두 지점을 다시 찍어주세요.");
+      return;
+    }
+    setApplyingCalibration(true);
+    const safeName = (calibrating.file.name || "layout.jpg").replace(/[^a-zA-Z0-9.\-_]/g, "");
+    const path = `bg-${Date.now()}-${safeName}`;
+    const { error: uploadError } = await supabase.storage.from("layout-images").upload(path, calibrating.file, { upsert: false });
+    setApplyingCalibration(false);
+    if (uploadError) {
+      alert("도면 이미지를 저장하는 중 오류가 발생했어요: " + uploadError.message);
+      return;
+    }
+    // 예전에 다른 배경 도면이 있었다면 Storage에 파일이 계속 쌓이지 않도록 정리한다(실패해도 새
+    // 도면 적용 자체는 그대로 진행).
+    if (bgImagePath) {
+      supabase.storage.from("layout-images").remove([bgImagePath]).catch(() => {});
+    }
+    setSpaceWidthM(newWidthM);
+    setSpaceDepthM(newDepthM);
+    setWidthInput(String(newWidthM));
+    setDepthInput(String(newDepthM));
+    setBgImageUrl(calibrating.url);
+    setBgImagePath(path);
+    setShowGrid(false); // 실제 사진 위에는 격자가 지저분해 보일 수 있어 일단 꺼둔다(버튼으로 언제든 다시 켤 수 있음).
+    setCalibrating(null);
+    setCalibDistanceInput("");
+  }
+
+  function handleCancelCalibration() {
+    if (calibrating) URL.revokeObjectURL(calibrating.url);
+    setCalibrating(null);
+    setCalibDistanceInput("");
+  }
+
+  async function handleRemoveBgImage() {
+    if (!confirm("배경 도면을 지울까요? (방 크기는 지금 그대로 남아있어요)")) return;
+    if (bgImagePath) {
+      supabase.storage.from("layout-images").remove([bgImagePath]).catch(() => {});
+    }
+    if (bgImageUrl) URL.revokeObjectURL(bgImageUrl);
+    setBgImageUrl(null);
+    setBgImagePath(null);
   }
 
   // 실제 공간(cm)을 화면에 몇 px로 그릴지 축척을 정한다 — 가로·세로 둘 다 정해둔 최대 크기 안에 들어오도록.
@@ -12122,6 +12245,10 @@ function LayoutSimTab({ managerName = "" }) {
     setBoardName("");
     setRulerPoints([]);
     setSelectedPlacedIds(new Set());
+    if (bgImageUrl) URL.revokeObjectURL(bgImageUrl);
+    setBgImageUrl(null);
+    setBgImagePath(null);
+    setShowGrid(true);
   }
 
   // 줄자로 찍을 수 있는 "끝점" 후보: 놓인 모형들의 네 모서리(회전된 상태면 화면에 보이는 대로).
@@ -12302,6 +12429,10 @@ function LayoutSimTab({ managerName = "" }) {
       items: placedItems,
       manager: managerName || null,
       updated_at: new Date().toISOString(),
+      // 배경 도면(있으면 Storage 경로)과 격자 표시 여부도 같이 저장해서, 나중에 이 배치안을 다시
+      // 불러오면 도면·격자 설정까지 그대로 복원된다.
+      bg_image_path: bgImagePath,
+      show_grid: showGrid,
     };
     let error;
     if (currentBoardId) {
@@ -12335,6 +12466,24 @@ function LayoutSimTab({ managerName = "" }) {
     setPlacedItems(Array.isArray(data.items) ? data.items : []);
     setCurrentBoardId(data.id);
     setBoardName(data.name);
+    // 이 배치안이 배경 도면을 저장해뒀으면(bg_image_path) Storage에서 다시 받아와 보여준다. 예전에
+    // 화면에 떠 있던 도면(blob: URL)이 있었다면 먼저 정리한다.
+    if (bgImageUrl) URL.revokeObjectURL(bgImageUrl);
+    if (data.bg_image_path) {
+      const { data: fileData, error: dlError } = await supabase.storage.from("layout-images").download(data.bg_image_path);
+      if (!dlError && fileData) {
+        setBgImageUrl(URL.createObjectURL(fileData));
+        setBgImagePath(data.bg_image_path);
+      } else {
+        setBgImageUrl(null);
+        setBgImagePath(null);
+      }
+    } else {
+      setBgImageUrl(null);
+      setBgImagePath(null);
+    }
+    // 컬럼이 아직 없던 예전 배치안(show_grid가 없음, undefined)은 격자를 보여주던 그대로 true로 둔다.
+    setShowGrid(data.show_grid !== false);
   }
 
   async function handleDeleteBoard(id) {
@@ -12665,6 +12814,33 @@ function LayoutSimTab({ managerName = "" }) {
               {rulerPoints.length > 0 && (
                 <button onClick={handleClearRuler} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>줄자 지우기</button>
               )}
+              {/* "이미지 임포트" 요청: 실제 도면(사진·스캔) 파일을 올려서 배경으로 깔아두고, 그 위에
+                  정확한 축척으로 모형을 배치할 수 있다. 파일을 고르면 바로 올라가지 않고 먼저 축척
+                  맞추기 모달(아래)이 뜬다. */}
+              <label
+                title="실제 도면(사진·스캔) 파일을 올려서 배경으로 깔아두고 축척을 맞춰보세요"
+                style={{ ...miniBtnStyle, whiteSpace: "nowrap", cursor: "pointer", display: "inline-block" }}
+              >
+                🖼 도면 업로드
+                <input type="file" accept="image/*" onChange={handleBgImageFileSelected} style={{ display: "none" }} />
+              </label>
+              {bgImageUrl && (
+                <button onClick={handleRemoveBgImage} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>도면 지우기</button>
+              )}
+              {/* "바둑판 없애기 넣기" 요청: 배치판의 눈금(격자) 배경을 껐다 켰다 할 수 있다. */}
+              <button
+                onClick={() => setShowGrid((v) => !v)}
+                title="배치판의 눈금(격자) 배경을 껐다 켰다 해요"
+                style={{
+                  ...miniBtnStyle,
+                  background: showGrid ? C.ink : "transparent",
+                  color: showGrid ? "#fff" : C.inkSoft,
+                  borderColor: showGrid ? C.ink : C.lineSoft,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                # 격자{showGrid ? " (켜짐)" : " (꺼짐)"}
+              </button>
             </div>
           </div>
           {/* (예전엔 선택 도구모음을 배치판 "위"에 별도 줄로 두고, 선택 여부에 따라 minHeight+
@@ -12704,9 +12880,29 @@ function LayoutSimTab({ managerName = "" }) {
               // overflow:hidden은 빼고, 선택 테두리·그림자가 배치판 가장자리에서도 잘리지 않고 온전히
               // 다 보이게 했다.
               backgroundColor: C.panel,
-              backgroundImage:
-                `repeating-linear-gradient(0deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${scale * 100}px), ` +
-                `repeating-linear-gradient(90deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${scale * 100}px)`,
+              // 격자(showGrid)와 배경 도면(bgImageUrl)은 각각 있을 수도 없을 수도 있어서, 배경
+              // 레이어 목록을 그때그때 다르게 구성한다(CSS는 여러 배경을 쉼표로 겹쳐 그릴 수 있고,
+              // 먼저 적은 게 위로 온다 — 그래서 격자를 도면 사진보다 앞에 적어 항상 사진 위에 격자가
+              // 겹쳐 보이게 한다). 도면 사진은 배치판 전체 크기(canvasWidthPx×canvasHeightPx)에 꽉
+              // 차게 늘려서(backgroundSize: 100% 100%) 그리는데, 이게 바로 축척 맞추기에서 방
+              // 크기(spaceWidthM/spaceDepthM)를 도면의 실제 크기와 똑같이 맞춰두는 이유다 — 그래야
+              // 사진과 배치판의 눈금(cm)이 정확히 겹친다.
+              ...(() => {
+                const gridLayers = showGrid
+                  ? [
+                      `repeating-linear-gradient(0deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${scale * 100}px)`,
+                      `repeating-linear-gradient(90deg, ${C.lineSoft} 0, ${C.lineSoft} 1px, transparent 1px, transparent ${scale * 100}px)`,
+                    ]
+                  : [];
+                const imageLayers = bgImageUrl ? [`url(${bgImageUrl})`] : [];
+                const layers = [...gridLayers, ...imageLayers];
+                if (layers.length === 0) return { backgroundImage: "none" };
+                return {
+                  backgroundImage: layers.join(", "),
+                  backgroundSize: [...gridLayers.map(() => "auto"), ...imageLayers.map(() => "100% 100%")].join(", "),
+                  backgroundRepeat: [...gridLayers.map(() => "repeat"), ...imageLayers.map(() => "no-repeat")].join(", "),
+                };
+              })(),
               cursor: rulerMode ? "crosshair" : "default",
               boxShadow: "inset 0 1px 4px rgba(28,43,58,0.06)",
             }}
@@ -13079,6 +13275,119 @@ function LayoutSimTab({ managerName = "" }) {
           </div>
         </div>
       </div>
+
+      {/* 축척 맞추기 모달: 도면 파일을 고르면(calibrating이 채워지면) 화면 전체를 덮는 오버레이로
+          뜬다. position:fixed라서 배치판의 flex 레이아웃과는 완전히 분리돼 있어 서로 영향을 주지
+          않는다. */}
+      {calibrating && (
+        <div
+          className="layoutsim-no-print"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(28,43,58,0.55)",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+        >
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 8,
+              padding: 20,
+              maxWidth: 680,
+              width: "100%",
+              boxShadow: "0 8px 30px rgba(0,0,0,0.3)",
+            }}
+          >
+            <div style={{ fontFamily: serif, fontSize: 15, marginBottom: 8, color: C.ink }}>도면 축척 맞추기</div>
+            <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>
+              {calibrating.points.length === 0 && "도면 위에서 실제 거리를 알고 있는 두 지점을 순서대로 클릭해주세요(예: 문 폭 양쪽 끝, 벽 모서리 사이 등)."}
+              {calibrating.points.length === 1 && "이제 두 번째 지점을 클릭해주세요."}
+              {calibrating.points.length === 2 && "두 지점 사이의 실제 거리를 입력하고 '적용'을 눌러주세요."}
+            </div>
+            <div
+              style={{
+                position: "relative",
+                border: `1px solid ${C.lineSoft}`,
+                display: "inline-block",
+                cursor: calibrating.points.length < 2 ? "crosshair" : "default",
+                maxWidth: "100%",
+              }}
+              onClick={(e) => {
+                if (calibrating.points.length >= 2) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const xPx = e.clientX - rect.left;
+                const yPx = e.clientY - rect.top;
+                setCalibrating((prev) => ({ ...prev, points: [...prev.points, { xPx, yPx }] }));
+              }}
+            >
+              <img
+                src={calibrating.url}
+                alt="배경 도면 미리보기"
+                draggable={false}
+                style={{ display: "block", width: calibrating.previewW, height: calibrating.previewH, maxWidth: "100%" }}
+              />
+              {calibrating.points.map((p, i) => (
+                <div
+                  key={i}
+                  style={{
+                    position: "absolute",
+                    left: p.xPx - 5,
+                    top: p.yPx - 5,
+                    width: 10,
+                    height: 10,
+                    borderRadius: "50%",
+                    background: C.purple,
+                    border: "2px solid #fff",
+                    boxShadow: "0 0 0 1px rgba(0,0,0,0.3)",
+                    pointerEvents: "none",
+                  }}
+                />
+              ))}
+              {calibrating.points.length === 2 && (
+                <svg style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
+                  <line
+                    x1={calibrating.points[0].xPx}
+                    y1={calibrating.points[0].yPx}
+                    x2={calibrating.points[1].xPx}
+                    y2={calibrating.points[1].yPx}
+                    stroke={C.purple}
+                    strokeWidth={2}
+                    strokeDasharray="4 3"
+                  />
+                </svg>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12, flexWrap: "wrap" }}>
+              {calibrating.points.length === 2 && (
+                <>
+                  <input
+                    type="number"
+                    placeholder="두 지점 사이 실제 거리(cm)"
+                    value={calibDistanceInput}
+                    onChange={(e) => setCalibDistanceInput(e.target.value)}
+                    style={{ ...inputStyle, width: 200 }}
+                  />
+                  <button onClick={handleApplyCalibration} disabled={applyingCalibration} style={primaryBtnStyle2}>
+                    {applyingCalibration ? "적용 중…" : "적용"}
+                  </button>
+                  <button onClick={() => setCalibrating((prev) => ({ ...prev, points: [] }))} style={ghostBtnStyle}>
+                    다시 찍기
+                  </button>
+                </>
+              )}
+              <div style={{ flex: 1 }} />
+              <button onClick={handleCancelCalibration} style={ghostBtnStyle}>
+                취소
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
