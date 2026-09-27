@@ -11259,6 +11259,10 @@ function LayoutSimTab({ managerName = "" }) {
   const [shapeViewMode, setShapeViewMode] = useState("category"); // "category" | "search"
   const [shapeSearchQuery, setShapeSearchQuery] = useState("");
   const [expandedCategories, setExpandedCategories] = useState({});
+  // "그냥 소팅되게 해줘 위아래 옮길 수 있게도 해줘" 요청: 모형 목록을 이름 가나다순으로만 보여주는
+  // 대신, 카테고리별로 위/아래 화살표를 눌러 직접 순서를 바꿀 수 있게 한다. 지금 순서를 바꾸는 중인
+  // 모형의 id를 담아뒤서 그 버튼들만 잠깐 비활성화한다(중복 클릭 방지).
+  const [movingShapeId, setMovingShapeId] = useState(null);
 
   const [widthInput, setWidthInput] = useState("5");
   const [depthInput, setDepthInput] = useState("4");
@@ -11305,7 +11309,14 @@ function LayoutSimTab({ managerName = "" }) {
 
   async function fetchShapes() {
     setLoadingShapes(true);
-    const { data, error } = await supabase.from("layout_shapes").select("*").order("name", { ascending: true });
+    // 순서(sort_order)를 직접 정해둔 모형은 그 순서대로, 아직 순서를 안 정해둔(값이 비어있는) 예전
+    // 모형들은 예전처럼 이름 가나다순으로 맨 뒤에 붙는다(nullsFirst: false) — 그래서 기존 목록은
+    // 이 기능을 켠다고 갑자기 순서가 뒤바뀌지 않는다.
+    const { data, error } = await supabase
+      .from("layout_shapes")
+      .select("*")
+      .order("sort_order", { ascending: true, nullsFirst: false })
+      .order("name", { ascending: true });
     if (!error) setShapes(data || []);
     setLoadingShapes(false);
   }
@@ -11343,6 +11354,10 @@ function LayoutSimTab({ managerName = "" }) {
       }
     }
     setSavingShape(true);
+    // 새로 추가하는 모형은 일단 그 카테고리의 맨 아래에 놓이게 한다(필요하면 아래 목록에서 ▲ 버튼으로
+    // 위로 옮기면 됨).
+    const targetCategory = (newShapeCategory || "기타").trim();
+    const newSortOrder = (shapesByCategory[targetCategory] || []).length;
     const { error } = await supabase.from("layout_shapes").insert({
       name: newShapeName.trim(),
       shape_type: newShapeType,
@@ -11350,7 +11365,8 @@ function LayoutSimTab({ managerName = "" }) {
       depth_cm: d,
       notch_width_cm: nw,
       notch_depth_cm: nd,
-      category: (newShapeCategory || "기타").trim(),
+      category: targetCategory,
+      sort_order: newSortOrder,
     });
     setSavingShape(false);
     if (error) {
@@ -11372,6 +11388,34 @@ function LayoutSimTab({ managerName = "" }) {
     const { error } = await supabase.from("layout_shapes").delete().eq("id", id);
     if (error) {
       alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    fetchShapes();
+  }
+
+  // "위아래 옮길 수 있게도 해줘" 요청: 같은 카테고리 안에서만 순서를 바꾼다(다른 카테고리로 옮기는
+  // 기능은 아님). 눌린 모형과 그 위/아래 이웃의 자리를 바꾼 뒤, 그 카테고리 안의 모든 모형에 0부터
+  // 다시 순서 번호(sort_order)를 매겨서 저장한다 — 순서가 없던 예전 데이터가 섞여 있어도 한 번
+  // 옮기고 나면 그 카테고리 전체가 항상 또렷한 순서를 갖게 된다.
+  async function handleMoveShape(shape, direction) {
+    if (movingShapeId) return;
+    const cat = shape.category || "기타";
+    const items = shapesByCategory[cat] || [];
+    const idx = items.findIndex((x) => x.id === shape.id);
+    if (idx === -1) return;
+    const targetIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (targetIdx < 0 || targetIdx >= items.length) return;
+    setMovingShapeId(shape.id);
+    const reordered = items.slice();
+    const [moved] = reordered.splice(idx, 1);
+    reordered.splice(targetIdx, 0, moved);
+    const results = await Promise.all(
+      reordered.map((it, i) => supabase.from("layout_shapes").update({ sort_order: i }).eq("id", it.id))
+    );
+    setMovingShapeId(null);
+    const failed = results.find((r) => r.error);
+    if (failed) {
+      alert("순서 변경 중 오류가 발생했어요: " + failed.error.message);
       return;
     }
     fetchShapes();
@@ -11430,6 +11474,12 @@ function LayoutSimTab({ managerName = "" }) {
       : isCircle && s.width_cm === s.depth_cm
       ? `지름 ${s.width_cm}cm`
       : `${s.width_cm}×${s.depth_cm}cm`;
+    // 같은 카테고리 안에서 몇 번째인지를 알아야 맨 위/맨 아래에서는 ▲/▼ 버튼을 비활성화할 수 있다.
+    const catItems = shapesByCategory[s.category || "기타"] || [s];
+    const posInCat = catItems.findIndex((x) => x.id === s.id);
+    const isFirstInCat = posInCat <= 0;
+    const isLastInCat = posInCat === -1 || posInCat >= catItems.length - 1;
+    const isMoving = movingShapeId === s.id;
     return (
       <div
         key={s.id}
@@ -11476,6 +11526,42 @@ function LayoutSimTab({ managerName = "" }) {
         <span style={{ flex: 1 }}>
           {s.name} <span style={{ color: C.muted, fontSize: 11 }}>({sizeLabel})</span>
         </span>
+        <div style={{ display: "flex", flexDirection: "column", flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => handleMoveShape(s, "up")}
+            disabled={isFirstInCat || isMoving}
+            title="같은 카테고리 안에서 위로 옮기기"
+            style={{
+              border: "none",
+              background: "transparent",
+              color: isFirstInCat ? C.lineSoft : C.muted,
+              cursor: isFirstInCat || isMoving ? "default" : "pointer",
+              fontSize: 9,
+              lineHeight: 1,
+              padding: "1px 2px",
+            }}
+          >
+            ▲
+          </button>
+          <button
+            type="button"
+            onClick={() => handleMoveShape(s, "down")}
+            disabled={isLastInCat || isMoving}
+            title="같은 카테고리 안에서 아래로 옮기기"
+            style={{
+              border: "none",
+              background: "transparent",
+              color: isLastInCat ? C.lineSoft : C.muted,
+              cursor: isLastInCat || isMoving ? "default" : "pointer",
+              fontSize: 9,
+              lineHeight: 1,
+              padding: "1px 2px",
+            }}
+          >
+            ▼
+          </button>
+        </div>
         <button
           onClick={() => handleDeleteShape(s.id)}
           title="모형 삭제"
@@ -11899,6 +11985,47 @@ function LayoutSimTab({ managerName = "" }) {
       e.stopPropagation();
       resizeDragRef.current = { id: it.id, startX: e.clientX, startY: e.clientY, startWidthCm: it.widthCm, startDepthCm: it.depthCm, xCm: it.xCm, yCm: it.yCm, swapped };
     };
+  }
+
+  // "모든 품목 가로/세로 사이즈 넣을 수 있는 칸을 만들어줘(적용버튼)" 요청으로 추가된 기능. 손잡이를
+  // 마우스로 끌어서 크기를 조절하는 것 말고도, 정확한 숫자를 직접 입력해서 한 번에 맞출 수 있게
+  // 한다. 딱 하나만 선택했을 때만 의미가 있으므로(여러 개를 한꺼번에 선택했을 때는 "가로·세로"가
+  // 하나로 정해지지 않는다) selectedSingleItem이 있을 때만 입력칸이 보인다.
+  const selectedSingleItem = selectedPlacedIds.size === 1 ? placedItems.find((it) => selectedPlacedIds.has(it.id)) || null : null;
+  const [manualWidthInput, setManualWidthInput] = useState("");
+  const [manualDepthInput, setManualDepthInput] = useState("");
+  // 선택이 "다른 모형으로" 바뀔 때만 입력칸을 그 모형의 현재 크기로 다시 채운다(id 기준) — 입력하는
+  // 도중에 같은 모형의 다른 값(예: 드래그로 살짝 움직인 좌표) 때문에 타이핑 중인 값이 지워지지 않게.
+  const selectedSingleItemId = selectedSingleItem?.id ?? null;
+  useEffect(() => {
+    if (selectedSingleItem) {
+      setManualWidthInput(String(selectedSingleItem.widthCm));
+      setManualDepthInput(String(selectedSingleItem.depthCm));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSingleItemId]);
+
+  function handleApplyManualSize() {
+    if (!selectedSingleItem) return;
+    const it = selectedSingleItem;
+    const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
+    const swapped = rotation === 90 || rotation === 270;
+    let newWidthCm = Math.max(10, Number(manualWidthInput) || it.widthCm);
+    let newDepthCm = Math.max(10, Number(manualDepthInput) || it.depthCm);
+    // 화면에 보이는(회전 반영) 가로·세로가 배치판 오른쪽·아래쪽 벽을 넘지 않도록 제한한다(손잡이로
+    // 끌어서 크기를 조절할 때와 똑같은 규칙 — 남은 공간이 좁으면 그 실제 값까지만 허용).
+    const maxOnScreenW = Math.max(0, spaceWidthM * 100 - it.xCm);
+    const maxOnScreenH = Math.max(0, spaceDepthM * 100 - it.yCm);
+    if (swapped) {
+      newDepthCm = Math.min(newDepthCm, maxOnScreenW);
+      newWidthCm = Math.min(newWidthCm, maxOnScreenH);
+    } else {
+      newWidthCm = Math.min(newWidthCm, maxOnScreenW);
+      newDepthCm = Math.min(newDepthCm, maxOnScreenH);
+    }
+    setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, widthCm: newWidthCm, depthCm: newDepthCm } : p)));
+    setManualWidthInput(String(newWidthCm));
+    setManualDepthInput(String(newDepthCm));
   }
 
   // 키보드 화살표로 선택한 모형(들)을 옮긴다. 기본 5cm씩, Shift를 누르면 20cm씩 움직이고, 하나만
@@ -12604,6 +12731,36 @@ function LayoutSimTab({ managerName = "" }) {
                 <span style={{ fontSize: 12, color: C.purple, fontWeight: 600 }}>
                   {selectedPlacedIds.size}개 선택됨
                 </span>
+                {/* 하나만 선택했을 때만 가로·세로를 숫자로 직접 입력해서 정확히 맞출 수 있다(여러 개를
+                    한꺼번에 선택했을 때는 "가로·세로"가 하나로 정해지지 않으므로 안 보여준다). */}
+                {selectedSingleItem && (
+                  <>
+                    <input
+                      type="number"
+                      value={manualWidthInput}
+                      onChange={(e) => setManualWidthInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleApplyManualSize();
+                      }}
+                      placeholder="가로(cm)"
+                      title="가로(cm)"
+                      style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
+                    />
+                    <span style={{ fontSize: 12, color: C.muted }}>×</span>
+                    <input
+                      type="number"
+                      value={manualDepthInput}
+                      onChange={(e) => setManualDepthInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleApplyManualSize();
+                      }}
+                      placeholder="세로(cm)"
+                      title="세로(cm)"
+                      style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
+                    />
+                    <button onClick={handleApplyManualSize} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>적용</button>
+                  </>
+                )}
                 {selectedPlacedIds.size >= 2 && (
                   <button onClick={handleGroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🔗 그룹화</button>
                 )}
