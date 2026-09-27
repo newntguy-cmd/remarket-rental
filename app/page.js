@@ -1971,8 +1971,12 @@ function Dashboard({ profile, onLogout }) {
     fetchRentals();
   }
 
+  // "배치 시뮬레이션을 견적서 업로드 메뉴 위(전체 2번째)로 옮겨달라"는 요청에 따라, 원래
+  // "품목별데이터/톤수/배송비" 다음(견적서 업로드 앞)에 있던 것을 여기(품목별데이터/톤수/배송비 바로
+  // 다음, 견적서 업로드 바로 앞)로 옮겼다. 순서만 바뀐 것이고 각 메뉴의 key·화면은 그대로다.
   const menuItems = [
     ...(isStaff ? [{ key: "quickcalc", label: "품목별데이터/톤수/배송비" }] : []),
+    ...(isStaff ? [{ key: "layoutSim", label: "배치 시뮬레이션" }] : []),
     ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
     ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
     ...(isStaff ? [{ key: "purchases", label: "구매내역" }] : []),
@@ -1981,7 +1985,6 @@ function Dashboard({ profile, onLogout }) {
     ...(isStaff ? [{ key: "customerData", label: "업체별데이터" }] : []),
     ...(isStaff ? [{ key: "asboard", label: "A/S관리대장" }] : []),
     ...(isStaff ? [{ key: "collectionboard", label: "렌탈회수관리" }] : []),
-    ...(isStaff ? [{ key: "layoutSim", label: "배치 시뮬레이션" }] : []),
     ...(isStaff ? [{ key: "ledgerAuto", label: "현장별 렌탈잔량(자동등록)", star: true }] : []),
     ...(isStaff ? [{ key: "ledger", label: "현장별 렌탈잔량(심화관리)", star: true, starColor: "#FF1E1E" }] : []),
   ];
@@ -5725,6 +5728,108 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
     onSaved();
   }
 
+  // 첨부파일(엑셀·PDF 등) — "렌탈내역/구매내역 파일첨부 가능하게 해줘" 요청으로 새로 추가된 기능.
+  // 원본 견적서 파일(source_file_path, 견적서 업로드 때 딱 한 번만 저장됨)과는 별개로, 전표 상세
+  // 화면을 열어둔 채로 계약서·인수증·엑셀 명세 등 여러 개의 파일을 나중에도 계속 추가·삭제할 수 있게
+  // 한다. 여러 개를 저장해야 해서 rentals 테이블에 칸을 추가하는 대신 voucher_attachments라는 별도
+  // 표(전표번호별로 여러 줄)를 새로 만들어 쓰고, 실제 파일 자체는 원본 견적서 파일과 같은 Storage
+  // 버킷(quote-files)에 저장한다(새 버킷을 따로 안 만들어도 되게).
+  const [attachments, setAttachments] = useState([]);
+  const [loadingAttachments, setLoadingAttachments] = useState(true);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState(null);
+  const [deletingAttachmentId, setDeletingAttachmentId] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAttachments() {
+      if (!header.voucherNo) {
+        setAttachments([]);
+        setLoadingAttachments(false);
+        return;
+      }
+      setLoadingAttachments(true);
+      const { data, error } = await supabase
+        .from("voucher_attachments")
+        .select("*")
+        .eq("voucher_no", header.voucherNo)
+        .order("uploaded_at", { ascending: false });
+      if (cancelled) return;
+      if (error) console.error("첨부파일 목록 불러오기 실패:", error);
+      setAttachments(data || []);
+      setLoadingAttachments(false);
+    }
+    loadAttachments();
+    return () => {
+      cancelled = true;
+    };
+  }, [header.voucherNo]);
+
+  async function handleUploadAttachment(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // 같은 파일을 다시 골라도 onChange가 또 발생하도록 값을 비워둔다.
+    if (!file) return;
+    if (!header.voucherNo) {
+      alert("전표번호가 없는 전표에는 파일을 첨부할 수 없어요. 전표번호를 먼저 지정한 뒤 저장해주세요.");
+      return;
+    }
+    setUploadingAttachment(true);
+    // Storage 경로에는 한글 등이 들어가면 오류가 나므로(원본 견적서 파일과 같은 이유), 경로는 전표번호·
+    // 시간으로만 안전하게 만들고 실제 파일명은 voucher_attachments.file_name에 그대로 저장해 보여준다.
+    const safeVoucherNo = (header.voucherNo || "").replace(/[^a-zA-Z0-9_-]/g, "") || "voucher";
+    const extMatch = file.name.match(/\.[a-zA-Z0-9]+$/);
+    const ext = extMatch ? extMatch[0] : "";
+    const path = `quotes/${safeVoucherNo}/attach-${Date.now()}${ext}`;
+    const { error: uploadError } = await supabase.storage.from("quote-files").upload(path, file, { upsert: false });
+    if (uploadError) {
+      setUploadingAttachment(false);
+      alert("파일 첨부에 실패했어요: " + uploadError.message);
+      return;
+    }
+    const { data: inserted, error: insertError } = await supabase
+      .from("voucher_attachments")
+      .insert({ voucher_no: header.voucherNo, file_path: path, file_name: file.name })
+      .select()
+      .single();
+    setUploadingAttachment(false);
+    if (insertError) {
+      alert("파일은 저장됐지만 목록에 기록하는 데는 실패했어요: " + insertError.message);
+      return;
+    }
+    setAttachments((prev) => [inserted, ...prev]);
+  }
+
+  async function handleDownloadAttachment(att) {
+    setDownloadingAttachmentId(att.id);
+    const { data, error } = await supabase.storage.from("quote-files").download(att.file_path);
+    setDownloadingAttachmentId(null);
+    if (error || !data) {
+      alert("첨부파일을 불러오지 못했어요: " + (error?.message || "알 수 없는 오류"));
+      return;
+    }
+    const url = URL.createObjectURL(data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = att.file_name || "첨부파일";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleDeleteAttachment(att) {
+    if (!confirm(`"${att.file_name}" 파일을 삭제할까요?`)) return;
+    setDeletingAttachmentId(att.id);
+    await supabase.storage.from("quote-files").remove([att.file_path]);
+    const { error } = await supabase.from("voucher_attachments").delete().eq("id", att.id);
+    setDeletingAttachmentId(null);
+    if (error) {
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setAttachments((prev) => prev.filter((a) => a.id !== att.id));
+  }
+
   const [downloadingSource, setDownloadingSource] = useState(false);
   async function handleDownloadSourceFile() {
     const path = group.head.source_file_path;
@@ -5758,6 +5863,47 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
           )}
           <button onClick={onClose} style={ghostBtnStyle}>← 목록으로</button>
         </div>
+      </div>
+
+      {/* 첨부파일(엑셀·PDF 등) — 견적서 원본 파일과 별개로, 계약서·인수증 등 여러 개를 언제든
+          추가·삭제할 수 있다. 전표번호가 없는 전표(번호없음)는 파일을 어느 전표에 매어둘지 알 수
+          없으므로 첨부 버튼 대신 안내문구만 보여준다. */}
+      <div style={{ border: `1px solid ${C.line}`, background: "#F7F4EC", marginBottom: 16, padding: "12px 18px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: !loadingAttachments && attachments.length > 0 ? 8 : 0 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>📎 첨부파일</span>
+          {header.voucherNo ? (
+            <label style={{ ...ghostBtnStyle, cursor: uploadingAttachment ? "default" : "pointer", opacity: uploadingAttachment ? 0.6 : 1, display: "inline-block" }}>
+              {uploadingAttachment ? "업로드 중…" : "+ 파일 첨부 (엑셀·PDF 등)"}
+              <input
+                type="file"
+                onChange={handleUploadAttachment}
+                disabled={uploadingAttachment}
+                style={{ display: "none" }}
+                accept=".xlsx,.xls,.csv,.pdf,.doc,.docx,.hwp,.hwpx,.jpg,.jpeg,.png,.zip"
+              />
+            </label>
+          ) : (
+            <span style={{ fontSize: 11.5, color: C.muted }}>전표번호가 있어야 파일을 첨부할 수 있어요</span>
+          )}
+        </div>
+        {loadingAttachments ? (
+          <div style={{ fontSize: 12, color: C.muted }}>불러오는 중…</div>
+        ) : attachments.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {attachments.map((att) => (
+              <div key={att.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{att.file_name}</span>
+                <span style={{ color: C.muted, fontSize: 11, flexShrink: 0 }}>{(att.uploaded_at || "").slice(0, 10)}</span>
+                <button onClick={() => handleDownloadAttachment(att)} disabled={downloadingAttachmentId === att.id} style={{ ...ghostBtnStyle, padding: "2px 8px", fontSize: 11.5, flexShrink: 0 }}>
+                  {downloadingAttachmentId === att.id ? "받는 중…" : "다운로드"}
+                </button>
+                <button onClick={() => handleDeleteAttachment(att)} disabled={deletingAttachmentId === att.id} style={{ ...ghostBtnStyle, padding: "2px 8px", fontSize: 11.5, color: C.brick, flexShrink: 0 }}>
+                  {deletingAttachmentId === att.id ? "삭제 중…" : "삭제"}
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div style={{ border: `1px solid ${C.line}`, background: "#F7F4EC", marginBottom: 16 }}>
