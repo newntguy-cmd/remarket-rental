@@ -11748,30 +11748,38 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 메뉴·여백 같은 값을 여기서 하나하나 숫자로 추측해서 "실제로 남는 가로 폭"을 계산했는데, 이 방식은
   // 바깥 틀이 조금만 바뀌어도(모바일 폭 기준, 메뉴 폭 등) 자꾸 어긋나서 벽 밖으로 튀어나가거나 실제
   // 남는 자리보다 좁게/넓게 계산되는 등 여러 번 같은 종류의 버그가 났었다. 이제는 그 숫자들을 더는
-  // 추측하지 않고, 이 화면을 감싸는 바깥 상자(outerWrapRef, 위쪽 "배치판 만들기" 안내문구·툴바 줄과
-  // 정확히 같은 폭을 쓰는 상자)의 실제로 화면에 그려진 폭을 ResizeObserver로 직접 재서 쓴다 — 이러면
-  // 메인 시스템 안이든 독립 설치 화면이든 전체보기 상태든 상관없이 항상 정확하다(추측이 필요 없어짐).
-  const outerWrapRef = useRef(null);
-  const [outerWrapWidthPx, setOuterWrapWidthPx] = useState(1040);
+  // 추측하지 않는다.
+  //
+  // (버그 수정) 맨 처음엔 이 화면 전체를 감싸는 제일 바깥 상자의 폭을 재고 거기서 모형 목록 칸(240)·
+  // 간격(16)을 "빼서" 배치판 폭을 구했는데, 이렇게 하니 실제 화면에서 "떨리는"(화면이 미세하게
+  // 흔들리며 배치판이 자꾸 움직이는) 버그가 났다. 원인은 그 바깥 상자가 모형 목록 칸·배치판을 감싸는
+  // "가장 바깥" 요소라 다른 요소들의 폭 계산에 민감했기 때문으로 보인다. 그래서 재는 대상을 바꿨다 —
+  // 모형 목록 칸(#layoutsim-print-area 바로 옆, flex:"1 1 480px"로 이미 "모형 목록 칸을 뺀 나머지"를
+  // 스스로 계산하는) 오른쪽 칸(canvasColRef, #layoutsim-print-area) 자체의 실제 렌더된 폭을 직접
+  // 잰다 — 이러면 240·16을 빼는 계산이 아예 필요 없어지고(브라우저의 flex 레이아웃이 이미 계산해줌),
+  // 이 칸은 콘텐츠 크기와 무관하게 flex-basis(480px)로 정해지는 값이라 더 안정적이다. 그리고 혹시
+  // 있을 소수점 단위의 미세한 흔들림까지 완전히 차단하기 위해, 값을 정수로 반올림하고 이전 값과 2px
+  // 이상 차이 날 때만 실제로 반영한다(그 이하는 사람 눈에 어차피 안 보이는 차이라 그냥 무시).
+  const canvasColRef = useRef(null);
+  const [canvasColWidthPx, setCanvasColWidthPx] = useState(1040);
   useEffect(() => {
-    const el = outerWrapRef.current;
+    const el = canvasColRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     function measure() {
-      setOuterWrapWidthPx(el.getBoundingClientRect().width);
+      const next = Math.round(el.getBoundingClientRect().width);
+      setCanvasColWidthPx((prev) => (Math.abs(prev - next) >= 2 ? next : prev));
     }
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const SHAPE_SIDEBAR_W = 240; // 이 탭 안의 "모형 목록" 칸
-  const INNER_GAP = 16; // 모형 목록 칸과 배치판 사이 간격
-  const MAX_CANVAS_W = Math.max(360, outerWrapWidthPx - SHAPE_SIDEBAR_W - INNER_GAP);
-  // "전체판은... 고정값이고 결코 움직이지 않아 / 세로는 현재 3칸 정도면 딱 좋을거 같아" 요청대로,
-  // 평소(전체보기 아닐 때)의 세로 크기는 창 높이에 따라 늘었다 줄었다 하지 않는 고정 크기로 못박았다
-  // — 방이 아무리 커도(또는 창이 아무리 커도) 이 안에서 줌인·줌아웃으로 들여다보는 식이다. "전체보기"
-  // 버튼을 눌러 화면 전체로 키운 상태는 별개로, 그때는 여전히 창 높이만큼 넉넉하게 쓴다.
-  const NORMAL_CANVAS_H = 460;
+  const MAX_CANVAS_W = Math.max(360, canvasColWidthPx);
+  // "전체판은... 고정값이고 결코 움직이지 않아 / 세로는 4칸 정도면 되겠다" 요청대로, 평소(전체보기
+  // 아닐 때)의 세로 크기는 창 높이에 따라 늘었다 줄었다 하지 않는 고정 크기로 못박았다 — 방이 아무리
+  // 커도(또는 창이 아무리 커도) 이 안에서 줌인·줌아웃으로 들여다보는 식이다. "전체보기" 버튼을 눌러
+  // 화면 전체로 키운 상태는 별개로, 그때는 여전히 창 높이만큼 넉넉하게 쓴다.
+  const NORMAL_CANVAS_H = 600;
   const MAX_CANVAS_H = isFullView ? Math.max(420, viewportSize.h - 220) : NORMAL_CANVAS_H;
   const scale = Math.min(MAX_CANVAS_W / (spaceWidthM * 100), MAX_CANVAS_H / (spaceDepthM * 100));
   const canvasWidthPx = spaceWidthM * 100 * scale;
@@ -12878,7 +12886,6 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
 
   return (
     <div
-      ref={outerWrapRef}
       className="layoutsim-full-view-wrap"
       style={
         isFullView
@@ -13173,7 +13180,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           </div>
         </div>
 
-        <div id="layoutsim-print-area" style={{ flex: "1 1 480px", minWidth: 0 }}>
+        <div ref={canvasColRef} id="layoutsim-print-area" style={{ flex: "1 1 480px", minWidth: 0 }}>
           {/* 인쇄/PDF로 저장할 때는 화면의 안내문구 대신 이 제목만 보이게 한다(평소엔 숨겨둠). */}
           <div className="layoutsim-print-only" style={{ display: "none", fontFamily: serif, fontSize: 16, marginBottom: 8 }}>
             {boardName || "가구배치(시뮬레이션)"} — 공간 {spaceWidthM}m × {spaceDepthM}m ({todayISO()} 기준)
