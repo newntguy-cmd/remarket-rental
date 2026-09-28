@@ -876,20 +876,16 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   const worldWidthPx = spaceWidthM * 100 * renderScale;
   const worldHeightPx = spaceDepthM * 100 * renderScale;
 
-  // "대지에 먹는 공간 안생기게 해줘" 요청 검증: 딱 맞춤 배율(zoomLevel=1) 이상에서는 대지가 예전처럼
-  // 항상 MAX_CANVAS_W×MAX_CANVAS_H로 고정돼 있어야 하지만(줌인해서 세부 배치할 때 옆 화면이
-  // 흔들리면 안 되니까), 그 밑으로 줌아웃하면(예: 20m 방에 여백을 주려고, 또는 그냥 작은 방에서
-  // 줌아웃해봤을 때) 배치판만 작아지고 대지는 그대로 커서 그 사이에 큰 빈 공간이 "먹힌 것"처럼
-  // 남아 보였다. viewportRef·canvasRef 자체의 픽셀 크기나 화면 이동(pan)·마우스 휠 확대 계산 로직은
-  // 전혀 건드리지 않고(그건 계속 scale 기준 고정 창을 그대로 씀), 대지 박스의 "겉보기 크기"만 줌아웃
-  // 배율(renderScale)에 맞춰 함께 줄인다 — 대지가 overflow:hidden + flex 가운데 정렬로 이미 정가운데
-  // 맞춰진 viewport를 창처럼 오려서 보여주는 역할이라, 대지만 줄여도 배치판은 항상 정확히 가운데에
-  // 빈틈없이 꽉 차 보인다. 줌인(zoomLevel≥1) 때는 그대로 MAX_CANVAS_W/H(대지 최대 크기)로 고정.
-  const GROUND_MIN_PX = 48;
-  const zoomedGroundWidthPx = Math.max(GROUND_MIN_PX, spaceWidthM * 100 * renderScale + VIEW_BLEED * 2);
-  const zoomedGroundHeightPx = Math.max(GROUND_MIN_PX, spaceDepthM * 100 * renderScale + VIEW_BLEED * 2);
-  const groundWidthPx = zoomLevel < 1 ? Math.min(MAX_CANVAS_W, zoomedGroundWidthPx) : MAX_CANVAS_W;
-  const groundHeightPx = zoomLevel < 1 ? Math.min(MAX_CANVAS_H, zoomedGroundHeightPx) : MAX_CANVAS_H;
+  // ("대지에 먹는 공간 안생기게 해줘" 요청으로 줌아웃하면 대지 자체를 함께 줄이는 시도를 잠깐
+  // 해봤었는데, 대지 크기가 viewportRef(고정 크기 창)보다 작아지면 그 안에서 flex 가운데 정렬된
+  // viewport가 대지 경계를 넘어 위·아래·양옆으로 걸쳐 있게 되고, 실제 배치판(canvasRef, worldOffset
+  // 기준으로 "viewport 가운데"에 위치)은 이 viewport 안 어딘가에 있다 보니 대지 창(overflow:hidden)에
+  // 걸리는 부분이 한쪽 구석의 아주 가느다란 선 한 줄만 남는 식으로 완전히 깨져 보였다("대지 다
+  // 깨졌어, 줌아웃도 안되고" 신고). "대지는 고정값인데" / "배치판도 대지를 넘어다니지 말고 그 안에서만
+  // 놀 수 있게" 요청대로, 대지는 줌과 무관하게 다시 예전처럼 항상 MAX_CANVAS_W×MAX_CANVAS_H로
+  // 고정한다 — 대지가 늘 viewport보다 크거나 같으니(viewport는 scale 기준으로 항상 MAX_CANVAS_W/H
+  // 이하로 계산됨) 배치판은 줌·이동과 무관하게 항상 대지 테두리 안에서만 보인다. "빈 공간이 생긴다"는
+  // 문제는 나중에 이 부작용 없이 다른 방식으로 다시 다뤄야 한다.
 
   // 주어진 확대 배율(zoom)·이동값(pan)일 때, 배치판(canvasRef)이 바깥 창(viewportRef) 안에서
   // 왼쪽/위로 얼마나 떨어진 자리에 놓이는지 계산한다. pan이 (0,0)이면 방 가운데가 창 가운데에
@@ -2403,17 +2399,19 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               방 크기에 맞춰 커졌다 작아졌다 하는 배치판(viewportRef/canvasRef)을 띄운다 — 대지의
               바깥 테두리는 어떤 방을 만들어도 절대 흔들리지 않고, 그 안의 배치판만 방 크기·비율에 맞게
               달라진다.
-              ("대지에 먹는 공간 안생기게 해줘" 요청 추가: 위는 딱 맞춤 배율(줌 100%) 이상일 때 얘기고,
-              그 밑으로 줌아웃하면 배치판만 작아지고 대지는 그대로 커서 그 사이에 큰 빈 공간이 남아
-              보였다. 그래서 줌아웃(zoomLevel<1)할 때만 대지 크기(width/height)도 groundWidthPx/
-              groundHeightPx로 함께 줄여서 배치판을 딱 감싸게 한다 — 줌 100% 이상(기본·줌인)에서는
-              여전히 MAX_CANVAS_W×MAX_CANVAS_H로 고정이라 위 설명 그대로다.) */}
+              ("대지에 먹는 공간 안생기게 해줘" 요청으로 줌아웃 때 대지 자체도 줄여보는 시도를
+              해봤었는데, 그러면 고정 크기인 viewportRef가 줄어든 대지보다 커져서 그 안 어딘가에 있는
+              실제 배치판(canvasRef)이 대지의 아주 좁은 구석에만 살짝 걸리는 식으로 완전히 깨져
+              보이는 훨씬 나쁜 문제가 생겼다("대지 다 깨졌어" 신고). "대지는 고정값인데" 요청대로
+              다시 줌과 무관하게 항상 MAX_CANVAS_W×MAX_CANVAS_H로 고정한다 — 대지가 늘 viewport보다
+              크거나 같아서(viewport는 scale 기준으로 항상 대지 이하로 계산됨) 배치판은 줌·이동과
+              무관하게 항상 대지 테두리를 절대 넘어가지 않는다.) */}
           <div
             className="layoutsim-ground"
             style={{
               position: "relative",
-              width: groundWidthPx,
-              height: groundHeightPx,
+              width: MAX_CANVAS_W,
+              height: MAX_CANVAS_H,
               flexShrink: 0,
               display: "flex",
               alignItems: "center",
