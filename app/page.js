@@ -11088,6 +11088,24 @@ function CollectionRequestForm({ initial, prefill, isAdmin, managerName, onCance
   );
 }
 
+// "줄자 좀 섹시하게 편하게" 요청: 줄자 선 양쪽 끝에 도면(CAD)에서 흔히 보는 치수선처럼 짧은 수직
+// 눈금(tick)을 그려서 단순한 점보다 "정확히 여기부터 여기까지"라는 느낌이 나게 한다. 줄자 선은 항상
+// 완전히 가로 또는 완전히 세로(axisConstrainedSecondPoint)라서, 눈금은 그 선과 직각 방향으로만
+// 그리면 된다 — 가로선이면 세로 눈금을, 세로선이면 가로 눈금을 양 끝에 하나씩.
+function perpendicularTicks(x1, y1, x2, y2, tickLen) {
+  const horizontal = Math.abs(y1 - y2) < 0.5;
+  if (horizontal) {
+    return {
+      a: { x1, y1: y1 - tickLen / 2, x2: x1, y2: y1 + tickLen / 2 },
+      b: { x1: x2, y1: y2 - tickLen / 2, x2: x2, y2: y2 + tickLen / 2 },
+    };
+  }
+  return {
+    a: { x1: x1 - tickLen / 2, y1, x2: x1 + tickLen / 2, y2: y1 },
+    b: { x1: x2 - tickLen / 2, y1: y2, x2: x2 + tickLen / 2, y2: y2 },
+  };
+}
+
 // ㄱ자(퍼즐책상 등)·U자(테이블 등) 모형의 외곽선을 그리기 위한 좌표를 계산한다. shapeType이 "rect"가
 // 아니면, 전체 바깥 크기(widthCm×depthCm)에서 안쪽으로 파인 부분(notchWidthCm×notchDepthCm)을 뺀
 // 다각형 좌표를 만든다. "ㄱ"자는 한쪽 모서리를 잘라낸 모양, "U"자는 한쪽 변 가운데를 파낸 모양이다.
@@ -11096,8 +11114,53 @@ function shapePolygonPoints(shapeType, widthCm, depthCm, notchWidthCm, notchDept
   const W = Number(widthCm) || 0;
   const D = Number(depthCm) || 0;
   if (shapeType === "l") {
-    const nw = Math.min(Math.max(Number(notchWidthCm) || 0, 0), Math.max(W - 1, 0));
-    const nd = Math.min(Math.max(Number(notchDepthCm) || 0, 0), Math.max(D - 1, 0));
+    // "ㄱ자 퍼즐책상이 메뉴에 뒤집어져 있다" 신고: 예전엔 파인 모서리가 항상 "오른쪽 위" 한 가지로만
+    // 고정돼 있었는데, 실제 ㄱ자 퍼즐책상은 제품마다 어느 모서리가 파였는지가 다르다(참고 사진은
+    // "왼쪽 아래"가 파인 모양). DB에 새 칼럼을 추가하지 않고 이미 있는 "파인 모서리 가로/세로" 값의
+    // 부호만으로 네 모서리를 전부 표현한다: 가로 값이 음수면 "왼쪽"이 파인 것, 세로 값이 음수면
+    // "아래쪽"이 파인 것(둘 다 양수면 예전 그대로 오른쪽 위 — 기존에 이미 등록해둔 모든 모형은 항상
+    // 양수였으니 100% 그대로 호환된다). 새 모형 추가 화면에서는 이 부호를 직접 입력하는 대신, 모서리
+    // 아이콘 버튼 4개 중 하나를 고르면 자동으로 맞는 부호가 저장된다.
+    const rawNw = Number(notchWidthCm) || 0;
+    const rawNd = Number(notchDepthCm) || 0;
+    const cutLeft = rawNw < 0;
+    const cutBottom = rawNd < 0;
+    const nw = Math.min(Math.max(Math.abs(rawNw), 0), Math.max(W - 1, 0));
+    const nd = Math.min(Math.max(Math.abs(rawNd), 0), Math.max(D - 1, 0));
+    if (cutLeft && cutBottom) {
+      // 왼쪽 아래가 파임(참고 사진의 ㄱ자 퍼즐책상 기본 모양)
+      return [
+        [0, 0],
+        [W, 0],
+        [W, D],
+        [nw, D],
+        [nw, D - nd],
+        [0, D - nd],
+      ];
+    }
+    if (cutLeft) {
+      // 왼쪽 위가 파임
+      return [
+        [nw, 0],
+        [W, 0],
+        [W, D],
+        [0, D],
+        [0, nd],
+        [nw, nd],
+      ];
+    }
+    if (cutBottom) {
+      // 오른쪽 아래가 파임
+      return [
+        [0, 0],
+        [W, 0],
+        [W, D - nd],
+        [W - nw, D - nd],
+        [W - nw, D],
+        [0, D],
+      ];
+    }
+    // 기본값(예전부터 있던 데이터와 100% 호환): 오른쪽 위가 파임
     return [
       [0, 0],
       [W - nw, 0],
@@ -11128,6 +11191,119 @@ function shapePolygonPoints(shapeType, widthCm, depthCm, notchWidthCm, notchDept
     [W, D],
     [0, D],
   ];
+}
+
+// "배치도에 잘려나간 부분이 여전히 공간을 차지하고 있어... 의자를 ㄱ자 빈공간에 넣지 못해" 버그 수정.
+// 그동안 다른 모형과 겹치는지(resolveOverlap) 검사할 때는 ㄱ자·U자도 항상 "파인 부분까지 포함한
+// 네모난 바깥 박스" 하나로만 취급해왔다. 그래서 실제로는 비어 있는 ㄱ자 안쪽 구석에 의자를 넣으려
+// 해도 그 자리가 이 네모 박스 범위 안이라는 이유만으로 자꾸 밖으로 밀려났다. 이 함수는 ㄱ자·U자 모양을
+// "실제로 채워진 부분"만 남도록 작은 사각형 1~2개로 쪼갠다(이 사각형들을 합치면 shapePolygonPoints가
+// 그리는 다각형과 정확히 같은 모양이 된다) — 겹침 검사를 이 조각들끼리만 하면, 파인 자리는 애초에
+// 조각이 없으니 자연스럽게 "빈 자리"로 취급되어 의자가 들어갈 수 있다. 사각형·원형·의자류처럼 원래도
+// 통짜인 모양은 그대로 사각형 하나만 돌려준다(기존과 100% 동일하게 동작 — 회귀 없음).
+function shapeSubRects(shapeType, widthCm, depthCm, notchWidthCm, notchDepthCm) {
+  const W = Number(widthCm) || 0;
+  const D = Number(depthCm) || 0;
+  if (shapeType === "l") {
+    const rawNw = Number(notchWidthCm) || 0;
+    const rawNd = Number(notchDepthCm) || 0;
+    const cutLeft = rawNw < 0;
+    const cutBottom = rawNd < 0;
+    const nw = Math.min(Math.max(Math.abs(rawNw), 0), Math.max(W - 1, 0));
+    const nd = Math.min(Math.max(Math.abs(rawNd), 0), Math.max(D - 1, 0));
+    if (cutLeft && cutBottom) {
+      return [
+        { x: 0, y: 0, w: W, h: D - nd },
+        { x: nw, y: D - nd, w: W - nw, h: nd },
+      ];
+    }
+    if (cutLeft) {
+      return [
+        { x: 0, y: nd, w: W, h: D - nd },
+        { x: nw, y: 0, w: W - nw, h: nd },
+      ];
+    }
+    if (cutBottom) {
+      return [
+        { x: 0, y: 0, w: W, h: D - nd },
+        { x: 0, y: D - nd, w: W - nw, h: nd },
+      ];
+    }
+    return [
+      { x: 0, y: nd, w: W, h: D - nd },
+      { x: 0, y: 0, w: W - nw, h: nd },
+    ];
+  }
+  if (shapeType === "u") {
+    const nw = Math.min(Math.max(Math.abs(Number(notchWidthCm) || 0), 0), Math.max(W - 2, 0));
+    const nd = Math.min(Math.max(Math.abs(Number(notchDepthCm) || 0), 0), Math.max(D - 1, 0));
+    const armW = (W - nw) / 2;
+    return [
+      { x: 0, y: nd, w: W, h: D - nd },
+      { x: 0, y: 0, w: armW, h: nd },
+      { x: armW + nw, y: 0, w: armW, h: nd },
+    ];
+  }
+  return [{ x: 0, y: 0, w: W, h: D }];
+}
+
+// 위 shapeSubRects가 돌려준 조각 사각형 하나(회전·반전 전, 모형 자기 자신의 원래 가로×세로 기준
+// 좌표)를, 실제로 화면에 놓인 회전(rotation: 0/90/180/270)·좌우반전(flipped)까지 반영해서 배치판
+// 기준 절대좌표(cm)로 바꿔준다. 회전은 항상 90도 단위라서 변환 후에도 항상 축에 나란한 사각형으로
+// 남는다 — 그래서 마주보는 두 귀퉁이(왼쪽위·오른쪽아래)만 옮기고 min/max로 다시 정렬하면 충분하다.
+// (화면에 실제로 보이는 모양은 CSS의 `rotate(${rotation}deg) scaleX(flipped?-1:1)`로 그려지는데,
+// CSS 변환은 오른쪽에 있는 함수부터 적용되므로 여기서도 반전을 먼저, 회전을 나중에 적용한다.)
+function transformLocalRectToWorld(rect, W, D, rotation, flipped, originXCm, originYCm) {
+  function mapPoint(x, y) {
+    const fx = flipped ? W - x : x;
+    const fy = y;
+    if (rotation === 90) return { x: D - fy, y: fx };
+    if (rotation === 180) return { x: W - fx, y: D - fy };
+    if (rotation === 270) return { x: fy, y: W - fx };
+    return { x: fx, y: fy };
+  }
+  const p1 = mapPoint(rect.x, rect.y);
+  const p2 = mapPoint(rect.x + rect.w, rect.y + rect.h);
+  return {
+    left: Math.min(p1.x, p2.x) + originXCm,
+    right: Math.max(p1.x, p2.x) + originXCm,
+    top: Math.min(p1.y, p2.y) + originYCm,
+    bottom: Math.max(p1.y, p2.y) + originYCm,
+  };
+}
+
+// 모형 하나(회전·반전·파인 부분까지 전부 반영)를 실제로 채워진 작은 사각형들(배치판 기준 절대좌표,
+// cm)의 배열로 바꿔준다 — resolveOverlap의 겹침 검사에서 "네모난 바깥 박스" 하나 대신 이걸 쓴다.
+// "제품 클릭하면 동그라미 기능 넣어서 회전 자유자재로도 가능하게" 요청으로 회전이 더 이상 90도
+// 단위가 아닐 수 있게 됐다 — transformLocalRectToWorld의 조각 변환 공식은 90도 단위 회전에서만
+// 정확하므로, 그 외 각도(자유 회전 중)에는 조각을 정밀하게 나누는 대신 안전하게 전체를 감싸는
+// 사각형(rotatedAabbSize) 하나로만 겹침 검사를 한다 — ㄱ자·U자를 비스듬히 돌렸을 때 파인 자리까지
+// 정밀하게 인식하진 못하지만(드문 사용 사례), 최소한 겹침 계산 자체가 틀어지지는 않는다.
+function worldSubRects(xCm, yCm, widthCm, depthCm, shapeType, notchWidthCm, notchDepthCm, rotation, flipped) {
+  const W = Number(widthCm) || 0;
+  const D = Number(depthCm) || 0;
+  if (rotation % 90 !== 0) {
+    const { w, h } = rotatedAabbSize(W, D, rotation);
+    const cx = xCm + w / 2;
+    const cy = yCm + h / 2;
+    return [{ left: cx - w / 2, right: cx + w / 2, top: cy - h / 2, bottom: cy + h / 2 }];
+  }
+  return shapeSubRects(shapeType, W, D, notchWidthCm, notchDepthCm).map((r) => transformLocalRectToWorld(r, W, D, rotation, flipped, xCm, yCm));
+}
+
+// 회전(임의 각도 가능)까지 반영했을 때, 이 모형이 화면에서 실제로 차지하는 "축에 나란한 바깥 테두리"
+// 크기(가로·세로, cm)를 구한다. 0/90/180/270도에서는 예전의 swapped(가로·세로 맞바꿈) 계산과 정확히
+// 똑같은 값이 나오고(회귀 없음), 그 사이 각도에서는 회전한 사각형을 완전히 감싸는 최소 크기로 자연스럽게
+// 이어진다 — 벽 밖으로 못 나가게 막거나(wall clamp), 다른 모형과 안 겹치게 밀어낼 때(collision) 등
+// "이 모형이 화면에서 어디까지 차지하나"를 알아야 하는 모든 곳에서 공통으로 쓴다.
+function rotatedAabbSize(widthCm, depthCm, rotationDeg) {
+  const rad = ((Number(rotationDeg) || 0) * Math.PI) / 180;
+  const cosA = Math.abs(Math.cos(rad));
+  const sinA = Math.abs(Math.sin(rad));
+  return {
+    w: widthCm * cosA + depthCm * sinA,
+    h: widthCm * sinA + depthCm * cosA,
+  };
 }
 
 // 한쪽 끝만 둥근 테이블(U형테이블 등: 위쪽은 폭 그대로 사각형으로 내려오다가, 맨 아래에서 폭과 같은
@@ -11201,38 +11377,130 @@ function ChairTopIcon({ w, d, fill, stroke }) {
   );
 }
 
-// 회의실·테이블 앞에 놓는 회의(응접)의자를 위에서 내려다본 모양으로 그린다. "그냥 둥글게만 되어있음
-// <-- 첨부한 회의의자 이미지로 수정" 요청을 받고, 사용자가 올려준 참고 아이콘(87×87px 흑백 CAD
-// 기호)을 확대·윤곽선(contour) 분석해서 구조를 다시 확인했다: 둥근 배럴(모서리를 큼직하게 둥글린
-// 사각형에 가까운, 타원보다는 각진) 몸통 안에, 몸통 중심에서 왼쪽으로 살짝 치우친 자리에 세로로 긴
-// 사각형(등받이·좌판의 이음새/쿠션 경계를 나타냄) 하나가 겹쳐 있고, 그 사각형의 위아래 끝이 몸통의
-// 둥근 곡선보다 살짝 더 길게 튀어나와 작은 사각 탭처럼 보인다(참고 이미지에서 위아래로 삐죽 나온
-// 부분). 몸통은 채워 그리고, 이음새 사각형은 안이 빈 채(fill:none)로 그 위에 겹쳐서, 몸통과 겹치는
-// 가운데 부분은 얇은 선(솔기)처럼, 몸통 곡선 밖으로 나가는 위아래 부분만 자연스럽게 작은 빈 탭처럼
-// 보이게 했다(사무의자 팔걸이와 같은 "속이 빈 손잡이" 원리).
+// 회의실·테이블 앞에 놓는 회의(응접)의자를 위에서 내려다본 모양으로 그린다. "회의의자 이거 위에서
+// 내려다본 느낌으로 센스있게 수정해줘" 요청으로, 새로 올려준 참고 사진(검은 가죽에 누빔 누빔(퀄팅)
+// 사각 패턴이 있는 등받이·좌판, 크롬 팔걸이, 캐스터 바퀴가 달린 크롬 다리)을 반영해 다시 그렸다.
+// 양옆에 통통한 팔걸이 패드를 추가하고, 등받이·좌판에는 참고 사진의 누빔 패턴을 가는 격자선 몇 개로
+// 단순화해서 표현했다. 좌판 밑 캐스터 다리는 몸통보다 먼저(안 보이게) 그려서, 몸통·팔걸이가 안쪽을
+// 덮고 남은 대각선 네 귀퉁이에만 작은 바퀴 원이 살짝 삐져나온 것처럼 보이게 했다(사무의자 팔걸이와
+// 같은 "속이 빈 손잡이" 원리 — 겹치는 도형을 따로 보정하지 않아도 지저분한 선이 남지 않는다).
 function MeetingChairTopIcon({ w, d, fill, stroke }) {
   const W = Number(w) || 0;
   const D = Number(d) || 0;
   const minWD = Math.min(W, D);
-  const strokeW = Math.max(minWD * 0.025, 0.4);
+  const strokeW = Math.max(minWD * 0.022, 0.35);
 
-  // 몸통: 위아래로 살짝 여백을 두고, 좌우로는 폭에 거의 맞춰 그린 큼직하게 둥근 사각형(배럴 모양).
-  const marginY = D * 0.08;
-  const bodyY = marginY;
-  const bodyH = D - marginY * 2;
-  const bodyRx = W * 0.24;
-  const bodyRy = bodyH * 0.32;
+  // 캐스터(바퀴) 달린 크롬 다리 — 좌판 중심에서 대각선 네 방향으로 살짝 떨어진 자리에 작은 원으로
+  // 표시. fill:none으로 그려서 이후에 그려지는 팔걸이·몸통(불투명)에 안쪽 절반이 가려지고, 몸통 밖
+  // 대각선 귀퉁이만 자연스럽게 톡 튀어나온 바퀴처럼 보인다.
+  const casterR = minWD * 0.05;
+  const casterDx = W * 0.4;
+  const casterDy = D * 0.42;
+  const cx0 = W / 2;
+  const cy0 = D / 2;
 
-  // 등받이·좌판 이음새: 몸통 가운데보다 살짝 왼쪽에 치우친 세로 사각형. 위아래로는 몸통 여백(marginY)
-  // 만큼 몸통 곡선 밖으로 튀어나가도록 0~D 전체 높이로 그린다(캔버스 밖으로는 못 나가므로, 튀어나오는
-  // 정도는 딱 이 여백만큼이 최대치다).
-  const seamX = W * 0.3;
-  const seamW = W * 0.36;
+  // 팔걸이(양옆) — 참고 사진처럼 가는 고리형이 아니라 도톰한 크롬 팔걸이라서, 통통한 둥근 사각형으로.
+  const armW = W * 0.11;
+  const armMarginY = D * 0.24;
+  const armH = D - armMarginY * 2;
+  const armRx = armW * 0.5;
+
+  // 몸통(등받이+좌판) — 팔걸이 안쪽 폭 기준으로, 참고 사진처럼 사무의자보다 각진 사각 쿠션 느낌을 준다.
+  const bodyX = armW * 1.05;
+  const bodyW = W - bodyX * 2;
+  const marginY = D * 0.04;
+  const bodyTop = marginY;
+  const bodyBottom = D - marginY;
+  const lobeH = (bodyBottom - bodyTop) * 0.54;
+  const headY = bodyTop;
+  const seatY = bodyBottom - lobeH;
+  const lobeRx = Math.min(bodyW, lobeH) * 0.14;
+
+  // 누빔(퀄팅) 사각 패턴 — 참고 사진의 바둑판 누빔을 등받이·좌판 안에 가는 격자선 몇 개로 단순화.
+  const quiltLines = (x, y, w, h) => (
+    <>
+      <line x1={x + w * 0.33} y1={y + h * 0.14} x2={x + w * 0.33} y2={y + h * 0.86} />
+      <line x1={x + w * 0.67} y1={y + h * 0.14} x2={x + w * 0.67} y2={y + h * 0.86} />
+      <line x1={x + w * 0.1} y1={y + h * 0.5} x2={x + w * 0.9} y2={y + h * 0.5} />
+    </>
+  );
 
   return (
     <g stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round">
-      <rect x={0} y={bodyY} width={W} height={bodyH} rx={bodyRx} ry={bodyRy} fill={fill} />
-      <rect x={seamX} y={0} width={seamW} height={D} fill="none" />
+      <circle cx={cx0 - casterDx / 2} cy={cy0 - casterDy / 2} r={casterR} fill="none" />
+      <circle cx={cx0 + casterDx / 2} cy={cy0 - casterDy / 2} r={casterR} fill="none" />
+      <circle cx={cx0 - casterDx / 2} cy={cy0 + casterDy / 2} r={casterR} fill="none" />
+      <circle cx={cx0 + casterDx / 2} cy={cy0 + casterDy / 2} r={casterR} fill="none" />
+      <rect x={0} y={armMarginY} width={armW} height={armH} rx={armRx} fill={fill} />
+      <rect x={W - armW} y={armMarginY} width={armW} height={armH} rx={armRx} fill={fill} />
+      <rect x={bodyX} y={headY} width={bodyW} height={lobeH} rx={lobeRx} fill={fill} />
+      <rect x={bodyX} y={seatY} width={bodyW} height={lobeH} rx={lobeRx} fill={fill} />
+      <g fill="none" strokeWidth={strokeW * 0.55} opacity={0.5}>
+        {quiltLines(bodyX, headY, bodyW, lobeH)}
+        {quiltLines(bodyX, seatY, bodyW, lobeH)}
+      </g>
+    </g>
+  );
+}
+
+// 쇼파를 위에서 내려다본(bird's-eye) 모양으로 그린다. "쇼파는 위 사이즈대로 만들고 위에서 내려다본
+// 디자인으로 해줘(센스있게!!)" 요청으로 추가 — 참고 사진(프린스쇼파, 나무 롤암 손잡이가 있는 가죽
+// 소파)을 보고, 양옆에 둥글게 마감된 팔걸이(롤암)와 등받이 띠, 좌석 쿠션이 나뉘어 있는 구조를 다른
+// 아이콘들과 같은 캐드 기호 방식으로 단순화했다. 색은 넣지 않고(fill·stroke만 그대로 받아 써서 다른
+// 모형들과 통일감을 유지) 솔기(seam)선만으로 팔걸이·등받이·쿠션 경계를 나타낸다. 좌석 개수는 폭(W)으로
+// 자동으로 정해져서(좁으면 1인용, 넓으면 3인용 식) 별도 입력 없이도 크기에 맞는 쿠션 구성이 나온다 —
+// 프린스쇼파 1인용(W950)은 쿠션 1개, 3인용(W1900)은 쿠션 3개로 자동으로 그려진다.
+function SofaTopIcon({ w, d, fill, stroke }) {
+  const W = Number(w) || 0;
+  const D = Number(d) || 0;
+  const minWD = Math.min(W, D);
+  const strokeW = Math.max(minWD * 0.02, 0.4);
+  const seats = W <= 1300 ? 1 : W <= 1700 ? 2 : 3;
+
+  // 양옆 팔걸이(롤암) — 안쪽에 작은 둥근 테두리선을 하나 더 그려서 나무 롤암 특유의 볼록한 느낌을 낸다.
+  const armW = W * 0.09;
+  const bodyRx = minWD * 0.05;
+
+  // 등받이 띠 — 뒤쪽(위)에 있는 가로로 긴 쿠션 띠.
+  const backH = D * 0.26;
+
+  // 좌석 쿠션 — 팔걸이 안쪽 폭을 좌석 개수만큼 똑같이 나눠서 하나씩 그린다.
+  const seatX0 = armW;
+  const seatX1 = W - armW;
+  const seatAreaW = Math.max(seatX1 - seatX0, 0);
+  const seatW = seatAreaW / seats;
+
+  return (
+    <g stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round">
+      {/* 몸통(팔걸이 포함 전체 외곽) */}
+      <rect x={0} y={0} width={W} height={D} rx={bodyRx} ry={bodyRx} fill={fill} />
+      {/* 팔걸이와 좌석 사이 솔기선 */}
+      <line x1={seatX0} y1={0} x2={seatX0} y2={D} fill="none" />
+      <line x1={seatX1} y1={0} x2={seatX1} y2={D} fill="none" />
+      {/* 팔걸이 안쪽의 작은 둥근 테두리선(나무 롤암의 볼록한 느낌) */}
+      <rect x={armW * 0.22} y={D * 0.06} width={armW * 0.56} height={D * 0.88} rx={armW * 0.28} fill="none" />
+      <rect x={W - armW + armW * 0.22} y={D * 0.06} width={armW * 0.56} height={D * 0.88} rx={armW * 0.28} fill="none" />
+      {/* 등받이와 좌석 사이 솔기선 */}
+      <line x1={seatX0} y1={backH} x2={seatX1} y2={backH} fill="none" />
+      {/* 좌석 쿠션 사이 경계선(2인용 이상일 때만 보임) */}
+      {Array.from({ length: seats - 1 }).map((_, i) => {
+        const cx = seatX0 + seatW * (i + 1);
+        return <line key={i} x1={cx} y1={backH} x2={cx} y2={D * 0.97} fill="none" />;
+      })}
+      {/* 각 쿠션 앞쪽의 살짝 휘어진 경계선(사무의자 아이콘과 같은 기법) */}
+      {Array.from({ length: seats }).map((_, i) => {
+        const cx = seatX0 + seatW * (i + 0.5);
+        const halfW = seatW * 0.32;
+        const seamY = D * 0.82;
+        return (
+          <path
+            key={`c${i}`}
+            d={`M ${cx - halfW} ${seamY} Q ${cx} ${seamY + strokeW * 1.6} ${cx + halfW} ${seamY}`}
+            fill="none"
+            strokeWidth={strokeW * 0.8}
+          />
+        );
+      })}
     </g>
   );
 }
@@ -11246,11 +11514,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   const [shapes, setShapes] = useState([]);
   const [loadingShapes, setLoadingShapes] = useState(true);
   const [newShapeName, setNewShapeName] = useState("");
-  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "u"(U자) | "circle"(원형) | "roundend"(한쪽둥근) | "chair"(사무의자) | "meetingchair"(회의의자)
+  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "u"(U자) | "circle"(원형) | "roundend"(한쪽둥근) | "chair"(사무의자) | "meetingchair"(회의의자) | "sofa"(쇼파)
   const [newShapeWidth, setNewShapeWidth] = useState("");
   const [newShapeDepth, setNewShapeDepth] = useState("");
   const [newShapeNotchWidth, setNewShapeNotchWidth] = useState(""); // ㄱ자: 잘려나간 모서리, U자: 안쪽 파인 부분
   const [newShapeNotchDepth, setNewShapeNotchDepth] = useState("");
+  // "ㄱ자 퍼즐책상은 메뉴에도 위 모양대로" 요청으로 ㄱ자를 다시 등록할 수 있게 하면서, 어느 모서리가
+  // 파였는지를 사용자가 부호 없이 아이콘 버튼으로 고를 수 있게 추가한 상태값(기본은 예전과 같은
+  // "오른쪽 위"). handleAddShape에서 이 값에 따라 notch_width_cm/notch_depth_cm의 부호를 정한다.
+  const [newShapeCutCorner, setNewShapeCutCorner] = useState("tr"); // "tr" | "tl" | "br" | "bl"
   const [newShapeCategory, setNewShapeCategory] = useState(""); // 비워두면 "기타"로 등록됨
   const [savingShape, setSavingShape] = useState(false);
 
@@ -11388,13 +11660,20 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     // 위로 옮기면 됨).
     const targetCategory = (newShapeCategory || "기타").trim();
     const newSortOrder = (shapesByCategory[targetCategory] || []).length;
+    // ㄱ자(l)는 화면에서 고른 "파인 모서리" 아이콘(newShapeCutCorner)에 맞춰, 저장 직전에 여기서만
+    // notch_width_cm/notch_depth_cm의 부호를 정한다(왼쪽이 파였으면 가로를 음수로, 아래쪽이 파였으면
+    // 세로를 음수로) — DB 칼럼을 새로 추가하지 않고도 shapePolygonPoints/shapeSubRects가 그 부호를
+    // 보고 어느 모서리인지 알아낸다. 화면 입력칸(newShapeNotchWidth/Depth)에는 항상 양수 크기만 넣게
+    // 해서 사용자가 직접 음수를 입력할 일은 없다.
+    const signedNw = isPoly && newShapeType === "l" && (newShapeCutCorner === "tl" || newShapeCutCorner === "bl") ? -Math.abs(nw) : nw;
+    const signedNd = isPoly && newShapeType === "l" && (newShapeCutCorner === "bl" || newShapeCutCorner === "br") ? -Math.abs(nd) : nd;
     const { error } = await supabase.from("layout_shapes").insert({
       name: newShapeName.trim(),
       shape_type: newShapeType,
       width_cm: w,
       depth_cm: d,
-      notch_width_cm: nw,
-      notch_depth_cm: nd,
+      notch_width_cm: signedNw,
+      notch_depth_cm: signedNd,
       category: targetCategory,
       sort_order: newSortOrder,
     });
@@ -11409,6 +11688,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     setNewShapeDepth("");
     setNewShapeNotchWidth("");
     setNewShapeNotchDepth("");
+    setNewShapeCutCorner("tr");
     setNewShapeCategory("");
     fetchShapes();
   }
@@ -11494,6 +11774,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     const isRoundEnd = shapeType === "roundend";
     const isChair = shapeType === "chair";
     const isMeetingChair = shapeType === "meetingchair";
+    const isSofa = shapeType === "sofa";
     const previewPoints = isPoly
       ? shapePolygonPoints(shapeType, s.width_cm, s.depth_cm, s.notch_width_cm, s.notch_depth_cm)
           .map((p) => p.join(","))
@@ -11548,6 +11829,10 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         ) : isMeetingChair ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
             <MeetingChairTopIcon w={s.width_cm} d={s.depth_cm} fill={C.purpleBg} stroke={C.purple} />
+          </svg>
+        ) : isSofa ? (
+          <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
+            <SofaTopIcon w={s.width_cm} d={s.depth_cm} fill={C.purpleBg} stroke={C.purple} />
           </svg>
         ) : (
           <div style={{ width: 14, height: 14, background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 2, flexShrink: 0 }} />
@@ -11982,6 +12267,14 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 상태("줄자 기능을 좀 더 고급지게" 요청) — 확대한 상태에서 점을 찍기 전에 좌표를 먼저 눈으로
   // 확인할 수 있어서 더 정확하게 찍을 수 있다.
   const [hoverCm, setHoverCm] = useState(null);
+  // ("줄자 좀 섹시하게 편하게" 요청으로 손을 눌러서 끌고 가서 놓는(drag) 동작을 지원하면서, 놓는
+  // 순간(onMarqueeUp)에도 "지금 마우스가 어디 있는지"를 읽어야 하는데, 그 핸들러는 useEffect
+  // 안에서 한 번만 만들어지고(의존값 [renderScale, rulerMode, placedItems]이 바뀔 때만 다시 만들어짐)
+  // hoverCm은 마우스가 움직일 때마다 훨씬 자주 바뀌므로, onMarqueeUp 클로저 안에서 state(hoverCm)를
+  // 직접 참조하면 항상 오래된(맨 처음) 값만 보게 된다. ref에 최신 값을 늘 복사해두고 onMarqueeUp에서는
+  // 이 ref를 읽는다.)
+  const hoverCmRef = useRef(null);
+  hoverCmRef.current = hoverCm;
   useEffect(() => {
     if (!rulerMode) setHoverCm(null);
   }, [rulerMode]);
@@ -12145,9 +12438,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     for (const other of placedItems) {
       if (other.id === excludeId) continue;
       const rotation = other.rotation != null ? other.rotation : other.rotated ? 90 : 0;
-      const swapped = rotation === 90 || rotation === 270;
-      const ow = swapped ? other.depthCm : other.widthCm;
-      const oh = swapped ? other.widthCm : other.depthCm;
+      const { w: ow, h: oh } = rotatedAabbSize(other.widthCm, other.depthCm, rotation);
       const oLeft = other.xCm;
       const oRight = other.xCm + ow;
       const oTop = other.yCm;
@@ -12183,6 +12474,11 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 겹친 폭·높이 중 더 적게 밀어내도 되는 방향으로 딱 붙을 때까지 밀어내서 서로 영역을 침범하지 않게 한다.
   // excludeId는 보통 모형 하나의 id(문자열/숫자)지만, 그룹(또는 여러 개를 선택해 한꺼번에 옮길 때)은
   // 그룹에 속한 모든 모형 id 배열을 넘겨서, 그룹 안 모형끼리는 서로 겹침 검사를 하지 않도록 한다.
+  // (버그 수정) "잘려나간 부분이 여전히 공간을 차지하고 있어... 의자를 ㄱ자 빈공간에 넣지 못해" 신고
+  // — 예전엔 상대 모형(other)을 항상 "파인 부분까지 포함한 네모 박스" 하나로만 보고 밀어냈는데,
+  // 이제 ㄱ자·U자는 worldSubRects로 실제 채워진 조각들로 쪼개서, 그 조각들과만 겹치는지 본다. 파인
+  // 자리는 애초에 조각이 없으니 겹침으로 잡히지 않아서 의자가 자연스럽게 그 안에 들어갈 수 있다.
+  // 사각형·원형 등 원래 통짜인 모양은 조각이 하나뿐이라 예전과 완전히 똑같이 동작한다(회귀 없음).
   function resolveOverlap(xCm, yCm, wCm, hCm, excludeId) {
     const excludeSet = new Set(Array.isArray(excludeId) ? excludeId : [excludeId]);
     let x = xCm;
@@ -12190,28 +12486,44 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     for (const other of placedItems) {
       if (excludeSet.has(other.id)) continue;
       const rotation = other.rotation != null ? other.rotation : other.rotated ? 90 : 0;
-      const swapped = rotation === 90 || rotation === 270;
-      const ow = swapped ? other.depthCm : other.widthCm;
-      const oh = swapped ? other.widthCm : other.depthCm;
-      const oLeft = other.xCm;
-      const oRight = other.xCm + ow;
-      const oTop = other.yCm;
-      const oBottom = other.yCm + oh;
+      const otherRects = worldSubRects(
+        other.xCm,
+        other.yCm,
+        other.widthCm,
+        other.depthCm,
+        other.shapeType || "rect",
+        other.notchWidthCm,
+        other.notchDepthCm,
+        rotation,
+        !!other.flipped
+      );
       const myLeft = x;
       const myRight = x + wCm;
       const myTop = y;
       const myBottom = y + hCm;
-      const overlapX = Math.min(myRight, oRight) - Math.max(myLeft, oLeft);
-      const overlapY = Math.min(myBottom, oBottom) - Math.max(myTop, oTop);
-      if (overlapX > 0 && overlapY > 0) {
+      // 실제로 겹치는 조각들 중에서 "가장 적게 밀어내도 되는" 조각 하나를 골라 그 방향으로만 뺀다
+      // (조각이 아예 안 겹치면 그 자리는 빈 자리이므로 무시한다).
+      let best = null;
+      for (const r of otherRects) {
+        const overlapX = Math.min(myRight, r.right) - Math.max(myLeft, r.left);
+        const overlapY = Math.min(myBottom, r.bottom) - Math.max(myTop, r.top);
+        if (overlapX > 0 && overlapY > 0) {
+          const pushDist = Math.min(overlapX, overlapY);
+          if (!best || pushDist < best.pushDist) {
+            best = { pushDist, overlapX, overlapY, r };
+          }
+        }
+      }
+      if (best) {
+        const { overlapX, overlapY, r } = best;
         if (overlapX < overlapY) {
           const myCenterX = myLeft + wCm / 2;
-          const oCenterX = oLeft + ow / 2;
-          x = myCenterX < oCenterX ? oLeft - wCm : oRight;
+          const oCenterX = (r.left + r.right) / 2;
+          x = myCenterX < oCenterX ? r.left - wCm : r.right;
         } else {
           const myCenterY = myTop + hCm / 2;
-          const oCenterY = oTop + oh / 2;
-          y = myCenterY < oCenterY ? oTop - hCm : oBottom;
+          const oCenterY = (r.top + r.bottom) / 2;
+          y = myCenterY < oCenterY ? r.top - hCm : r.bottom;
         }
       }
     }
@@ -12264,9 +12576,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       let changed = false;
       const next = prev.map((it) => {
         const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
-        const swapped = rotation === 90 || rotation === 270;
-        const wCm = swapped ? it.depthCm : it.widthCm;
-        const hCm = swapped ? it.widthCm : it.depthCm;
+        const { w: wCm, h: hCm } = rotatedAabbSize(it.widthCm, it.depthCm, rotation);
         const maxX = Math.max(0, spaceWidthM * 100 - wCm);
         const maxY = Math.max(0, spaceDepthM * 100 - hCm);
         const xCm = Math.min(Math.max(0, it.xCm), maxX);
@@ -12300,9 +12610,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       const m = placedItems.find((p) => p.id === id);
       if (!m) continue;
       const rotation = m.rotation != null ? m.rotation : m.rotated ? 90 : 0;
-      const swapped = rotation === 90 || rotation === 270;
-      const wCm = swapped ? m.depthCm : m.widthCm;
-      const hCm = swapped ? m.widthCm : m.depthCm;
+      const { w: wCm, h: hCm } = rotatedAabbSize(m.widthCm, m.depthCm, rotation);
       const maxX = Math.max(0, spaceWidthM * 100 - wCm);
       const maxY = Math.max(0, spaceDepthM * 100 - hCm);
       if (m.xCm + cdx < 0) cdx = -m.xCm;
@@ -12366,9 +12674,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       const moving = placedItems.find((it) => it.id === payload.placedId);
       if (!moving) return;
       const rotation = moving.rotation != null ? moving.rotation : moving.rotated ? 90 : 0;
-      const swapped = rotation === 90 || rotation === 270;
-      const wCm = swapped ? moving.depthCm : moving.widthCm;
-      const hCm = swapped ? moving.widthCm : moving.depthCm;
+      const { w: wCm, h: hCm } = rotatedAabbSize(moving.widthCm, moving.depthCm, rotation);
       const rawX = Math.max(0, cmX - (payload.offsetXCm || 0));
       const rawY = Math.max(0, cmY - (payload.offsetYCm || 0));
       const moveGroupIds = getMoveGroupIds(moving);
@@ -12433,7 +12739,13 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       prev.map((it) => {
         if (it.id !== id) return it;
         const current = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
-        const nextRotation = (current + 90) % 360;
+        // "제품 클릭하면 동그라미 기능 넣어서 회전 자유자재로도" 요청으로 회전이 더 이상 항상 90도
+        // 단위가 아닐 수 있게 됐다 — 동그라미 손잡이로 37도처럼 어중간한 각도로 돌려둔 채로 이
+        // 버튼을 눌러도 "37+90=127도" 같은 어중간한 값이 되지 않도록, 먼저 가장 가까운 0/90/180/270
+        // 중 하나로 스냅한 뒤 거기서 90도를 더한다(원래 90도 단위였을 때는 nearest90이 항상 current와
+        // 같으므로 예전 동작 그대로다 — 회귀 없음).
+        const nearest90 = (Math.round(current / 90) * 90) % 360;
+        const nextRotation = (nearest90 + 90) % 360;
         const swapped = nextRotation === 90 || nextRotation === 270;
         const wCm = swapped ? it.depthCm : it.widthCm;
         const hCm = swapped ? it.widthCm : it.depthCm;
@@ -12506,6 +12818,62 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     };
   }
 
+  // "제품 클릭하면 동그라미 기능 넣어서 회전 자유자재로도 가능하게" 요청: 기존 회전 버튼(⟳)은 90도
+  // 단위로만 딱딱 꺾이는데, 모형을 선택하면 그 위쪽에 작은 동그라미 손잡이가 나타나서(피그마·
+  // 파워포인트 등에서 흔한 방식) 그걸 마우스로 끌면 임의의 각도로 자유롭게 돌릴 수 있다. 손잡이를
+  // 누른 순간의 모형 중심(cm 기준, 그때 회전 상태의 바깥 테두리 기준)을 고정점으로 삼아, 그 뒤로는
+  // 그 중심에서 마우스 커서까지의 각도만 계속 따라가며 rotation을 갱신한다 — 회전 중에도 모형의
+  // 중심 위치는 항상 그대로 유지되어("중심을 축으로 돈다"는 자연스러운 느낌), 모서리가 방을 벗어나는
+  // 등 예측 못 할 위치로 튀지 않는다. 다른 모형과의 충돌(밀어내기)은 드래그 도중엔 검사하지 않는다
+  // (크기 조절 손잡이와 같은 방식 — 끌던 중에 갑자기 밀려나면 오히려 조작하기 어색하다).
+  const rotateDragRef = useRef(null);
+  useEffect(() => {
+    function onRotateMove(e) {
+      const drag = rotateDragRef.current;
+      if (!drag || !canvasRef.current) return;
+      const rect = canvasRef.current.getBoundingClientRect();
+      const centerClientX = rect.left + drag.centerXCm * renderScale;
+      const centerClientY = rect.top + drag.centerYCm * renderScale;
+      const dxPx = e.clientX - centerClientX;
+      const dyPx = e.clientY - centerClientY;
+      // 손잡이가 원래 모형 정 위쪽에서 시작하므로, 마우스가 정 위쪽에 있을 때 0도가 되도록 표준
+      // atan2(오른쪽 기준·시계방향)에서 축을 90도 돌려서 "위쪽 기준" 각도로 바꾼다.
+      let deg = Math.round((Math.atan2(dxPx, -dyPx) * 180) / Math.PI);
+      deg = ((deg % 360) + 360) % 360;
+      const aabb = rotatedAabbSize(drag.widthCm, drag.depthCm, deg);
+      const maxX = Math.max(0, spaceWidthM * 100 - aabb.w);
+      const maxY = Math.max(0, spaceDepthM * 100 - aabb.h);
+      const newXCm = Math.min(Math.max(0, drag.centerXCm - aabb.w / 2), maxX);
+      const newYCm = Math.min(Math.max(0, drag.centerYCm - aabb.h / 2), maxY);
+      setPlacedItems((prev) => prev.map((it) => (it.id === drag.id ? { ...it, rotation: deg, xCm: newXCm, yCm: newYCm } : it)));
+    }
+    function onRotateUp() {
+      rotateDragRef.current = null;
+    }
+    window.addEventListener("mousemove", onRotateMove);
+    window.addEventListener("mouseup", onRotateUp);
+    return () => {
+      window.removeEventListener("mousemove", onRotateMove);
+      window.removeEventListener("mouseup", onRotateUp);
+    };
+  }, [renderScale, spaceWidthM, spaceDepthM]);
+
+  function startRotatePlaced(it) {
+    return (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
+      const aabb = rotatedAabbSize(it.widthCm, it.depthCm, rotation);
+      rotateDragRef.current = {
+        id: it.id,
+        widthCm: it.widthCm,
+        depthCm: it.depthCm,
+        centerXCm: it.xCm + aabb.w / 2,
+        centerYCm: it.yCm + aabb.h / 2,
+      };
+    };
+  }
+
   // "모든 품목 가로/세로 사이즈 넣을 수 있는 칸을 만들어줘(적용버튼)" 요청으로 추가된 기능. 손잡이를
   // 마우스로 끌어서 크기를 조절하는 것 말고도, 정확한 숫자를 직접 입력해서 한 번에 맞출 수 있게
   // 한다. 딱 하나만 선택했을 때만 의미가 있으므로(여러 개를 한꺼번에 선택했을 때는 "가로·세로"가
@@ -12513,16 +12881,33 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   const selectedSingleItem = selectedPlacedIds.size === 1 ? placedItems.find((it) => selectedPlacedIds.has(it.id)) || null : null;
   const [manualWidthInput, setManualWidthInput] = useState("");
   const [manualDepthInput, setManualDepthInput] = useState("");
-  // 선택이 "다른 모형으로" 바뀔 때만 입력칸을 그 모형의 현재 크기로 다시 채운다(id 기준) — 입력하는
-  // 도중에 같은 모형의 다른 값(예: 드래그로 살짝 움직인 좌표) 때문에 타이핑 중인 값이 지워지지 않게.
+  // "도형 클릭 후 이름 수정할 수 있게 해주고" 요청으로 추가. 배치판 위 이름표에는 규격(가로×세로)만
+  // 짧게 보이지만(윗 주석 참고), 모형 하나하나마다 자기만의 이름(예: "박대표 책상", "3층 회의실 A")을
+  // 붙여두면 title(마우스 올리면 뜨는 말풍선)·저장된 배치 데이터에서 구분하기 편하다.
+  const [manualNameInput, setManualNameInput] = useState("");
+  // 선택이 "다른 모형으로" 바뀔 때만 입력칸을 그 모형의 현재 크기·이름으로 다시 채운다(id 기준) —
+  // 입력하는 도중에 같은 모형의 다른 값(예: 드래그로 살짝 움직인 좌표) 때문에 타이핑 중인 값이
+  // 지워지지 않게.
   const selectedSingleItemId = selectedSingleItem?.id ?? null;
   useEffect(() => {
     if (selectedSingleItem) {
       setManualWidthInput(String(selectedSingleItem.widthCm));
       setManualDepthInput(String(selectedSingleItem.depthCm));
+      setManualNameInput(selectedSingleItem.name || "");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSingleItemId]);
+
+  // 선택한 모형 하나의 이름만 바꾼다(가로·세로 크기는 그대로 둠). 빈 칸으로 지우고 적용하면 원래
+  // 이름으로 되돌린다(이름이 아예 없어지면 나중에 혼란스러우므로).
+  function handleApplyManualName() {
+    if (!selectedSingleItem) return;
+    const it = selectedSingleItem;
+    const trimmed = manualNameInput.trim();
+    const newName = trimmed || it.name;
+    setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, name: newName } : p)));
+    setManualNameInput(newName);
+  }
 
   function handleApplyManualSize() {
     if (!selectedSingleItem) return;
@@ -12577,9 +12962,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         const newIds = [];
         const newItems = clipboardRef.current.map((src) => {
           const rotation = src.rotation != null ? src.rotation : src.rotated ? 90 : 0;
-          const swapped = rotation === 90 || rotation === 270;
-          const wCm = swapped ? src.depthCm : src.widthCm;
-          const hCm = swapped ? src.widthCm : src.depthCm;
+          const { w: wCm, h: hCm } = rotatedAabbSize(src.widthCm, src.depthCm, rotation);
           const maxX = Math.max(0, spaceWidthM * 100 - wCm);
           const maxY = Math.max(0, spaceDepthM * 100 - hCm);
           const id = nextPlacedId();
@@ -12624,9 +13007,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         if (!it) return;
         if (!it.groupId) {
           const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
-          const swapped = rotation === 90 || rotation === 270;
-          const wCm = swapped ? it.depthCm : it.widthCm;
-          const hCm = swapped ? it.widthCm : it.depthCm;
+          const { w: wCm, h: hCm } = rotatedAabbSize(it.widthCm, it.depthCm, rotation);
           const placed = moveWithClamp(round1(it.xCm + dx), round1(it.yCm + dy), wCm, hCm, it.id);
           setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, xCm: round1(placed.xCm), yCm: round1(placed.yCm) } : p)));
           return;
@@ -12664,9 +13045,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     const pts = [];
     for (const it of placedItems) {
       const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
-      const swapped = rotation === 90 || rotation === 270;
-      const wCm = swapped ? it.depthCm : it.widthCm;
-      const hCm = swapped ? it.widthCm : it.depthCm;
+      const { w: wCm, h: hCm } = rotatedAabbSize(it.widthCm, it.depthCm, rotation);
       pts.push({ xCm: it.xCm, yCm: it.yCm });
       pts.push({ xCm: it.xCm + wCm, yCm: it.yCm });
       pts.push({ xCm: it.xCm, yCm: it.yCm + hCm });
@@ -12691,33 +13070,52 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     return best;
   }
 
-  // 줄자 점을 하나 추가한다. "줄자는 처음 찍었던 점에서 동서남북(가로·세로) 직선으로만 움직이게"
-  // 요청대로, 첫 번째 점은 그대로 찍히지만 두 번째 점은 첫 점 기준으로 대각선이 되지 않게 보정한다 —
-  // 첫 점에서 가로로 더 많이 움직였으면 세로 좌표를 첫 점과 똑같이 맞추고(완전히 가로선), 세로로 더
-  // 많이 움직였으면 가로 좌표를 첫 점과 똑같이 맞춘다(완전히 세로선). 이렇게 하면 두 점을 잇는 선이
-  // 항상 반듯한 가로선 또는 세로선이 되어, 방 가로·세로 길이나 벽 사이 거리를 잴 때 손이 살짝
-  // 삐뚤어져도 비스듬한 값이 나오지 않는다. 세 번째 클릭부터는(이미 두 점이 있으면) 이전 측정을
-  // 지우고 그 자리를 새 첫 점으로 삼아 다시 잰다(기존 동작 그대로).
+  // "줄자는 처음 찍었던 점에서 동서남북(가로·세로) 직선으로만 움직이게" 요청대로, 두 번째 점은 첫
+  // 점 기준으로 대각선이 되지 않게 보정한다 — 첫 점에서 가로로 더 많이 움직였으면 세로 좌표를 첫
+  // 점과 똑같이 맞추고(완전히 가로선), 세로로 더 많이 움직였으면 가로 좌표를 첫 점과 똑같이 맞춘다
+  // (완전히 세로선). "줄자 좀 섹시하게 편하게" 요청으로 이 계산을 별도 함수로 빼서, 실제로 찍히는
+  // 점(addRulerPoint)과 찍기 전에 미리 보여주는 점선 미리보기(rulerPreviewPoint)가 항상 똑같은
+  // 자리를 가리키게 한다(미리보기랑 실제로 찍히는 자리가 다르면 더 헷갈리므로).
+  function axisConstrainedSecondPoint(first, xCm, yCm) {
+    const dx = Math.abs(xCm - first.xCm);
+    const dy = Math.abs(yCm - first.yCm);
+    return dx >= dy ? { xCm, yCm: first.yCm } : { xCm: first.xCm, yCm };
+  }
+  // 줄자 점을 하나 추가한다. 세 번째 클릭부터는(이미 두 점이 있으면) 이전 측정을 지우고 그 자리를 새
+  // 첫 점으로 삼아 다시 잰다(기존 동작 그대로).
   function addRulerPoint(xCm, yCm) {
     setRulerPoints((prev) => {
       if (prev.length === 1) {
-        const first = prev[0];
-        const dx = Math.abs(xCm - first.xCm);
-        const dy = Math.abs(yCm - first.yCm);
-        const second = dx >= dy ? { xCm, yCm: first.yCm } : { xCm: first.xCm, yCm };
-        return [first, second];
+        return [prev[0], axisConstrainedSecondPoint(prev[0], xCm, yCm)];
       }
       return prev.length >= 2 ? [{ xCm, yCm }] : [...prev, { xCm, yCm }];
     });
   }
+  // "줄자 좀 섹시하게 편하게 안될까" 요청: 첫 점을 찍은 뒤 클릭을 두 번째로 또 하기 전에도, 지금
+  // 마우스가 어디 있는지에 따라 두 번째 점이 어디에 찍힐지(끝점에 딱 붙는 것까지 포함해서) 점선으로
+  // 미리 보여준다 — 실제로 클릭 한 번 안 해도 눈으로 재보면서 딱 맞는 자리를 찾을 수 있어서 훨씬
+  // 편하다. hoverCm(실시간 마우스 좌표)에 nearestSnapPoint(끝점 인식)·axisConstrainedSecondPoint(가로·
+  // 세로 직선 보정)를 똑같이 적용해서, 이 미리보기가 실제로 클릭했을 때 찍히는 자리와 항상 일치한다.
+  const rulerPreviewPoint = useMemo(() => {
+    if (!rulerMode || rulerPoints.length !== 1 || !hoverCm) return null;
+    const snapped = nearestSnapPoint(hoverCm.xCm, hoverCm.yCm);
+    const raw = snapped || hoverCm;
+    return axisConstrainedSecondPoint(rulerPoints[0], raw.xCm, raw.yCm);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rulerMode, rulerPoints, hoverCm, rulerSnapPoints, renderScale]);
+  const rulerPreviewDistanceCm = rulerPreviewPoint
+    ? Math.hypot(rulerPreviewPoint.xCm - rulerPoints[0].xCm, rulerPreviewPoint.yCm - rulerPoints[0].yCm)
+    : null;
+  // 지금 마우스(hoverCm)가 어떤 끝점에 딱 붙을지(끝점 인식) 미리 알 수 있게, 그 점만 도드라지게
+  // 표시하기 위한 값 — 줄자 모드에서 두 점 다 아직 안 찍혔을 때, 또는 두 번째 점을 찍기 전에 모두
+  // 쓰인다(첫 점 찍을 때도, 두 번째 점 찍을 때도 "어디에 붙을지" 미리 보이면 편하다).
+  const rulerActiveSnapPoint = rulerMode && hoverCm && rulerPoints.length < 2 ? nearestSnapPoint(hoverCm.xCm, hoverCm.yCm) : null;
 
   // 회전된 상태(swapped)까지 반영해서, 화면에 실제로 보이는 모형의 사각 범위(cm)를 구한다 — 마퀴
   // 선택에서 "이 범위 안에 걸리는 모형"을 판단할 때 쓴다.
   function itemOnScreenBox(it) {
     const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
-    const swapped = rotation === 90 || rotation === 270;
-    const wCm = swapped ? it.depthCm : it.widthCm;
-    const hCm = swapped ? it.widthCm : it.depthCm;
+    const { w: wCm, h: hCm } = rotatedAabbSize(it.widthCm, it.depthCm, rotation);
     return { left: it.xCm, top: it.yCm, right: it.xCm + wCm, bottom: it.yCm + hCm };
   }
 
@@ -12779,10 +13177,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
 
       if (!drag.moved || !finalRect) {
         // "그냥 클릭"으로 본다: 줄자 모드면 그 자리에 점을 찍고, 아니면(Ctrl을 누르지 않은 한) 선택을 해제한다.
+        // ("줄자 좀 섹시하게 편하게" 요청) 예전엔 여기서 항상 "누르기 시작한 자리"(drag.startXCm/Y)에
+        // 점을 찍었는데, 그러면 손을 눌러서 드래그하듯 끌고 가서 놓아도 실제로는 "누른 순간"의 자리에
+        // 찍혀서 "끌어서 재는" 동작이 안 됐다. 이제는 hoverCm(실시간 마우스 좌표 — 손을 뗀 그 자리까지
+        // 계속 갱신됨)을 우선 쓰고, 무슨 이유로든 없으면 예전처럼 시작 자리를 그대로 쓴다 — 이러면
+        // 가만히 클릭만 해도(hoverCm ≈ 시작 자리라 결과가 똑같음), 눌러서 끌고 가서 놓아도(hoverCm이
+        // 놓은 자리를 가리킴) 둘 다 자연스럽게 동작하고, 위에서 보여주는 점선 미리보기(rulerPreviewPoint)
+        // 랑도 항상 같은 자리를 가리킨다.
         if (rulerMode) {
-          const snapped = nearestSnapPoint(drag.startXCm, drag.startYCm);
-          const xCm = snapped ? snapped.xCm : drag.startXCm;
-          const yCm = snapped ? snapped.yCm : drag.startYCm;
+          const raw = hoverCmRef.current || { xCm: drag.startXCm, yCm: drag.startYCm };
+          const snapped = nearestSnapPoint(raw.xCm, raw.yCm);
+          const xCm = snapped ? snapped.xCm : raw.xCm;
+          const yCm = snapped ? snapped.yCm : raw.yCm;
           addRulerPoint(xCm, yCm);
         } else if (!drag.addToSelection) {
           setSelectedPlacedIds(new Set());
@@ -13120,17 +13526,20 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               value={newShapeName}
               onChange={(e) => setNewShapeName(e.target.value)}
             />
-            <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-              {/* "ㄱ자·U자·한쪽둥근"은 새로 추가하는 화면에서는 더 이상 고를 수 없게 뺐다(요청: "새 모형
-                  추가에서 ㄱ자 U자 한쪽둥근 없애주고"). 예전에 이미 이 모양으로 등록해둔 모형·배치판은
-                  그대로 남아있고 화면에도 그대로 나오므로(isPoly/isRoundEnd 렌더 로직은 그대로 둠),
-                  기존 데이터에는 영향이 없다 — 앞으로 "새로" 만들 때만 이 세 가지를 선택할 수 없다.
+            <div style={{ display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+              {/* "U자·한쪽둥근"은 새로 추가하는 화면에서는 여전히 고를 수 없다(예전 요청: "새 모형 추가에서
+                  ㄱ자 U자 한쪽둥근 없애주고"). 다만 "ㄱ자 퍼즐책상은 메뉴에도 위 모양대로" 요청으로 ㄱ자는
+                  다시 고를 수 있게 되돌렸다(어느 모서리가 파였는지는 아래 모서리 아이콘으로 고른다).
+                  예전에 이미 U자·한쪽둥근으로 등록해둔 모형·배치판은 그대로 남아있고 화면에도 그대로
+                  나오므로(isPoly/isRoundEnd 렌더 로직은 그대로 둠), 기존 데이터에는 영향이 없다.
                   "(캐드형)"이라는 표기도 사무의자·회의의자 둘 다 없앴다(요청: "(캐드형)이라는 글자 없애주고"). */}
               {[
                 { key: "rect", label: "사각형" },
+                { key: "l", label: "ㄱ자" },
                 { key: "circle", label: "원형" },
                 { key: "chair", label: "사무의자" },
                 { key: "meetingchair", label: "회의의자" },
+                { key: "sofa", label: "쇼파" },
               ].map((opt) => (
                 <button
                   key={opt.key}
@@ -13188,6 +13597,46 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 </div>
               </div>
             )}
+            {/* "ㄱ자 퍼즐책상이 메뉴에 뒤집어져 있다" 요청으로 추가한 모서리 선택 — 잘려나간 모서리가
+                네 곳 중 어디인지 부호를 몰라도 아이콘만 보고 그대로 고를 수 있게 한다(고른 값은
+                handleAddShape에서 notch_width_cm/notch_depth_cm의 부호로 바뀌어 저장됨). 미니 아이콘은
+                24×24 정사각형에서 한쪽 모서리가 파인 모양을 그대로 그려서, 실제 결과와 똑같이 보인다. */}
+            {newShapeType === "l" && (
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>어느 모서리가 파였나요?</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {[
+                    { key: "tr", label: "오른쪽 위", points: "0,0 16,0 16,8 24,8 24,24 0,24" },
+                    { key: "tl", label: "왼쪽 위", points: "8,0 24,0 24,24 0,24 0,8 8,8" },
+                    { key: "br", label: "오른쪽 아래", points: "0,0 24,0 24,16 16,16 16,24 0,24" },
+                    { key: "bl", label: "왼쪽 아래", points: "0,0 24,0 24,24 8,24 8,16 0,16" },
+                  ].map((opt) => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setNewShapeCutCorner(opt.key)}
+                      title={opt.label}
+                      style={{
+                        ...miniBtnStyle,
+                        flex: 1,
+                        padding: 4,
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: 2,
+                        background: newShapeCutCorner === opt.key ? C.purpleBg : "transparent",
+                        borderColor: newShapeCutCorner === opt.key ? C.purple : C.lineSoft,
+                      }}
+                    >
+                      <svg width={22} height={22} viewBox="0 0 24 24">
+                        <polygon points={opt.points} fill={newShapeCutCorner === opt.key ? C.purple : C.lineSoft} />
+                      </svg>
+                      <span style={{ fontSize: 9.5, color: newShapeCutCorner === opt.key ? C.purple : C.muted }}>{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {/* 카테고리는 기존 목록에서 골라도 되고(자동완성), 새 이름을 직접 입력해도 된다. 비워두면 "기타"로 등록. */}
             <input
               style={{ ...smallInputStyle, width: "100%", marginBottom: 6, boxSizing: "border-box" }}
@@ -13225,7 +13674,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
               <button
                 onClick={() => setRulerMode((v) => !v)}
-                title="캔버스를 두 번 눌러 두 지점 사이 거리를 재보세요"
+                title="캔버스를 두 번 클릭하거나, 누른 채로 끌었다 놓아서 두 지점 사이 거리를 재보세요(실시간 미리보기)"
                 style={{
                   ...miniBtnStyle,
                   background: rulerMode ? C.ink : "transparent",
@@ -13500,6 +13949,19 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 {selectedSingleItem && (
                   <>
                     <input
+                      type="text"
+                      value={manualNameInput}
+                      onChange={(e) => setManualNameInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleApplyManualName();
+                      }}
+                      onBlur={handleApplyManualName}
+                      placeholder="이름"
+                      title="이 모형만의 이름(마우스를 올리면 보이는 말풍선·저장된 배치에 쓰임)"
+                      style={{ ...smallInputStyle, width: 100, boxSizing: "border-box" }}
+                    />
+                    <span style={{ fontSize: 12, color: C.lineSoft }}>|</span>
+                    <input
                       type="number"
                       value={manualWidthInput}
                       onChange={(e) => setManualWidthInput(e.target.value)}
@@ -13539,8 +14001,12 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               // 예전에 저장된 배치(rotated: true/false만 있던 옛 데이터)도 그대로 이어받는다.
               const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
               const swapped = rotation === 90 || rotation === 270;
-              const outerWPx = (swapped ? it.depthCm : it.widthCm) * renderScale;
-              const outerHPx = (swapped ? it.widthCm : it.depthCm) * renderScale;
+              // "제품 클릭하면 동그라미 기능 넣어서 회전 자유자재로도 가능하게" 요청으로 회전이 더
+              // 이상 90도 단위가 아닐 수 있어서, 바깥 테두리 크기는 rotatedAabbSize로 일반화했다 —
+              // 0/90/180/270도에서는 예전의 swapped 계산과 정확히 같은 값이 나온다(회귀 없음).
+              const outerAabb = rotatedAabbSize(it.widthCm, it.depthCm, rotation);
+              const outerWPx = outerAabb.w * renderScale;
+              const outerHPx = outerAabb.h * renderScale;
               const baseWPx = it.widthCm * renderScale;
               const baseHPx = it.depthCm * renderScale;
               const isPoly = it.shapeType === "l" || it.shapeType === "u";
@@ -13548,6 +14014,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               const isRoundEnd = it.shapeType === "roundend";
               const isChair = it.shapeType === "chair";
               const isMeetingChair = it.shapeType === "meetingchair";
+              const isSofa = it.shapeType === "sofa";
               const polyPoints = isPoly
                 ? shapePolygonPoints(it.shapeType, it.widthCm, it.depthCm, it.notchWidthCm, it.notchDepthCm)
                     .map((p) => p.join(","))
@@ -13564,7 +14031,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               // 의자류도 정도만 다를 뿐 같은 문제(둥근 모양 바깥의 네 귀퉁이가 안 칠해짐)를 안고 있다.
               // 그래서 이런 모양들은 바깥 네모 박스에는 더 이상 테두리·글로우를 주지 않고, 실제 모양을
               // 그리는 SVG 쪽에(파인 부분·둥근 모서리를 그대로 따라가도록) 선택 표시를 옮겼다.
-              const isNonRectShape = isPoly || isCircle || isRoundEnd || isChair || isMeetingChair;
+              const isNonRectShape = isPoly || isCircle || isRoundEnd || isChair || isMeetingChair || isSofa;
               const shapeStrokeWidth = isSelected ? 3 : isGrouped ? 2 : 1;
               const shapeStrokeDasharray = isGrouped && !isSelected ? "4 3" : undefined;
               const shapeSvgStyle = { display: "block", ...(isSelected ? { filter: "drop-shadow(0 0 4px rgba(107,92,165,0.6))" } : {}) };
@@ -13692,6 +14159,10 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
                         <MeetingChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
                       </svg>
+                    ) : isSofa ? (
+                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
+                        <SofaTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
+                      </svg>
                     ) : (
                       <div style={{ width: "100%", height: "100%", background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 3, boxSizing: "border-box" }} />
                     )}
@@ -13755,6 +14226,42 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                   >
                     ×
                   </button>
+                  {/* "제품 클릭하면 동그라미 기능 넣어서 회전 자유자재로도" 요청: 선택된 모형 위에만
+                      나타나는 동그라미 손잡이 — 끌면 90도 단위가 아니라 원하는 각도로 자유롭게 돌아간다
+                      (피그마·파워포인트 방식). 줄자 모드에선 클릭이 전부 줄자 점 찍기로 쓰이므로
+                      숨긴다. 손잡이와 몸통을 잇는 가는 줄기(stem)도 함께 그려서 "이게 회전 손잡이"라는
+                      게 한눈에 보이게 했다. */}
+                  {isSelected && !rulerMode && (
+                    <>
+                      <div
+                        className="layoutsim-no-print"
+                        style={{ position: "absolute", top: -14, left: "50%", width: 1, height: 14, background: C.purple, opacity: 0.6, transform: "translateX(-50%)", pointerEvents: "none" }}
+                      />
+                      <div
+                        onMouseDown={startRotatePlaced(it)}
+                        onDragStart={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        title="끌어서 자유롭게 회전"
+                        className="layoutsim-no-print"
+                        style={{
+                          position: "absolute",
+                          top: -20,
+                          left: "50%",
+                          width: 12,
+                          height: 12,
+                          borderRadius: "50%",
+                          background: C.purple,
+                          border: "1.5px solid #fff",
+                          boxShadow: "0 1px 3px rgba(28,43,58,0.3)",
+                          transform: "translateX(-50%)",
+                          cursor: "grab",
+                        }}
+                      />
+                    </>
+                  )}
                   {/* 크기 조절 손잡이: 오른쪽 아래 모서리를 끌면 가로·세로가 바뀐다. 이 손잡이에서 시작한
                       드래그는 항목 전체를 옮기는 draggable 동작이나 줄자 클릭으로 잘못 이어지지 않도록
                       막아준다(stopPropagation + dragstart 취소). 예전에는 bottom/right를 -4로 줘서 이
@@ -13762,28 +14269,34 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       장치를 추가한 뒤로 모형이 배치판 아래·오른쪽 벽에 딱 붙었을 때 이 손잡이의 튀어나온
                       부분이 그 안전장치에 잘려서 반쪽만 보이는 등 "디자인을 침범하는" 것처럼 보이는
                       문제가 있었다. 그래서 손잡이를 모형 박스 안쪽에 완전히 들어오도록(0,0 기준) 옮겨서,
-                      모형이 배치판 어느 벽에 붙어 있어도 손잡이가 잘리는 일이 없게 했다. */}
-                  <div
-                    onMouseDown={startResizePlaced(it, swapped)}
-                    onDragStart={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    title="끌어서 크기 조절"
-                    className="layoutsim-no-print"
-                    style={{
-                      position: "absolute",
-                      bottom: 0,
-                      right: 0,
-                      width: 10,
-                      height: 10,
-                      borderRadius: 2,
-                      background: C.ink,
-                      border: "1px solid #fff",
-                      cursor: "nwse-resize",
-                    }}
-                  />
+                      모형이 배치판 어느 벽에 붙어 있어도 손잡이가 잘리는 일이 없게 했다.
+                      ("제품 클릭하면... 회전 자유자재로" 요청으로 회전이 90도 단위를 벗어날 수 있게
+                      되면서, 이 손잡이의 "오른쪽 아래를 끌면 가로·세로가 커진다"는 계산은 90도 단위
+                      회전에서만 정확하므로, 자유 각도로 돌아간 상태에서는 혼란을 막기 위해 숨긴다 —
+                      그 상태에서 크기를 바꾸려면 위 가로·세로 직접 입력칸을 쓰면 된다.) */}
+                  {rotation % 90 === 0 && (
+                    <div
+                      onMouseDown={startResizePlaced(it, swapped)}
+                      onDragStart={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      title="끌어서 크기 조절"
+                      className="layoutsim-no-print"
+                      style={{
+                        position: "absolute",
+                        bottom: 0,
+                        right: 0,
+                        width: 10,
+                        height: 10,
+                        borderRadius: 2,
+                        background: C.ink,
+                        border: "1px solid #fff",
+                        cursor: "nwse-resize",
+                      }}
+                    />
+                  )}
                 </div>
               );
             })}
@@ -13809,82 +14322,139 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 }}
               />
             )}
-            {/* 줄자 모드일 때는 모형 끝점(모서리)마다 옅은 점을 미리 보여줘서, 어디를 누르면
-                딱 붙는지("끝점 인식") 미리 알 수 있게 한다. */}
+            {/* "줄자 좀 섹시하게 편하게 안될까" 요청으로 줄자 전체를 다듬었다. 예전엔 점 두 번 찍기
+                전까지는 화면에 아무 것도 안 보이다가 두 번째를 찍는 순간 갑자기 선이 나타났는데, 이제는
+                첫 점을 찍자마자 지금 마우스 위치를 따라 점선 미리보기(선+거리)가 실시간으로 따라다녀서
+                두 번째 점을 어디에 찍을지 눈으로 미리 재보면서 정할 수 있다("편하게"). 손을 눌러서
+                그대로 끌고 가서 놓아도(드래그) 그 자리에 바로 찍히므로 "클릭-클릭"이든 "누르고 끌기"든
+                둘 다 자연스럽게 된다. 끝점(모서리)마다 있는 옅은 점도, 지금 붙으려는 자리(끝점 인식)는
+                꽉 찬 점으로 도드라지게 보여준다. 찍힌 선은 단순한 점선 대신 도면(CAD)에서 보는 치수선
+                처럼 양 끝에 짧은 눈금을 달고, 흰 테두리로 배경 격자와 안 섞이게 했다. */}
             {rulerMode &&
-              rulerSnapPoints.map((p, idx) => (
-                <div
-                  key={`ruler-snap-${idx}`}
-                  className="layoutsim-no-print"
-                  style={{
-                    position: "absolute",
-                    left: p.xCm * renderScale - 3,
-                    top: p.yCm * renderScale - 3,
-                    width: 6,
-                    height: 6,
-                    borderRadius: "50%",
-                    border: `1px solid ${C.purple}`,
-                    background: "#fff",
-                    pointerEvents: "none",
-                  }}
-                />
-              ))}
-            {/* 줄자: 찍은 점(1~2개)과, 두 점이 모이면 그 사이를 잇는 선 + 실제 거리(cm/m) 표시.
-                클릭/드래그를 막지 않도록 pointerEvents는 항상 none. */}
-            {rulerPoints.map((p, idx) => (
-              <div
-                key={`ruler-pt-${idx}`}
-                style={{
-                  position: "absolute",
-                  left: p.xCm * renderScale - 4,
-                  top: p.yCm * renderScale - 4,
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  background: "#e11d48",
-                  border: "1px solid #fff",
-                  pointerEvents: "none",
-                }}
-              />
-            ))}
-            {rulerPoints.length === 2 && (
+              rulerSnapPoints.map((p, idx) => {
+                const isActive =
+                  !!rulerActiveSnapPoint &&
+                  Math.abs(p.xCm - rulerActiveSnapPoint.xCm) < 1e-6 &&
+                  Math.abs(p.yCm - rulerActiveSnapPoint.yCm) < 1e-6;
+                const r = isActive ? 5 : 3;
+                return (
+                  <div
+                    key={`ruler-snap-${idx}`}
+                    className="layoutsim-no-print"
+                    style={{
+                      position: "absolute",
+                      left: p.xCm * renderScale - r,
+                      top: p.yCm * renderScale - r,
+                      width: r * 2,
+                      height: r * 2,
+                      borderRadius: "50%",
+                      border: `1.5px solid ${C.purple}`,
+                      background: isActive ? C.purple : "#fff",
+                      boxShadow: isActive ? "0 0 0 3px rgba(107,92,165,0.25)" : "none",
+                      transition: "all 80ms ease-out",
+                      pointerEvents: "none",
+                    }}
+                  />
+                );
+              })}
+            {/* 줄자: 찍은 점(1~2개) + 아직 안 찍힌 두 번째 점의 실시간 미리보기, 그 사이를 잇는 선
+                (찍힌 건 실선+눈금, 미리보기는 옅은 점선) + 실제 거리(cm/m) 표시. 클릭/드래그를 막지
+                않도록 pointerEvents는 항상 none. */}
+            {(rulerPoints.length === 2 || (rulerPoints.length === 1 && rulerPreviewPoint)) && (
               <svg
                 width={worldWidthPx}
                 height={worldHeightPx}
                 style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
               >
-                <line
-                  x1={rulerPoints[0].xCm * renderScale}
-                  y1={rulerPoints[0].yCm * renderScale}
-                  x2={rulerPoints[1].xCm * renderScale}
-                  y2={rulerPoints[1].yCm * renderScale}
-                  stroke="#e11d48"
-                  strokeWidth={2}
-                  strokeDasharray="6,4"
-                />
+                {(() => {
+                  const isLocked = rulerPoints.length === 2;
+                  const p0 = rulerPoints[0];
+                  const p1 = isLocked ? rulerPoints[1] : rulerPreviewPoint;
+                  const x1 = p0.xCm * renderScale, y1 = p0.yCm * renderScale;
+                  const x2 = p1.xCm * renderScale, y2 = p1.yCm * renderScale;
+                  const ticks = perpendicularTicks(x1, y1, x2, y2, 9);
+                  const stroke = "#e11d48";
+                  const opacity = isLocked ? 1 : 0.55;
+                  return (
+                    <g opacity={opacity}>
+                      {/* 배경 격자·모형 위에서도 잘 보이도록, 색 있는 선보다 살짝 굵은 흰 테두리를 먼저 깔아둔다. */}
+                      <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#fff" strokeWidth={isLocked ? 4 : 3} strokeLinecap="round" />
+                      <line
+                        x1={x1} y1={y1} x2={x2} y2={y2}
+                        stroke={stroke}
+                        strokeWidth={isLocked ? 2 : 1.5}
+                        strokeDasharray={isLocked ? undefined : "5,4"}
+                        strokeLinecap="round"
+                      />
+                      {/* 치수선처럼 양 끝에 직각으로 짧은 눈금을 그려서 "정확히 여기부터 여기까지"를 표시한다. */}
+                      <line x1={ticks.a.x1} y1={ticks.a.y1} x2={ticks.a.x2} y2={ticks.a.y2} stroke={stroke} strokeWidth={isLocked ? 2 : 1.5} strokeLinecap="round" />
+                      <line x1={ticks.b.x1} y1={ticks.b.y1} x2={ticks.b.x2} y2={ticks.b.y2} stroke={stroke} strokeWidth={isLocked ? 2 : 1.5} strokeLinecap="round" />
+                    </g>
+                  );
+                })()}
               </svg>
             )}
-            {rulerDistanceCm != null && (
+            {rulerPoints.map((p, idx) => (
+              <div
+                key={`ruler-pt-${idx}`}
+                style={{
+                  position: "absolute",
+                  left: p.xCm * renderScale - 5,
+                  top: p.yCm * renderScale - 5,
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  background: "#e11d48",
+                  border: "2px solid #fff",
+                  boxShadow: "0 1px 3px rgba(28,43,58,0.35)",
+                  pointerEvents: "none",
+                }}
+              />
+            ))}
+            {/* 아직 확정되지 않은 두 번째 점(미리보기) — 손을 떼기 전이라 속이 빈 고스트 점으로 구분한다. */}
+            {rulerPoints.length === 1 && rulerPreviewPoint && (
               <div
                 className="layoutsim-no-print"
                 style={{
                   position: "absolute",
-                  left: ((rulerPoints[0].xCm + rulerPoints[1].xCm) / 2) * renderScale,
-                  top: ((rulerPoints[0].yCm + rulerPoints[1].yCm) / 2) * renderScale,
-                  transform: "translate(-50%, -50%)",
-                  background: "#e11d48",
-                  color: "#fff",
-                  fontSize: 11,
-                  fontWeight: 600,
-                  padding: "2px 6px",
-                  borderRadius: 4,
-                  whiteSpace: "nowrap",
+                  left: rulerPreviewPoint.xCm * renderScale - 5,
+                  top: rulerPreviewPoint.yCm * renderScale - 5,
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  background: "rgba(225,29,72,0.25)",
+                  border: "2px solid #e11d48",
                   pointerEvents: "none",
                 }}
-              >
-                {rulerDistanceCm >= 100 ? `${(rulerDistanceCm / 100).toFixed(2)}m (${rulerDistanceCm.toFixed(0)}cm)` : `${rulerDistanceCm.toFixed(1)}cm`}
-              </div>
+              />
             )}
+            {(rulerDistanceCm != null || rulerPreviewDistanceCm != null) && (() => {
+              const isLocked = rulerDistanceCm != null;
+              const dist = isLocked ? rulerDistanceCm : rulerPreviewDistanceCm;
+              const p1 = isLocked ? rulerPoints[1] : rulerPreviewPoint;
+              return (
+                <div
+                  className="layoutsim-no-print"
+                  style={{
+                    position: "absolute",
+                    left: ((rulerPoints[0].xCm + p1.xCm) / 2) * renderScale,
+                    top: ((rulerPoints[0].yCm + p1.yCm) / 2) * renderScale,
+                    transform: "translate(-50%, -50%)",
+                    background: isLocked ? "#e11d48" : "rgba(225,29,72,0.85)",
+                    color: "#fff",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: "3px 7px",
+                    borderRadius: 999,
+                    boxShadow: isLocked ? "0 2px 6px rgba(28,43,58,0.3)" : "none",
+                    whiteSpace: "nowrap",
+                    pointerEvents: "none",
+                  }}
+                >
+                  📏 {dist >= 100 ? `${(dist / 100).toFixed(2)}m (${dist.toFixed(0)}cm)` : `${dist.toFixed(1)}cm`}
+                </div>
+              );
+            })()}
           </div>
           </div>
           </div>
