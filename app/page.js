@@ -11907,15 +11907,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     setViewPan({ x: 0, y: 0 });
   }
 
-  // Shift를 누른 채 배치판 창을 끌면(확대돼서 방의 일부만 보일 때) 그 보이는 위치를 옮긴다. 마퀴
-  // (드래그로 여러 모형 선택)·모형 끌기·크기조절·줄자 찍기 등 기존 동작은 모두 Shift 없이 그대로 쓸
-  // 수 있게, 캡처 단계(bubble 이전)에서 Shift가 눌려있을 때만 가로채서(stopPropagation) 화면 이동으로
-  // 처리하고, 그렇지 않으면 그대로 흘려보내 기존 동작에 아무 영향이 없게 한다. 딱 맞춰 보이는
-  // 배율(zoomLevel<=1)에서는 옮겨봐도 더 볼 게 없어 의미가 없으므로 그때는 가로채지 않는다(그러면
-  // 예전처럼 Shift+끌기가 빈 캔버스 마퀴 선택으로 그대로 동작한다 — 다만 마퀴에 무언가를 "더하는"
-  // 동작의 단축키는 아래에서 Ctrl(⌘)로 옮겨졌다. Shift는 이제 "화면 이동" 전용으로 통일한다).
+  // Shift를 누른 채 배치판 창을 끌면 그 보이는 위치를 옮긴다. 마퀴(드래그로 여러 모형 선택)·모형
+  // 끌기·크기조절·줄자 찍기 등 기존 동작은 모두 Shift 없이 그대로 쓸 수 있게, 캡처 단계(bubble
+  // 이전)에서 Shift가 눌려있을 때만 가로채서(stopPropagation) 화면 이동으로 처리하고, 그렇지 않으면
+  // 그대로 흘려보내 기존 동작에 아무 영향이 없게 한다. Shift는 "화면 이동" 전용으로 통일한다(마퀴에
+  // 더하는 동작의 단축키는 Ctrl(⌘)).
+  // ("줌아웃이든 줌인이든 시프트 누르고 자유자재로 이동" 요청 전에는, 딱 맞춤 배율(zoomLevel<=1)일
+  // 땐 방이 창 안에 다 들어와 있어 옮겨봐도 의미가 없다고 보고 그때는 가로채지 않았었다. 그런데
+  // "줌아웃은 점이 될 정도까지"로 딱 맞춤보다 더 축소할 수 있게 되면서, 축소된 상태에서도 방을
+  // 대지(전체판) 안 원하는 자리로 옮겨보고 싶은 경우가 생겨 — 이제 배율과 상관없이 항상 Shift+끌기로
+  // 화면을 이동할 수 있게 열어뒀다.)
   function handleViewportMouseDownCapture(e) {
-    if (!e.shiftKey || e.button !== 0 || zoomLevel <= 1) return;
+    if (!e.shiftKey || e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     panDragRef.current = { startClientX: e.clientX, startClientY: e.clientY, startPan: { x: viewPan.x, y: viewPan.y }, moved: false };
@@ -13197,7 +13200,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               유지하게 해서 이 줄 자체가 두 줄로 접히는 일이 없도록 한다. */}
           <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
             <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0 }}>
-              공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요(Ctrl+끌면 기존 선택에 더하기). 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요. 마우스 휠로 확대·축소할 수 있고, 확대한 상태에서는 Shift를 누른 채 끌면 화면을 이동할 수 있어요.
+              공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요(Ctrl+끌면 기존 선택에 더하기). 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요. 마우스 휠로 확대·축소할 수 있고, Shift를 누른 채 끌면 화면을 자유롭게 이동할 수 있어요.
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
               <button
