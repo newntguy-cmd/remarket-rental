@@ -11113,7 +11113,10 @@ function perpendicularTicks(x1, y1, x2, y2, tickLen) {
 function shapePolygonPoints(shapeType, widthCm, depthCm, notchWidthCm, notchDepthCm) {
   const W = Number(widthCm) || 0;
   const D = Number(depthCm) || 0;
-  if (shapeType === "l") {
+  if (shapeType === "l" || shapeType === "curvedl") {
+    // ("곡선ㄱ자" 책상은 파인 모서리가 직각 대신 부드러운 곡선으로 이어질 뿐, 어느 모서리가 파였는지를
+    // 정하는 규칙(가로·세로 값의 부호)과 다각형 좌표 자체는 ㄱ자와 완전히 같다 — 실제 곡선 윤곽선은
+    // curvedLDeskPathD가 따로 그리고, 이 다각형은 충돌 판정 등 보조 용도로만 쓰인다.)
     // "ㄱ자 퍼즐책상이 메뉴에 뒤집어져 있다" 신고: 예전엔 파인 모서리가 항상 "오른쪽 위" 한 가지로만
     // 고정돼 있었는데, 실제 ㄱ자 퍼즐책상은 제품마다 어느 모서리가 파였는지가 다르다(참고 사진은
     // "왼쪽 아래"가 파인 모양). DB에 새 칼럼을 추가하지 않고 이미 있는 "파인 모서리 가로/세로" 값의
@@ -11204,7 +11207,10 @@ function shapePolygonPoints(shapeType, widthCm, depthCm, notchWidthCm, notchDept
 function shapeSubRects(shapeType, widthCm, depthCm, notchWidthCm, notchDepthCm) {
   const W = Number(widthCm) || 0;
   const D = Number(depthCm) || 0;
-  if (shapeType === "l") {
+  if (shapeType === "l" || shapeType === "curvedl") {
+    // ("곡선ㄱ자" 책상의 충돌 판정은 ㄱ자와 똑같이 직각으로 파인 사각형 2조각으로 근사한다 — 실제
+    // 곡선은 이 사각형 모서리보다 아주 살짝 안쪽으로만 들어가는 정도라, 자리 차지 계산에는 차이가
+    // 거의 없다.)
     const rawNw = Number(notchWidthCm) || 0;
     const rawNd = Number(notchDepthCm) || 0;
     const cutLeft = rawNw < 0;
@@ -11413,6 +11419,37 @@ function roundEndTablePathD(widthCm, depthCm) {
   return `M 0,0 L ${W},0 L ${W},${rectDepth} A ${radius},${radius} 0 0 1 0,${rectDepth} Z`;
 }
 
+// "책상류 퍼즐은... 하단이 직각이 아니라 아로져있어" 요청으로 추가한 "곡선ㄱ자" 책상(깊은 몸통과 얕은
+// 날개가 부드러운 곡선으로 이어지는 모양) 외곽선을 SVG path로 그린다. 파인 모서리가 네 곳 중 어디인지
+// 정하는 규칙(notchWidthCm·notchDepthCm 값의 부호로 왼쪽/아래쪽이 파였는지 정함)은 ㄱ자(l)와 완전히
+// 똑같다 — 다만 ㄱ자는 그 모서리를 직각(꺾인 두 직선)으로 그리는데, 이 모양은 같은 자리를 3차 베지어
+// 곡선 하나로 매끄럽게 잇는다. sCurve 헬퍼는 원래 직각을 이루던 두 점(ax,ay)→(bx,by) 사이를, 서로
+// 반대쪽 끝에 제어점을 맞춰서(대칭) "먼저 한쪽으로, 이어서 반대쪽으로 볼록"하게 흐르는 S자 곡선으로
+// 잇는다 — 참고 도면(3종류 폭 1400/1600/1800mm, 몸통 깊이 1200mm·날개 깊이 690mm)에 나온 것과 같은
+// 느낌의 부드러운 전환이다. 파인 부분이 없으면(날개 폭이 0, 예: 1400mm 폭 기본형) 그냥 사각형이 된다.
+function curvedLDeskPathD(widthCm, depthCm, notchWidthCm, notchDepthCm) {
+  const W = Number(widthCm) || 0;
+  const D = Number(depthCm) || 0;
+  const rawNw = Number(notchWidthCm) || 0;
+  const rawNd = Number(notchDepthCm) || 0;
+  const cutLeft = rawNw < 0;
+  const cutBottom = rawNd < 0;
+  const nw = Math.min(Math.max(Math.abs(rawNw), 0), Math.max(W - 1, 0));
+  const nd = Math.min(Math.max(Math.abs(rawNd), 0), Math.max(D - 1, 0));
+  const sCurve = (ax, ay, bx, by) => `C ${ax},${by} ${bx},${ay} ${bx},${by}`;
+  if (nw <= 0 || nd <= 0) return `M 0,0 L ${W},0 L ${W},${D} L 0,${D} Z`;
+  if (cutLeft && cutBottom) {
+    return `M 0,0 L ${W},0 L ${W},${D} L ${nw},${D} ${sCurve(nw, D, 0, D - nd)} L 0,0 Z`;
+  }
+  if (cutLeft) {
+    return `M ${nw},0 L ${W},0 L ${W},${D} L 0,${D} L 0,${nd} ${sCurve(0, nd, nw, 0)} Z`;
+  }
+  if (cutBottom) {
+    return `M 0,0 L ${W},0 L ${W},${D - nd} ${sCurve(W, D - nd, W - nw, D)} L 0,${D} Z`;
+  }
+  return `M 0,0 L ${W - nw},0 ${sCurve(W - nw, 0, W, nd)} L ${W},${D} L 0,${D} Z`;
+}
+
 // 사무용 의자를 캐드(CAD) 도면처럼 위에서 내려다본 모양으로 그린다. 사용자가 직접 올려준 참고 이미지
 // (주차배치도 안 의자 기호 — 의자가 옆으로 돌아간 채 찍혀 있었다)를 확대해서 확인해보니 "방석과 헤드가
 // 있고 양옆에 팔걸이가 있는" 사무의자를 위에서 본 모습이었다: 둥근 네모 두 덩어리(헤드/등받이 + 방석)가
@@ -11610,7 +11647,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   const [shapes, setShapes] = useState([]);
   const [loadingShapes, setLoadingShapes] = useState(true);
   const [newShapeName, setNewShapeName] = useState("");
-  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "u"(U자) | "circle"(원형) | "roundend"(한쪽둥근) | "chair"(사무의자) | "meetingchair"(회의의자) | "sofa"(쇼파)
+  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "curvedl"(곡선ㄱ자책상) | "u"(U자) | "circle"(원형) | "roundend"(한쪽둥근) | "chair"(사무의자) | "meetingchair"(회의의자) | "sofa"(쇼파)
   const [newShapeWidth, setNewShapeWidth] = useState("");
   const [newShapeDepth, setNewShapeDepth] = useState("");
   const [newShapeNotchWidth, setNewShapeNotchWidth] = useState(""); // ㄱ자: 잘려나간 모서리, U자: 안쪽 파인 부분
@@ -11730,7 +11767,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   async function handleAddShape() {
     const w = Number(newShapeWidth);
     const d = Number(newShapeDepth);
-    const isPoly = newShapeType === "l" || newShapeType === "u";
+    const isPoly = newShapeType === "l" || newShapeType === "curvedl" || newShapeType === "u";
     const nw = isPoly ? Number(newShapeNotchWidth) : null;
     const nd = isPoly ? Number(newShapeNotchDepth) : null;
     if (!newShapeName.trim()) {
@@ -11743,7 +11780,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     }
     if (isPoly) {
       if (!nw || !nd) {
-        alert(newShapeType === "l" ? "잘려나간 모서리의 가로·세로 크기(cm)를 입력해주세요." : "안쪽 파인 부분의 가로·세로 크기(cm)를 입력해주세요.");
+        alert(newShapeType === "l" || newShapeType === "curvedl" ? "잘려나간 모서리의 가로·세로 크기(cm)를 입력해주세요." : "안쪽 파인 부분의 가로·세로 크기(cm)를 입력해주세요.");
         return;
       }
       if (nw >= w || nd >= d) {
@@ -11761,8 +11798,9 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     // 세로를 음수로) — DB 칼럼을 새로 추가하지 않고도 shapePolygonPoints/shapeSubRects가 그 부호를
     // 보고 어느 모서리인지 알아낸다. 화면 입력칸(newShapeNotchWidth/Depth)에는 항상 양수 크기만 넣게
     // 해서 사용자가 직접 음수를 입력할 일은 없다.
-    const signedNw = isPoly && newShapeType === "l" && (newShapeCutCorner === "tl" || newShapeCutCorner === "bl") ? -Math.abs(nw) : nw;
-    const signedNd = isPoly && newShapeType === "l" && (newShapeCutCorner === "bl" || newShapeCutCorner === "br") ? -Math.abs(nd) : nd;
+    const isLShaped = newShapeType === "l" || newShapeType === "curvedl";
+    const signedNw = isPoly && isLShaped && (newShapeCutCorner === "tl" || newShapeCutCorner === "bl") ? -Math.abs(nw) : nw;
+    const signedNd = isPoly && isLShaped && (newShapeCutCorner === "bl" || newShapeCutCorner === "br") ? -Math.abs(nd) : nd;
     const { error } = await supabase.from("layout_shapes").insert({
       name: newShapeName.trim(),
       shape_type: newShapeType,
@@ -11868,6 +11906,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     const isPoly = shapeType === "l" || shapeType === "u";
     const isCircle = shapeType === "circle";
     const isRoundEnd = shapeType === "roundend";
+    const isCurvedL = shapeType === "curvedl";
     const isChair = shapeType === "chair";
     const isMeetingChair = shapeType === "meetingchair";
     const isSofa = shapeType === "sofa";
@@ -11917,6 +11956,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         ) : isRoundEnd ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
             <path d={roundEndTablePathD(s.width_cm, s.depth_cm)} fill={C.purpleBg} stroke={C.purple} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
+          </svg>
+        ) : isCurvedL ? (
+          <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
+            <path
+              d={curvedLDeskPathD(s.width_cm, s.depth_cm, s.notch_width_cm, s.notch_depth_cm)}
+              fill={C.purpleBg}
+              stroke={C.purple}
+              strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12}
+            />
           </svg>
         ) : isChair ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
@@ -13673,10 +13721,14 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                   다시 고를 수 있게 되돌렸다(어느 모서리가 파였는지는 아래 모서리 아이콘으로 고른다).
                   예전에 이미 U자·한쪽둥근으로 등록해둔 모형·배치판은 그대로 남아있고 화면에도 그대로
                   나오므로(isPoly/isRoundEnd 렌더 로직은 그대로 둠), 기존 데이터에는 영향이 없다.
-                  "(캐드형)"이라는 표기도 사무의자·회의의자 둘 다 없앴다(요청: "(캐드형)이라는 글자 없애주고"). */}
+                  "(캐드형)"이라는 표기도 사무의자·회의의자 둘 다 없앴다(요청: "(캐드형)이라는 글자 없애주고").
+                  "책상류 퍼즐은... 하단이 직각이 아니라 아로져있어" 요청으로 "곡선ㄱ자"를 ㄱ자 바로
+                  옆에 추가했다 — 파인 모서리를 고르는 방식은 ㄱ자와 완전히 같고, 그 모서리를 직각이 아닌
+                  부드러운 곡선으로 그린다는 점만 다르다. */}
               {[
                 { key: "rect", label: "사각형" },
                 { key: "l", label: "ㄱ자" },
+                { key: "curvedl", label: "곡선ㄱ자" },
                 { key: "circle", label: "원형" },
                 { key: "chair", label: "사무의자" },
                 { key: "meetingchair", label: "회의의자" },
@@ -13715,10 +13767,10 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 onChange={(e) => setNewShapeDepth(e.target.value)}
               />
             </div>
-            {(newShapeType === "l" || newShapeType === "u") && (
+            {(newShapeType === "l" || newShapeType === "curvedl" || newShapeType === "u") && (
               <div style={{ marginBottom: 6 }}>
                 <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>
-                  {newShapeType === "l" ? "잘려나간 모서리 크기(cm)" : "안쪽 파인 부분 크기(cm)"}
+                  {newShapeType === "l" || newShapeType === "curvedl" ? "잘려나간 모서리 크기(cm)" : "안쪽 파인 부분 크기(cm)"}
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
                   <input
@@ -13742,7 +13794,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 네 곳 중 어디인지 부호를 몰라도 아이콘만 보고 그대로 고를 수 있게 한다(고른 값은
                 handleAddShape에서 notch_width_cm/notch_depth_cm의 부호로 바뀌어 저장됨). 미니 아이콘은
                 24×24 정사각형에서 한쪽 모서리가 파인 모양을 그대로 그려서, 실제 결과와 똑같이 보인다. */}
-            {newShapeType === "l" && (
+            {(newShapeType === "l" || newShapeType === "curvedl") && (
               <div style={{ marginBottom: 6 }}>
                 <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>어느 모서리가 파였나요?</div>
                 <div style={{ display: "flex", gap: 6 }}>
@@ -14153,6 +14205,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               const isPoly = it.shapeType === "l" || it.shapeType === "u";
               const isCircle = it.shapeType === "circle";
               const isRoundEnd = it.shapeType === "roundend";
+              const isCurvedL = it.shapeType === "curvedl";
               const isChair = it.shapeType === "chair";
               const isMeetingChair = it.shapeType === "meetingchair";
               const isSofa = it.shapeType === "sofa";
@@ -14172,7 +14225,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               // 의자류도 정도만 다를 뿐 같은 문제(둥근 모양 바깥의 네 귀퉁이가 안 칠해짐)를 안고 있다.
               // 그래서 이런 모양들은 바깥 네모 박스에는 더 이상 테두리·글로우를 주지 않고, 실제 모양을
               // 그리는 SVG 쪽에(파인 부분·둥근 모서리를 그대로 따라가도록) 선택 표시를 옮겼다.
-              const isNonRectShape = isPoly || isCircle || isRoundEnd || isChair || isMeetingChair || isSofa;
+              const isNonRectShape = isPoly || isCircle || isRoundEnd || isCurvedL || isChair || isMeetingChair || isSofa;
               const shapeStrokeWidth = isSelected ? 3 : isGrouped ? 2 : 1;
               const shapeStrokeDasharray = isGrouped && !isSelected ? "4 3" : undefined;
               // (버그 수정) "동그라미 주위로 네모박스의 희미한 잔상이 안보이니?" 신고 — 선택했을 때
@@ -14306,6 +14359,17 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                           vectorEffect="non-scaling-stroke"
                         />
                       </svg>
+                    ) : isCurvedL ? (
+                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
+                        <path
+                          d={curvedLDeskPathD(it.widthCm, it.depthCm, it.notchWidthCm, it.notchDepthCm)}
+                          fill={C.purpleBg}
+                          stroke={C.purple}
+                          strokeWidth={shapeStrokeWidth}
+                          strokeDasharray={shapeStrokeDasharray}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      </svg>
                     ) : isChair ? (
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
                         <ChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
@@ -14344,9 +14408,9 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                   >
                     {it.widthCm}×{it.depthCm}
                   </div>
-                  {/* ㄱ자·U자만 좌우반전(퍼즐책상 좌향/우향)이 의미가 있어서, 사각형에는 안 보여준다.
+                  {/* ㄱ자·U자·곡선ㄱ자만 좌우반전(퍼즐책상 좌향/우향)이 의미가 있어서, 사각형에는 안 보여준다.
                       버튼 클릭이 캔버스까지 올라가서 줄자 클릭으로 잘못 잡히지 않도록 stopPropagation. */}
-                  {isPoly && (
+                  {(isPoly || isCurvedL) && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
