@@ -12591,7 +12591,14 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       }
       if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
       e.preventDefault();
-      const step = e.shiftKey ? 20 : 5;
+      // "배치 후에 키보드로 움직이는거 미세조정 가능하게 0.1cm 단위로" 요청: 기존 방향키(5cm)·
+      // Shift+방향키(20cm, 더 크게) 두 단계에, Ctrl(⌘)+방향키를 0.1cm 단위의 아주 미세한 조정용으로
+      // 새로 추가했다. Ctrl은 다른 곳(복사·붙여넣기, 마퀴에 더하기)에서 이미 쓰고 있지만 방향키와는
+      // 겹치지 않아 새로 써도 안전하다.
+      const step = e.ctrlKey || e.metaKey ? 0.1 : e.shiftKey ? 20 : 5;
+      // 0.1cm처럼 소수 단위로 계속 더하다 보면 부동소수점 오차가 쌓일 수 있어(예: 0.1+0.1+0.1 =
+      // 0.30000000000000004), 실제로 적용하는 좌표는 항상 소수 첫째 자리로 반올림해서 깔끔하게 유지한다.
+      const round1 = (v) => Math.round(v * 10) / 10;
       let dx = 0;
       let dy = 0;
       if (e.key === "ArrowUp") dy = -step;
@@ -12607,8 +12614,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           const swapped = rotation === 90 || rotation === 270;
           const wCm = swapped ? it.depthCm : it.widthCm;
           const hCm = swapped ? it.widthCm : it.depthCm;
-          const placed = moveWithClamp(it.xCm + dx, it.yCm + dy, wCm, hCm, it.id);
-          setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, xCm: placed.xCm, yCm: placed.yCm } : p)));
+          const placed = moveWithClamp(round1(it.xCm + dx), round1(it.yCm + dy), wCm, hCm, it.id);
+          setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, xCm: round1(placed.xCm), yCm: round1(placed.yCm) } : p)));
           return;
         }
       }
@@ -12616,7 +12623,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       if (!anyItem) return;
       const memberIds = getMoveGroupIds(anyItem);
       const { dx: cdx, dy: cdy } = clampGroupDelta(memberIds, dx, dy);
-      setPlacedItems((prev) => prev.map((p) => (memberIds.includes(p.id) ? { ...p, xCm: p.xCm + cdx, yCm: p.yCm + cdy } : p)));
+      setPlacedItems((prev) => prev.map((p) => (memberIds.includes(p.id) ? { ...p, xCm: round1(p.xCm + cdx), yCm: round1(p.yCm + cdy) } : p)));
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -13200,7 +13207,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               유지하게 해서 이 줄 자체가 두 줄로 접히는 일이 없도록 한다. */}
           <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
             <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0 }}>
-              공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요(Ctrl+끌면 기존 선택에 더하기). 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요. 마우스 휠로 확대·축소할 수 있고, Shift를 누른 채 끌면 화면을 자유롭게 이동할 수 있어요.
+              공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요(Ctrl+끌면 기존 선택에 더하기). 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게, Ctrl+방향키는 0.1cm 단위로 아주 정밀하게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요. 마우스 휠로 확대·축소할 수 있고, Shift를 누른 채 끌면 화면을 자유롭게 이동할 수 있어요.
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
               <button
