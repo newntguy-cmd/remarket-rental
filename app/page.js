@@ -11884,19 +11884,21 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     setViewPan(clampPan(nextPan, nextZoom));
   }
 
-  // 마우스 휠: deltaY(휠을 굴린 정도)에 따라 부드럽게 배율을 바꾸고, 마우스가 가리키던 지점을
-  // 기준으로 확대한다(zoomTo). 이 화면에서 휠은 페이지 스크롤 용도가 아니라 배치판 전용 확대·축소로
-  // 쓰므로 브라우저 기본 동작(페이지 스크롤)은 막아준다. React의 onWheel은 기본적으로
-  // "passive"(preventDefault가 안 먹힘)로 등록돼서, 아래 useEffect로 이 창(viewportRef)에 직접
-  // 리스너를 달아 막는다(passive: false).
+  // 마우스 휠: deltaY(휠을 굴린 정도)에 따라 부드럽게 배율을 바꾼다. 이 화면에서 휠은 페이지 스크롤
+  // 용도가 아니라 배치판 전용 확대·축소로 쓰므로 브라우저 기본 동작(페이지 스크롤)은 막아준다.
+  // React의 onWheel은 기본적으로 "passive"(preventDefault가 안 먹힘)로 등록돼서, 아래 useEffect로
+  // 이 창(viewportRef)에 직접 리스너를 달아 막는다(passive: false).
+  // (버그 수정) 예전엔 마우스 커서가 가리키던 지점을 기준으로 확대했는데(지도 앱처럼), 그러면 커서가
+  // 방 가장자리 쪽에 있는 채로 휠을 굴렸을 때 배치판이 그 커서 쪽으로 쏠려 보였다("5×4로 하면 대지
+  // 속으로 사라진다"는 신고 — 20m처럼 아주 넓은 방은 어차피 대지 가로 폭에 거의 꽉 차 있어서 덜
+  // 티가 났을 뿐, 원리는 같았다). 방 크기·비율과 무관하게 절대 안 쏠리도록, 아래 버튼(+/-)과
+  // 완전히 똑같이 휠도 항상 창(viewport) 정가운데를 기준으로만 확대·축소한다 — 이러면 아무리 확대·
+  // 축소해도 배치판은 항상 정가운데에 그대로 있다.
   const wheelHandlerRef = useRef(() => {});
   wheelHandlerRef.current = function handleCanvasWheel(e) {
     e.preventDefault();
-    const el = viewportRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
     const factor = Math.exp(-e.deltaY * 0.0015);
-    zoomTo(zoomLevel * factor, e.clientX - rect.left, e.clientY - rect.top);
+    zoomTo(zoomLevel * factor, viewportWidthPx / 2, viewportHeightPx / 2);
   };
   useEffect(() => {
     const el = viewportRef.current;
