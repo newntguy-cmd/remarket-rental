@@ -11279,16 +11279,112 @@ function transformLocalRectToWorld(rect, W, D, rotation, flipped, originXCm, ori
 // 정확하므로, 그 외 각도(자유 회전 중)에는 조각을 정밀하게 나누는 대신 안전하게 전체를 감싸는
 // 사각형(rotatedAabbSize) 하나로만 겹침 검사를 한다 — ㄱ자·U자를 비스듬히 돌렸을 때 파인 자리까지
 // 정밀하게 인식하진 못하지만(드문 사용 사례), 최소한 겹침 계산 자체가 틀어지지는 않는다.
+// 중심(cxCm,cyCm)에 놓인 wCm×hCm 사각형을 임의 각도(rotationDeg, 90도 단위가 아니어도 됨)로 그
+// 중심을 축으로 돌렸을 때의 네 꼭짓점(배치판 기준 절대좌표, cm)을 구한다. CSS의 `rotate(deg)`와
+// 같은 방향(화면 좌표계에서 양수 각도 = 시계방향)으로 돈다 — 실제 화면에 그려지는 모양과 정확히
+// 일치해야 아래 satPush의 겹침 계산도 화면에 보이는 그대로 맞는다.
+function rotatedRectCorners(cxCm, cyCm, wCm, hCm, rotationDeg) {
+  const rad = ((Number(rotationDeg) || 0) * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const hw = wCm / 2;
+  const hh = hCm / 2;
+  const local = [
+    [-hw, -hh],
+    [hw, -hh],
+    [hw, hh],
+    [-hw, hh],
+  ];
+  return local.map(([lx, ly]) => ({ x: cxCm + lx * cos - ly * sin, y: cyCm + lx * sin + ly * cos }));
+}
+
+// 분리축 정리(SAT): "나"(myCorners, myRotDeg만큼 기울어져 있을 수 있음)와 "상대"(otherCorners,
+// otherRotDeg만큼 기울어져 있을 수 있음)가 실제로 겹치는지, 겹친다면 어느 방향으로 얼마나 밀어야
+// 가장 적게 움직여서 떨어지는지를 구한다. (버그 수정: "회의용 의자를 돌려서 원형테이블에 딱
+// 붙이려는데 안 붙는다" 신고 — 처음엔 "나"는 항상 축에 나란하다고 가정했는데, 옮기는(끌리는) 쪽인
+// "나"가 회전해 있는 경우(바로 이 신고 상황)에는 그 회전한 실제 모양의 변 방향 축도 검사해야
+// 정확하다. 이제 두 사각형 각각의 변 방향(축에 나란하면 그냥 x·y축과 같음)을 모두 모아서 검사한다
+// — 겹치는 축이 하나도 같으면(둘 다 축에 나란하거나 둘 다 똑같이 기울어짐) 중복 없이 x축·y축
+// 두 개만 쓰고, 이때는 예전의 "겹친 가로·세로 중 더 적은 쪽으로 민다" 계산과 결과가 완전히 같다
+// (회귀 없음). 겹치지 않으면 null을 돌려준다.
+function satPush(myCorners, otherCorners, myRotDeg, otherRotDeg) {
+  const axes = [];
+  function addAxesFor(rotDeg) {
+    const rad = ((Number(rotDeg) || 0) * Math.PI) / 180;
+    axes.push([Math.cos(rad), Math.sin(rad)]);
+    axes.push([-Math.sin(rad), Math.cos(rad)]);
+  }
+  const myMod = ((Number(myRotDeg) % 90) + 90) % 90;
+  const otherMod = ((Number(otherRotDeg) % 90) + 90) % 90;
+  addAxesFor(myRotDeg);
+  if (Math.abs(otherMod - myMod) > 1e-9) addAxesFor(otherRotDeg);
+  let minOverlap = Infinity;
+  let pushX = 0;
+  let pushY = 0;
+  for (const [ax, ay] of axes) {
+    let aMin = Infinity, aMax = -Infinity;
+    for (const p of myCorners) {
+      const proj = p.x * ax + p.y * ay;
+      if (proj < aMin) aMin = proj;
+      if (proj > aMax) aMax = proj;
+    }
+    let bMin = Infinity, bMax = -Infinity;
+    for (const p of otherCorners) {
+      const proj = p.x * ax + p.y * ay;
+      if (proj < bMin) bMin = proj;
+      if (proj > bMax) bMax = proj;
+    }
+    const overlap = Math.min(aMax, bMax) - Math.max(aMin, bMin);
+    if (overlap <= 0) return null;
+    if (overlap < minOverlap) {
+      minOverlap = overlap;
+      const sign = (aMin + aMax) / 2 < (bMin + bMax) / 2 ? -1 : 1;
+      pushX = ax * sign * overlap;
+      pushY = ay * sign * overlap;
+    }
+  }
+  return { pushX, pushY, overlap: minOverlap };
+}
+
+// 모형 하나(회전·반전·파인 부분까지 전부 반영)를 실제로 채워진 작은 사각형들(배치판 기준 절대좌표,
+// cm — 겹침 계산용 꼭짓점 corners까지 포함)의 배열로 바꿔준다.
+// (버그 수정) "도려낸 곳의 잔상이 남아있어 딱 붙이고 싶은데 안 붙는다" 신고 — 임의 각도로 회전한
+// 모형을 예전엔 축에 나란한 바깥 테두리(rotatedAabbSize) 하나로만 겹침 검사를 해서, 사각형이
+// 대각선으로 기울며 생기는 네 귀퉁이의 빈 여백까지 "차지한 것"처럼 다른 모형을 밀어냈다 — 옆에
+// 다가가면 실제 모형에 닿기 한참 전에 이 보이지 않는 여백(잔상)에 막혀 멈췄다. 이제 진짜 회전한
+// 사각형의 네 꼭짓점을 그대로 돌려주고, resolveOverlap이 SAT로 그 실제 모양과만 정밀하게 겹침
+// 검사를 하도록 바꿨다. 원(circle)은 회전해도 모양이 똑같으므로(원은 회전 불변) 애초에 회전이 없는
+// 실제 지름 그대로 쓴다 — 원은 절대 여백이 생기지 않는다. ㄱ자·U자를 비스듬히 돌린 경우(드문 사용
+// 사례)는 여전히 조각을 나누지 않고 하나의 바깥 사각형으로 근사한다.
 function worldSubRects(xCm, yCm, widthCm, depthCm, shapeType, notchWidthCm, notchDepthCm, rotation, flipped) {
   const W = Number(widthCm) || 0;
   const D = Number(depthCm) || 0;
   if (rotation % 90 !== 0) {
-    const { w, h } = rotatedAabbSize(W, D, rotation);
-    const cx = xCm + w / 2;
-    const cy = yCm + h / 2;
-    return [{ left: cx - w / 2, right: cx + w / 2, top: cy - h / 2, bottom: cy + h / 2 }];
+    const isCircle = shapeType === "circle";
+    const { w: aabbW, h: aabbH } = rotatedAabbSize(W, D, rotation);
+    const cx = xCm + aabbW / 2;
+    const cy = yCm + aabbH / 2;
+    const pieceW = isCircle ? W : W;
+    const pieceH = isCircle ? D : D;
+    const pieceRot = isCircle ? 0 : rotation;
+    const corners = rotatedRectCorners(cx, cy, pieceW, pieceH, pieceRot);
+    const xs = corners.map((p) => p.x);
+    const ys = corners.map((p) => p.y);
+    return [{ left: Math.min(...xs), right: Math.max(...xs), top: Math.min(...ys), bottom: Math.max(...ys), corners, rotDeg: pieceRot }];
   }
-  return shapeSubRects(shapeType, W, D, notchWidthCm, notchDepthCm).map((r) => transformLocalRectToWorld(r, W, D, rotation, flipped, xCm, yCm));
+  return shapeSubRects(shapeType, W, D, notchWidthCm, notchDepthCm).map((r) => {
+    const rect = transformLocalRectToWorld(r, W, D, rotation, flipped, xCm, yCm);
+    return {
+      ...rect,
+      corners: [
+        { x: rect.left, y: rect.top },
+        { x: rect.right, y: rect.top },
+        { x: rect.right, y: rect.bottom },
+        { x: rect.left, y: rect.bottom },
+      ],
+      rotDeg: 0,
+    };
+  });
 }
 
 // 회전(임의 각도 가능)까지 반영했을 때, 이 모형이 화면에서 실제로 차지하는 "축에 나란한 바깥 테두리"
@@ -12489,13 +12585,22 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 이제 ㄱ자·U자는 worldSubRects로 실제 채워진 조각들로 쪼개서, 그 조각들과만 겹치는지 본다. 파인
   // 자리는 애초에 조각이 없으니 겹침으로 잡히지 않아서 의자가 자연스럽게 그 안에 들어갈 수 있다.
   // 사각형·원형 등 원래 통짜인 모양은 조각이 하나뿐이라 예전과 완전히 똑같이 동작한다(회귀 없음).
-  function resolveOverlap(xCm, yCm, wCm, hCm, excludeId) {
+  // (추가 버그 수정) "회의용 의자를 돌려서 원형테이블에 딱 붙이려는데 안 붙는다" 신고 — 위 수정은
+  // 가만히 있는 "상대"만 정밀하게 봤을 뿐, 옮기는(끌리는) 쪽인 "나"는 여전히 항상 축에 나란한
+  // 바깥 테두리(AABB)로만 봤다 — 그래서 "나"를 회전시켜 놓은 경우(이 신고처럼) 정작 옮기는 모형
+  // 자신의 회전은 반영되지 않아 여전히 같은 잔상이 남았다. 이제 옮기는 모형이 90도 단위가 아닌
+  // 자유 각도로 회전해 있으면(원은 회전해도 모양이 그대로라 항상 제외) rotatedRectCorners로 그
+  // 실제 꼭짓점을 구해서 쓴다 — 축에 나란한 경우(0/90/180/270도)는 예전과 정확히 같은 네모
+  // 꼭짓점이라 회귀가 없다.
+  function resolveOverlap(xCm, yCm, widthCm, depthCm, rotation, isCircle, excludeId) {
     const excludeSet = new Set(Array.isArray(excludeId) ? excludeId : [excludeId]);
+    const myRotDeg = isCircle ? 0 : Number(rotation) || 0;
+    const { w: wCm, h: hCm } = rotatedAabbSize(widthCm, depthCm, myRotDeg);
     let x = xCm;
     let y = yCm;
     for (const other of placedItems) {
       if (excludeSet.has(other.id)) continue;
-      const rotation = other.rotation != null ? other.rotation : other.rotated ? 90 : 0;
+      const rotation2 = other.rotation != null ? other.rotation : other.rotated ? 90 : 0;
       const otherRects = worldSubRects(
         other.xCm,
         other.yCm,
@@ -12504,37 +12609,40 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         other.shapeType || "rect",
         other.notchWidthCm,
         other.notchDepthCm,
-        rotation,
+        rotation2,
         !!other.flipped
       );
       const myLeft = x;
       const myRight = x + wCm;
       const myTop = y;
       const myBottom = y + hCm;
+      const myCorners =
+        myRotDeg % 90 !== 0
+          ? rotatedRectCorners(myLeft + wCm / 2, myTop + hCm / 2, widthCm, depthCm, myRotDeg)
+          : [
+              { x: myLeft, y: myTop },
+              { x: myRight, y: myTop },
+              { x: myRight, y: myBottom },
+              { x: myLeft, y: myBottom },
+            ];
       // 실제로 겹치는 조각들 중에서 "가장 적게 밀어내도 되는" 조각 하나를 골라 그 방향으로만 뺀다
-      // (조각이 아예 안 겹치면 그 자리는 빈 자리이므로 무시한다).
+      // (조각이 아예 안 겹치면 그 자리는 빈 자리이므로 무시한다). 먼저 바깥 테두리(AABB)로 빠르게
+      // 겹칠 가능성이 있는지만 거르고(회전한 조각도 테두리 안에 실제 모양이 온전히 들어있어 안전한
+      // 걸러내기다), 실제 겹침·밀어낼 방향과 거리는 satPush(분리축 정리)로 정밀하게 구한다 — 나와
+      // 상대 둘 다 축에 나란하면(rotDeg 0) 예전 계산과 결과가 완전히 같고, 둘 중 하나라도 기울어져
+      // 있으면 그 실제 모양의 꼭짓점까지 정확히 반영한다.
       let best = null;
       for (const r of otherRects) {
         const overlapX = Math.min(myRight, r.right) - Math.max(myLeft, r.left);
         const overlapY = Math.min(myBottom, r.bottom) - Math.max(myTop, r.top);
-        if (overlapX > 0 && overlapY > 0) {
-          const pushDist = Math.min(overlapX, overlapY);
-          if (!best || pushDist < best.pushDist) {
-            best = { pushDist, overlapX, overlapY, r };
-          }
-        }
+        if (overlapX <= 0 || overlapY <= 0) continue;
+        const push = satPush(myCorners, r.corners, myRotDeg, r.rotDeg || 0);
+        if (!push) continue;
+        if (!best || push.overlap < best.overlap) best = push;
       }
       if (best) {
-        const { overlapX, overlapY, r } = best;
-        if (overlapX < overlapY) {
-          const myCenterX = myLeft + wCm / 2;
-          const oCenterX = (r.left + r.right) / 2;
-          x = myCenterX < oCenterX ? r.left - wCm : r.right;
-        } else {
-          const myCenterY = myTop + hCm / 2;
-          const oCenterY = (r.top + r.bottom) / 2;
-          y = myCenterY < oCenterY ? r.top - hCm : r.bottom;
-        }
+        x += best.pushX;
+        y += best.pushY;
       }
     }
     return { xCm: x, yCm: y };
@@ -12543,10 +12651,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 자석 스냅 → 그래도 겹치면 밀어내기, 순서로 적용한다(최대 4번 반복해서 여러 모형에 연달아
   // 걸리는 경우도 웬만큼 처리한다). 마지막엔 배치판(공간) 밖으로 절대 넘어가지 않도록 가로·세로
   // 범위를 벽 안쪽으로 딱 고정한다(모형이 방보다 큰 극단적인 경우만 왼쪽·위쪽 벽에 맞춰둔다).
-  function placeWithSnap(xCm, yCm, wCm, hCm, excludeId) {
+  // (버그 수정에 맞춰 시그니처 변경) "회의용 의자를 돌려서 원형테이블에 딱 붙이려는데 안 붙는다" 신고를
+  // 고치면서, resolveOverlap이 옮기는 모형 자신의 회전까지 정확히 반영하려면 회전 전 원래 가로·세로
+  // (widthCm/depthCm)와 회전값(rotation)이 그대로 필요해졌다 — 그래서 예전엔 호출하는 쪽에서 미리
+  // rotatedAabbSize로 부풀린 wCm/hCm만 넘겨받았지만, 이제 원래 크기·회전값·원인지 여부(isCircle, 원은
+  // 회전해도 모양이 그대로라 항상 제외)를 받아서 안에서 직접 rotatedAabbSize로 부풀린 크기를 구한다 —
+  // 0/90/180/270도(또는 원)일 때는 결과가 예전과 완전히 같다(회귀 없음).
+  function placeWithSnap(xCm, yCm, widthCm, depthCm, rotation, isCircle, excludeId) {
+    const myRotDeg = isCircle ? 0 : Number(rotation) || 0;
+    const { w: wCm, h: hCm } = rotatedAabbSize(widthCm, depthCm, myRotDeg);
     let { xCm: x, yCm: y } = snapPlacement(xCm, yCm, wCm, hCm, excludeId);
     for (let i = 0; i < 4; i++) {
-      const resolved = resolveOverlap(x, y, wCm, hCm, excludeId);
+      const resolved = resolveOverlap(x, y, widthCm, depthCm, rotation, isCircle, excludeId);
       if (resolved.xCm === x && resolved.yCm === y) break;
       x = resolved.xCm;
       y = resolved.yCm;
@@ -12560,11 +12676,14 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // placeWithSnap과 달리 벽·다른 모형에 자석처럼 달라붙는 부분(snapPlacement)은 적용하지 않는다.
   // 벽에 붙어있던 모형을 5cm씩 떼어내려 해도, 그 움직인 거리가 자석 스냅 범위(15cm) 안에 들어가면
   // 다시 벽으로 끌려가 버려서 "붙은 뒤에는 움직이지 않는" 것처럼 보이던 문제를 막기 위함이다.
-  function moveWithClamp(xCm, yCm, wCm, hCm, excludeId) {
+  // (placeWithSnap과 같은 이유로 시그니처가 원래 크기·회전값·isCircle을 받도록 바뀌었다 — 회귀 없음.)
+  function moveWithClamp(xCm, yCm, widthCm, depthCm, rotation, isCircle, excludeId) {
+    const myRotDeg = isCircle ? 0 : Number(rotation) || 0;
+    const { w: wCm, h: hCm } = rotatedAabbSize(widthCm, depthCm, myRotDeg);
     let x = xCm;
     let y = yCm;
     for (let i = 0; i < 4; i++) {
-      const resolved = resolveOverlap(x, y, wCm, hCm, excludeId);
+      const resolved = resolveOverlap(x, y, widthCm, depthCm, rotation, isCircle, excludeId);
       if (resolved.xCm === x && resolved.yCm === y) break;
       x = resolved.xCm;
       y = resolved.yCm;
@@ -12661,7 +12780,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       }
       const rawX = Math.max(0, cmX - widthCm / 2);
       const rawY = Math.max(0, cmY - depthCm / 2);
-      const placed = placeWithSnap(rawX, rawY, widthCm, depthCm, null);
+      const placed = placeWithSnap(rawX, rawY, widthCm, depthCm, 0, (shape.shape_type || "rect") === "circle", null);
       setPlacedItems((prev) => [
         ...prev,
         {
@@ -12684,7 +12803,6 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       const moving = placedItems.find((it) => it.id === payload.placedId);
       if (!moving) return;
       const rotation = moving.rotation != null ? moving.rotation : moving.rotated ? 90 : 0;
-      const { w: wCm, h: hCm } = rotatedAabbSize(moving.widthCm, moving.depthCm, rotation);
       const rawX = Math.max(0, cmX - (payload.offsetXCm || 0));
       const rawY = Math.max(0, cmY - (payload.offsetYCm || 0));
       const moveGroupIds = getMoveGroupIds(moving);
@@ -12697,7 +12815,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         const { dx: cdx, dy: cdy } = clampGroupDelta(moveGroupIds, dx, dy);
         setPlacedItems((prev) => prev.map((it) => (moveGroupIds.includes(it.id) ? { ...it, xCm: it.xCm + cdx, yCm: it.yCm + cdy } : it)));
       } else {
-        const placed = placeWithSnap(rawX, rawY, wCm, hCm, moving.id);
+        const placed = placeWithSnap(rawX, rawY, moving.widthCm, moving.depthCm, rotation, moving.shapeType === "circle", moving.id);
         setPlacedItems((prev) => prev.map((it) => (it.id === payload.placedId ? { ...it, xCm: placed.xCm, yCm: placed.yCm } : it)));
       }
     }
@@ -13017,8 +13135,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         if (!it) return;
         if (!it.groupId) {
           const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
-          const { w: wCm, h: hCm } = rotatedAabbSize(it.widthCm, it.depthCm, rotation);
-          const placed = moveWithClamp(round1(it.xCm + dx), round1(it.yCm + dy), wCm, hCm, it.id);
+          const placed = moveWithClamp(round1(it.xCm + dx), round1(it.yCm + dy), it.widthCm, it.depthCm, rotation, it.shapeType === "circle", it.id);
           setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, xCm: round1(placed.xCm), yCm: round1(placed.yCm) } : p)));
           return;
         }
