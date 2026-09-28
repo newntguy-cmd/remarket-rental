@@ -12128,15 +12128,25 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   }
   const worldOffset = computeWorldOffset(zoomLevel, viewPan);
 
-  // 화면 이동(pan)이 너무 커져서 방 전체가 창 밖으로 나가버리면("잃어버린" 것처럼 보여서 되돌리기
-  // 어려움) 곤란하므로, 방의 적어도 일부(MIN_OVERLAP_PX)는 항상 창 안에 걸쳐 있도록 막아준다.
+  // (버그 수정) "대지 안에서 배치판이 자연스럽게 움직여야지 옆으로 가면 화면을 먹어버리는데" 신고 —
+  // 예전엔 "방의 적어도 80px만 창 안에 걸쳐 있으면 된다"는 느슨한 기준(MIN_OVERLAP_PX)이라, Shift+
+  // 끌기로 옆으로 조금만 세게 이동해도 배치판 대부분(벽·눈금·놓인 모형·선택 도구모음까지)이 바깥
+  // 창(viewportRef) 밖으로 밀려나 잘려 보였다 — 벽이 "화면을 먹는" 게 아니라 이동 가능 범위 자체가
+  // 너무 넓어서 배치판이 통째로 창 밖으로 잘려나갔던 것이다(줌을 안 하거나 줌아웃해서 배치판이 창보다
+  // 작을 때도 마찬가지로 잘렸다). 이제는 "적어도 일부만" 대신 "배치판이 창보다 작으면 항상 전체가 창
+  // 안에 다 보이고, 배치판이 창보다 크면(확대했을 때) 창이 배치판으로 항상 꽉 채워지도록"(사진 앱·지도
+  // 앱에서 흔한 방식) 완전히 바꿔서, 어떤 크기·줌 상태에서도 대지 바깥 여백이 창 안쪽에 드러나거나
+  // 배치판이 어중간하게 잘려 보이는 일이 없다.
   function clampPan(pan, zoom) {
     const { worldWidthPx: wPx, worldHeightPx: hPx, baseLeft, baseTop } = computeWorldOffset(zoom, { x: 0, y: 0 });
-    const MIN_OVERLAP_PX = 80;
-    const lowX = Math.min(MIN_OVERLAP_PX - wPx - baseLeft, viewportWidthPx - MIN_OVERLAP_PX - baseLeft);
-    const highX = Math.max(MIN_OVERLAP_PX - wPx - baseLeft, viewportWidthPx - MIN_OVERLAP_PX - baseLeft);
-    const lowY = Math.min(MIN_OVERLAP_PX - hPx - baseTop, viewportHeightPx - MIN_OVERLAP_PX - baseTop);
-    const highY = Math.max(MIN_OVERLAP_PX - hPx - baseTop, viewportHeightPx - MIN_OVERLAP_PX - baseTop);
+    const xA = -baseLeft; // 배치판 왼쪽 끝이 창 왼쪽 끝(0)에 오는 지점
+    const xB = viewportWidthPx - wPx - baseLeft; // 배치판 오른쪽 끝이 창 오른쪽 끝에 오는 지점
+    const lowX = Math.min(xA, xB);
+    const highX = Math.max(xA, xB);
+    const yA = -baseTop;
+    const yB = viewportHeightPx - hPx - baseTop;
+    const lowY = Math.min(yA, yB);
+    const highY = Math.max(yA, yB);
     return { x: Math.min(Math.max(pan.x, lowX), highX), y: Math.min(Math.max(pan.y, lowY), highY) };
   }
 
