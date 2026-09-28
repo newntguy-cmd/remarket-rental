@@ -876,6 +876,21 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   const worldWidthPx = spaceWidthM * 100 * renderScale;
   const worldHeightPx = spaceDepthM * 100 * renderScale;
 
+  // "대지에 먹는 공간 안생기게 해줘" 요청 검증: 딱 맞춤 배율(zoomLevel=1) 이상에서는 대지가 예전처럼
+  // 항상 MAX_CANVAS_W×MAX_CANVAS_H로 고정돼 있어야 하지만(줌인해서 세부 배치할 때 옆 화면이
+  // 흔들리면 안 되니까), 그 밑으로 줌아웃하면(예: 20m 방에 여백을 주려고, 또는 그냥 작은 방에서
+  // 줌아웃해봤을 때) 배치판만 작아지고 대지는 그대로 커서 그 사이에 큰 빈 공간이 "먹힌 것"처럼
+  // 남아 보였다. viewportRef·canvasRef 자체의 픽셀 크기나 화면 이동(pan)·마우스 휠 확대 계산 로직은
+  // 전혀 건드리지 않고(그건 계속 scale 기준 고정 창을 그대로 씀), 대지 박스의 "겉보기 크기"만 줌아웃
+  // 배율(renderScale)에 맞춰 함께 줄인다 — 대지가 overflow:hidden + flex 가운데 정렬로 이미 정가운데
+  // 맞춰진 viewport를 창처럼 오려서 보여주는 역할이라, 대지만 줄여도 배치판은 항상 정확히 가운데에
+  // 빈틈없이 꽉 차 보인다. 줌인(zoomLevel≥1) 때는 그대로 MAX_CANVAS_W/H(대지 최대 크기)로 고정.
+  const GROUND_MIN_PX = 48;
+  const zoomedGroundWidthPx = Math.max(GROUND_MIN_PX, spaceWidthM * 100 * renderScale + VIEW_BLEED * 2);
+  const zoomedGroundHeightPx = Math.max(GROUND_MIN_PX, spaceDepthM * 100 * renderScale + VIEW_BLEED * 2);
+  const groundWidthPx = zoomLevel < 1 ? Math.min(MAX_CANVAS_W, zoomedGroundWidthPx) : MAX_CANVAS_W;
+  const groundHeightPx = zoomLevel < 1 ? Math.min(MAX_CANVAS_H, zoomedGroundHeightPx) : MAX_CANVAS_H;
+
   // 주어진 확대 배율(zoom)·이동값(pan)일 때, 배치판(canvasRef)이 바깥 창(viewportRef) 안에서
   // 왼쪽/위로 얼마나 떨어진 자리에 놓이는지 계산한다. pan이 (0,0)이면 방 가운데가 창 가운데에
   // 오도록 두고, 거기에 pan을 더한다 — 마우스 휠 확대(어느 지점을 기준으로 확대할지)와 Shift+끌기
@@ -2387,13 +2402,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               움직이지 않는 고정 크기(MAX_CANVAS_W×MAX_CANVAS_H)의 "대지" 박스를 두고, 그 안 가운데에
               방 크기에 맞춰 커졌다 작아졌다 하는 배치판(viewportRef/canvasRef)을 띄운다 — 대지의
               바깥 테두리는 어떤 방을 만들어도 절대 흔들리지 않고, 그 안의 배치판만 방 크기·비율에 맞게
-              달라진다. */}
+              달라진다.
+              ("대지에 먹는 공간 안생기게 해줘" 요청 추가: 위는 딱 맞춤 배율(줌 100%) 이상일 때 얘기고,
+              그 밑으로 줌아웃하면 배치판만 작아지고 대지는 그대로 커서 그 사이에 큰 빈 공간이 남아
+              보였다. 그래서 줌아웃(zoomLevel<1)할 때만 대지 크기(width/height)도 groundWidthPx/
+              groundHeightPx로 함께 줄여서 배치판을 딱 감싸게 한다 — 줌 100% 이상(기본·줌인)에서는
+              여전히 MAX_CANVAS_W×MAX_CANVAS_H로 고정이라 위 설명 그대로다.) */}
           <div
             className="layoutsim-ground"
             style={{
               position: "relative",
-              width: MAX_CANVAS_W,
-              height: MAX_CANVAS_H,
+              width: groundWidthPx,
+              height: groundHeightPx,
               flexShrink: 0,
               display: "flex",
               alignItems: "center",
