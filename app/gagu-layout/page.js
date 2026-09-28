@@ -848,7 +848,11 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 아주 크면(예: 가로 32m) 딱 맞춰 보이는 배율로는 화면에서 1cm가 채 1px도 안 돼서 정확한 지점을
   // 클릭하기가 어려운데, 확대하면 그 자리를 훨씬 크게 볼 수 있어 줄자로 정확히 찍거나 모형을 딱
   // 맞는 자리에 놓기 쉬워진다.
-  const ZOOM_MIN = 1; // 딱 맞춰 보여주는 배율보다 더 축소할 필요는 없다(방 밖에 빈 여백만 늘어남).
+  // "줌아웃은 점이 될 정도까지 아웃을 시켜도 돼" 요청으로, 딱 맞춤 배율(1) 밑으로도 훨씬 더 축소할 수
+  // 있게 열어뒀다 — 가로로 아주 넓고 낮은 방(예: 20m×3m)처럼 대지의 가로 폭에 거의 딱 맞아떨어지는
+  // 방은 평소(줌 1배)엔 대지 좌우 끝에 거의 붙어 보이는데, 이렇게 더 줌아웃하면 방을 대지 가운데로
+  // 더 작게 줄여서 대지와 방 사이에 여백을 원하는 만큼 만들어볼 수 있다.
+  const ZOOM_MIN = 0.05;
   const ZOOM_MAX = 12;
   const [zoomLevel, setZoomLevel] = useState(1);
   // 확대했을 때 "보이는 위치"를 옮기는 값(px). 기본은 방 가운데를 그대로 보여주고, 거기에 이 값을 더해서 옮긴다.
@@ -2385,7 +2389,11 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               alignItems: "center",
               justifyContent: "center",
               backgroundColor: C.bg,
-              border: `1px dashed ${C.line}`,
+              // (가로로 아주 넓고 낮은 방처럼 대지 가로 폭에 거의 딱 맞는 방을 만들면, 방 박스가 대지
+              // 좌우 끝에 거의 붙어버려서 옅은 색(C.line)의 점선 테두리로는 대지 경계 자체가 잘 안
+              // 보였다 — "대지 안에서 놀아야 하는데 오류난다"는 신고로 이어짐. 더 또렷하게 보이도록
+              // 테두리 색을 C.muted로, 굵기도 살짝 키웠다.)
+              border: `1.5px dashed ${C.muted}`,
               borderRadius: 6,
               boxSizing: "border-box",
               overflow: "hidden",
