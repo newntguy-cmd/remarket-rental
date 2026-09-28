@@ -11317,9 +11317,9 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
 
   // "전체보기 버튼 만들어서 시야확보를 좋게해주고" 요청: 켜면 이 화면(모형 목록+배치판)이 메인
   // 시스템의 바깥 틀(최대폭 1600px, 왼쪽 전체 메뉴)까지 다 걷어내고 화면 전체를 덮는 오버레이로
-  // 떠서, 그만큼 배치판도 더 크게 그릴 수 있다(아래 MAX_CANVAS_W/H 계산에서 isFullView일 때는
-  // insideAppShell 여부와 상관없이 이 오버레이 자신의 여백만 뺀다). Esc를 누르거나 버튼을 다시
-  // 누르면 원래 화면으로 돌아온다.
+  // 떠서, 세로 최대 크기(MAX_CANVAS_H)를 평소보다 훨씬 넉넉하게(창 높이 기준) 쓸 수 있다. 가로는
+  // 이제 outerWrapRef로 실제 남는 폭을 직접 재기 때문에 평소·전체보기 상관없이 항상 정확하다. Esc를
+  // 누르거나 버튼을 다시 누르면 원래 화면으로 돌아온다.
   const [isFullView, setIsFullView] = useState(false);
   useEffect(() => {
     if (!isFullView) return;
@@ -11743,44 +11743,36 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     return () => window.removeEventListener("resize", updateViewportSize);
   }, []);
 
-  // 실제 공간(cm)을 화면에 몇 px로 그릴지 축척을 정한다 — 가로·세로 둘 다 이 최대 크기 안에 들어오도록.
-  // (버그 수정) "화면에 꽉 차게 키워달라"고 처음 고칠 때는 이 가로 최대 크기를 창 너비(viewportSize.w)
-  // 에서 대략 340px만 빼고 정했는데, 실제로는(메인 시스템 안에서 쓸 때는) 그보다 훨씬 전에 배치판이
-  // 다 못 커지고 막히는 자리가 있었다 — 메인 시스템 화면 전체를 감싸는 바깥 틀 자체가 아무리 넓은
-  // 모니터에서도 가운데 정렬된 채 maxWidth:1600px을 넘지 않고(그 틀의 좌우 여백 48px), 그 안에 왼쪽
-  // 전체 메뉴(232px)와 간격(24px)까지 항상 같이 차지하고 있었다. 그래서 창이 아무리 넓어도 이 탭에게
-  // 실제로 남는 폭은 1600-48-232-24=1296px을 절대 못 넘었는데, 예전 식은 이걸 모르고 훨씬 큰 값
-  // (예: 1920px 창이면 1580px)을 가로 최대 크기로 잡아버려서, 배치판이 실제 남는 자리보다 넓게
-  // 그려지며 옆으로 넘쳐 화면에는 오히려 안 커진 것처럼(또는 가로 스크롤이 생기며) 보였다.
-  // "설치파일" 독립 화면(app/gagu-layout/page.js)은 이런 바깥 틀(전체 메뉴·maxWidth)이 아예 없어서
-  // 그 제한을 안 받으므로, LayoutSimTab을 부르는 쪽에서 insideAppShell(기본 true=메인 시스템)로
-  // 알려주고 그 값에 따라 계산을 달리한다 — 함수 몸통은 두 파일에서 그대로 똑같이 유지하면서도
-  // 각자의 실제 화면 구조에 맞는 값을 쓸 수 있게. 세로는 이런 폭 제한이 없어서 그대로 위쪽 안내
-  // 문구·입력칸·툴바가 차지하는 자리를 대략 뺀 값을 쓴다.
-  const isMobileWidth = viewportSize.w <= 768;
+  // "전체판은 거대한 대지 같은 개념이야, 고정값이고 결코 움직이지 않아" 요청으로 배치판 크기 계산
+  // 방식을 다시 짰다. 예전에는(위 주석에 남아있던 사연대로) 메인 시스템 바깥 틀의 maxWidth·왼쪽 전체
+  // 메뉴·여백 같은 값을 여기서 하나하나 숫자로 추측해서 "실제로 남는 가로 폭"을 계산했는데, 이 방식은
+  // 바깥 틀이 조금만 바뀌어도(모바일 폭 기준, 메뉴 폭 등) 자꾸 어긋나서 벽 밖으로 튀어나가거나 실제
+  // 남는 자리보다 좁게/넓게 계산되는 등 여러 번 같은 종류의 버그가 났었다. 이제는 그 숫자들을 더는
+  // 추측하지 않고, 이 화면을 감싸는 바깥 상자(outerWrapRef, 위쪽 "배치판 만들기" 안내문구·툴바 줄과
+  // 정확히 같은 폭을 쓰는 상자)의 실제로 화면에 그려진 폭을 ResizeObserver로 직접 재서 쓴다 — 이러면
+  // 메인 시스템 안이든 독립 설치 화면이든 전체보기 상태든 상관없이 항상 정확하다(추측이 필요 없어짐).
+  const outerWrapRef = useRef(null);
+  const [outerWrapWidthPx, setOuterWrapWidthPx] = useState(1040);
+  useEffect(() => {
+    const el = outerWrapRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    function measure() {
+      setOuterWrapWidthPx(el.getBoundingClientRect().width);
+    }
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const SHAPE_SIDEBAR_W = 240; // 이 탭 안의 "모형 목록" 칸
   const INNER_GAP = 16; // 모형 목록 칸과 배치판 사이 간격
-  // "전체보기" 버튼(isFullView)을 켜면 이 화면 자체가 바깥 틀을 벗어난 전체 화면 오버레이로 뜨므로,
-  // insideAppShell(메인 시스템이냐)과 상관없이 독립 화면과 똑같은 식(오버레이 자신의 여백만 뺌)을 쓴다.
-  const escapesOuterShell = isFullView || !insideAppShell;
-  const availableContentW = escapesOuterShell
-    ? viewportSize.w - 40 // 독립 화면·전체보기는 이런 바깥 틀이 없이 자기 padding(좌우)만 있음
-    : (() => {
-        const OUTER_MAX_CONTENT_W = 1600; // 메인 시스템 바깥 틀의 maxWidth
-        const OUTER_PADDING_X = isMobileWidth ? 24 : 48; // 바깥 틀 좌우 여백(12px*2 / 24px*2)
-        const APP_NAV_W = isMobileWidth ? 0 : 232; // 왼쪽 전체 메뉴(모바일에서는 안 보임)
-        const APP_GAP = isMobileWidth ? 0 : 24; // 전체 메뉴와 본문 사이 간격
-        return Math.min(viewportSize.w, OUTER_MAX_CONTENT_W) - OUTER_PADDING_X - APP_NAV_W - APP_GAP;
-      })();
-  // (더 키워달라는 요청 — 화면 캡처에 빨간 테두리로 "이만큼까지는 커져도 된다"고 직접 표시해주심)
-  // 위에서 이미 바깥 틀·메뉴·모형 목록 칸까지 다 뺀 "실제로 남는 공간"을 정확히 구했는데, 여기서
-  // 또 한 번 1300px로 눌러버리고 있었다 — 그래서 넓은 모니터에서는 실제 남는 자리가 1300px보다
-  // 훨씬 넓어도 배치판은 딱 1300px에서 멈추고 그 오른쪽이 빈 채로 남았다. 위에서 구한 실제 남는
-  // 공간을 그대로 최대 크기로 쓰도록 이 인위적인 1300 상한을 없앴다(가로세로 모두).
-  const MAX_CANVAS_W = Math.max(360, availableContentW - SHAPE_SIDEBAR_W - INNER_GAP);
-  // 전체보기일 때는 위쪽 안내문구·툴바가 더 작게 잡혀 있어서(아래 오버레이 자체 여백만 있음) 세로도
-  // 조금 더 넉넉하게 쓸 수 있다.
-  const MAX_CANVAS_H = Math.max(420, viewportSize.h - (isFullView ? 220 : 300));
+  const MAX_CANVAS_W = Math.max(360, outerWrapWidthPx - SHAPE_SIDEBAR_W - INNER_GAP);
+  // "전체판은... 고정값이고 결코 움직이지 않아 / 세로는 현재 3칸 정도면 딱 좋을거 같아" 요청대로,
+  // 평소(전체보기 아닐 때)의 세로 크기는 창 높이에 따라 늘었다 줄었다 하지 않는 고정 크기로 못박았다
+  // — 방이 아무리 커도(또는 창이 아무리 커도) 이 안에서 줌인·줌아웃으로 들여다보는 식이다. "전체보기"
+  // 버튼을 눌러 화면 전체로 키운 상태는 별개로, 그때는 여전히 창 높이만큼 넉넉하게 쓴다.
+  const NORMAL_CANVAS_H = 460;
+  const MAX_CANVAS_H = isFullView ? Math.max(420, viewportSize.h - 220) : NORMAL_CANVAS_H;
   const scale = Math.min(MAX_CANVAS_W / (spaceWidthM * 100), MAX_CANVAS_H / (spaceDepthM * 100));
   const canvasWidthPx = spaceWidthM * 100 * scale;
   const canvasHeightPx = spaceDepthM * 100 * scale;
@@ -12886,6 +12878,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
 
   return (
     <div
+      ref={outerWrapRef}
       className="layoutsim-full-view-wrap"
       style={
         isFullView
@@ -13613,6 +13606,10 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       <div style={{ width: "100%", height: "100%", background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 3, boxSizing: "border-box" }} />
                     )}
                   </div>
+                  {/* "가구 이름이 지저분하게 나오니까 깔끔하게" 요청 — 이름 대신 규격(가로×세로)만
+                      짧게 보여주기로 함(사용자 선택: "규격만 깔끔하게"). 이름이 길어도 늘 짧고 정돈된
+                      한 줄로 보이고, 전체 이름은 위 title 속성(마우스 올리면 뜨는 말풍선)에서 그대로
+                      볼 수 있다. */}
                   <div
                     style={{
                       position: "absolute",
@@ -13621,12 +13618,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       alignItems: "center",
                       justifyContent: "center",
                       fontSize: 11,
+                      fontWeight: 600,
+                      color: C.ink,
                       textAlign: "center",
+                      whiteSpace: "nowrap",
                       overflow: "hidden",
                       pointerEvents: "none",
                     }}
                   >
-                    {it.name}
+                    {it.widthCm}×{it.depthCm}
                   </div>
                   {/* ㄱ자·U자만 좌우반전(퍼즐책상 좌향/우향)이 의미가 있어서, 사각형에는 안 보여준다.
                       버튼 클릭이 캔버스까지 올라가서 줄자 클릭으로 잘못 잡히지 않도록 stopPropagation. */}
