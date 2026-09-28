@@ -13304,6 +13304,51 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               absolute)로 떠 있는 오버레이로 옮겼다 — 이러면 선택된 게 없을 때는 배치판 바로 위에
               빈 공간이 전혀 없이 붙고, 선택했을 때만 배치판 왼쪽 위에 살짝 떠서 나타날 뿐 배치판
               자체의 위치·크기는 절대 흔들리지 않는다. */}
+          {/* "대지는 고정이고 배치판을 누르면 대지에 새로운 배치판이 생겨야 한다"(리룩스 같은
+              공간설계 프로그램에서 방 하나하나가 늘 같은 크기의 고정 도면 위에 놓이는 방식) 요청으로,
+              "대지"(고정 크기 판)와 "배치판"(그 위에 놓이는, 방 크기에 맞춰 자동으로 딱 맞춰지는 방
+              모양 박스)을 이제 실제로 서로 다른, 눈에 보이는 두 개의 박스로 나눈다. 예전에는 이 구분이
+              코드 계산(MAX_CANVAS_W/H)에만 있고 화면에는 "방 박스" 하나만 그 계산값에 맞춰 그때그때
+              커졌다 작아졌다 하며 그려졌었다 — 그래서 방 크기를 바꿀 때마다(가로가 긴 방 → 세로가 긴
+              방 등) 화면에 보이는 유일한 박스(그래서 사용자에게는 "대지"로 보였던 바로 그 테두리)의
+              폭·높이·모양이 매번 바뀌어 마치 "대지 자체가 움직인다"는 인상을 줬다. 이제 바깥에 절대
+              움직이지 않는 고정 크기(MAX_CANVAS_W×MAX_CANVAS_H)의 "대지" 박스를 두고, 그 안 가운데에
+              방 크기에 맞춰 커졌다 작아졌다 하는 배치판(viewportRef/canvasRef)을 띄운다 — 대지의
+              바깥 테두리는 어떤 방을 만들어도 절대 흔들리지 않고, 그 안의 배치판만 방 크기·비율에 맞게
+              달라진다. */}
+          <div
+            className="layoutsim-ground"
+            style={{
+              position: "relative",
+              width: MAX_CANVAS_W,
+              height: MAX_CANVAS_H,
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: C.bg,
+              border: `1px dashed ${C.line}`,
+              borderRadius: 6,
+              boxSizing: "border-box",
+              overflow: "hidden",
+            }}
+          >
+            {/* "대지"라는 게 뭔지 한눈에 알 수 있도록 왼쪽 위에 아주 옅게 라벨만 하나 둔다(인쇄할 때는
+                안 보임) — 실제로 두 박스가 나뉘어 있다는 걸 눈으로 바로 확인할 수 있게. */}
+            <div
+              className="layoutsim-no-print"
+              style={{
+                position: "absolute",
+                top: 6,
+                left: 8,
+                fontSize: 10.5,
+                color: C.muted,
+                letterSpacing: 0.2,
+                pointerEvents: "none",
+              }}
+            >
+              대지
+            </div>
           {/* "마우스 휠로 줌인/줌아웃, 시프트+끌기로 화면 이동" 요청: 배치판(canvasRef)을 감싸는 바깥
               창(viewportRef)을 하나 더 두었다. 이 창은 항상 같은 크기(딱 맞춤 배율 기준 + 여유
               VIEW_BLEED)로 고정돼 있어서 확대해도 옆 화면 배치가 흔들리지 않고, 확대돼서 방보다
@@ -13802,6 +13847,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 {rulerDistanceCm >= 100 ? `${(rulerDistanceCm / 100).toFixed(2)}m (${rulerDistanceCm.toFixed(0)}cm)` : `${rulerDistanceCm.toFixed(1)}cm`}
               </div>
             )}
+          </div>
           </div>
           </div>
         </div>
