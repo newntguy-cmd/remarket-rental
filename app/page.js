@@ -13471,12 +13471,26 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         }
         /* 배치판 위 모형을 마우스로 가리키면 살짝 떠 보이도록(elevation) 그림자를 키워서, 지금 어떤
            모형 위에 있는지 더 또렷하게 느껴지게 한다. 이미 선택된 모형은 선택 강조(보라색 테두리+글로우)가
-           우선이라 이 hover 그림자를 덮어 그대로 유지한다. */
-        .layoutsim-placed-item:hover {
+           우선이라 이 hover 그림자를 덮어 그대로 유지한다.
+           (버그 수정) "동그라미 주위로 네모박스의 희미한 잔상이 안보이니?" / "누끼가 정확하게 안 따졌다"
+           신고 — 위 인라인 스타일(boxShadow/shapeSvgStyle)에서 원·의자류는 이미 실제 모양(SVG)에 그림자를
+           주도록 고쳤는데, 이 hover 전용 CSS 규칙(!important)이 인라인 스타일보다 우선순위가 높아서
+           마우스를 올리기만 해도 바깥 네모 박스에 그림자가 다시 씌워지며 귀퉁이에 네모 잔상이 그대로
+           재현됐다. 그래서 원·의자류(layoutsim-placed-item--nonrect)는 이 규칙에서 빼고, 대신 그 안의
+           실제 모양(svg)에다 같은 값의 그림자를 줘서 hover 때도 늘 진짜 윤곽만 떠 보이게 했다.
+           사각형·ㄱ자·U자처럼 바깥 박스와 모양이 일치하는(또는 파인 부분까지 포함해 일부러 통짜 박스로
+           보여주는) 경우는 예전 그대로 바깥 박스에 그림자를 준다(회귀 없음). */
+        .layoutsim-placed-item:not(.layoutsim-placed-item--nonrect):hover {
           box-shadow: 0 3px 8px rgba(28, 43, 58, 0.22) !important;
         }
-        .layoutsim-placed-item.layoutsim-placed-item--selected:hover {
+        .layoutsim-placed-item.layoutsim-placed-item--selected:not(.layoutsim-placed-item--nonrect):hover {
           box-shadow: 0 0 0 5px rgba(107, 92, 165, 0.16), 0 3px 8px rgba(28, 43, 58, 0.26) !important;
+        }
+        .layoutsim-placed-item--nonrect:hover svg {
+          filter: drop-shadow(0 3px 6px rgba(28, 43, 58, 0.28)) !important;
+        }
+        .layoutsim-placed-item--nonrect.layoutsim-placed-item--selected:hover svg {
+          filter: drop-shadow(0 0 4px rgba(107, 92, 165, 0.6)) drop-shadow(0 3px 6px rgba(28, 43, 58, 0.3)) !important;
         }
       `}</style>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>가구배치(시뮬레이션)</div>
@@ -14161,11 +14175,22 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               const isNonRectShape = isPoly || isCircle || isRoundEnd || isChair || isMeetingChair || isSofa;
               const shapeStrokeWidth = isSelected ? 3 : isGrouped ? 2 : 1;
               const shapeStrokeDasharray = isGrouped && !isSelected ? "4 3" : undefined;
-              const shapeSvgStyle = { display: "block", ...(isSelected ? { filter: "drop-shadow(0 0 4px rgba(107,92,165,0.6))" } : {}) };
+              // (버그 수정) "동그라미 주위로 네모박스의 희미한 잔상이 안보이니?" 신고 — 선택했을 때
+              // 생기는 보라색 테두리·글로우는 예전에 이미 SVG 쪽(실제 모양)으로 옮겨서 고쳤는데
+              // (위 14152번째 줄 주석 참고), 정작 "평소에 늘 켜져 있는" 은은한 입체감 그림자(아래
+              // boxShadow의 "0 1px 3px" 부분)는 그대로 바깥 네모 박스(wrapper div)에 남아있었다 —
+              // 이 박스는 borderRadius가 3px뿐이라 사실상 네모라서, 원·의자처럼 둥글거나 파인 모양
+              // 바깥의 네 귀퉁이에서 이 네모난 그림자만 살짝 삐져나와 "네모 잔상"처럼 보였다. 이제
+              // 이 그림자도 선택 글로우와 똑같이 실제 모양(SVG)을 따라가도록 옮겨서, 항상(선택
+              // 여부와 상관없이) 네모가 아니라 진짜 모양의 윤곽을 따라 은은하게 깔리게 했다.
+              const shapeSvgStyle = {
+                display: "block",
+                filter: isSelected ? "drop-shadow(0 0 4px rgba(107,92,165,0.6))" : "drop-shadow(0 1px 3px rgba(28,43,58,0.12))",
+              };
               return (
                 <div
                   key={it.id}
-                  className={`layoutsim-placed-item${isSelected ? " layoutsim-placed-item--selected" : ""}`}
+                  className={`layoutsim-placed-item${isSelected ? " layoutsim-placed-item--selected" : ""}${isNonRectShape ? " layoutsim-placed-item--nonrect" : ""}`}
                   // 줄자 모드에서는 끌기(draggable)를 꺼둔다 — 브라우저 기본 드래그가 살짝이라도
                   // 시작되면 그 순간 클릭(onClick)이 아예 안 먹히는 경우가 있어서, 정확히 점을 찍으려는
                   // 클릭이 모형을 옮기는 동작으로 오인되지 않게 막는다.
@@ -14223,8 +14248,11 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     transition: "box-shadow 120ms ease, outline-color 120ms ease",
                     outline: isNonRectShape ? "none" : isSelected ? `2px solid ${C.purple}` : isGrouped ? `1.5px dashed ${C.purple}` : "none",
                     outlineOffset: isSelected ? 1 : 2,
+                    // (위 shapeSvgStyle 수정과 같은 이유로) 둥글거나 파인 모양은 이제 이 바깥 네모
+                    // 박스에 그림자를 안 주고, 실제 모양을 그리는 SVG의 drop-shadow가 대신한다 —
+                    // 그래야 귀퉁이에 네모난 그림자가 삐져나오지 않는다.
                     boxShadow: isNonRectShape
-                      ? "0 1px 3px rgba(28,43,58,0.12)"
+                      ? "none"
                       : isSelected
                       ? "0 0 0 5px rgba(107, 92, 165, 0.16), 0 2px 6px rgba(28,43,58,0.18)"
                       : "0 1px 3px rgba(28,43,58,0.12)",
