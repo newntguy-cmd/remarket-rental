@@ -14384,12 +14384,24 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               다시 줌과 무관하게 항상 MAX_CANVAS_W×MAX_CANVAS_H로 고정한다 — 대지가 늘 viewport보다
               크거나 같아서(viewport는 scale 기준으로 항상 대지 이하로 계산됨) 배치판은 줌·이동과
               무관하게 항상 대지 테두리를 절대 넘어가지 않는다.) */}
+          {/* (버그 수정) "배치판은 대지 안에서 자유롭게 이동 가능해야 하는데, 줌인해서 Shift+끌기로
+              끝까지 밀어봐도 배치판의 진짜 끝단(테두리)은 여전히 안 보인다"는 신고 — 원인은 이 "대지"
+              박스 자체였다. 위 viewportWidthPx/HeightPx(실제 Shift+끌기가 먹히는 범위, VIEW_BLEED만큼
+              여유를 더한 크기)는 방향에 따라 대지(MAX_CANVAS_W×MAX_CANVAS_H)보다 최대 VIEW_BLEED*2(28px)
+              더 커질 수 있는데(예: 15m×10m처럼 대지 비율과 방 비율이 정확히 안 맞아떨어지는 "빡빡한"
+              방향), 정작 대지 박스는 여전히 옛날 크기(MAX_CANVAS_W×MAX_CANVAS_H) 그대로라서, 그 창
+              (viewportRef)이 대지 테두리 밖으로 살짝 튀어나온 채로 대지의 overflow:hidden에 걸려
+              가장자리 부분이 통째로 잘려나가고 있었다 — 끝까지 끌어도 딱 그 잘린 부분(방의 진짜 벽선)만
+              영원히 안 보이는 것이었다. 대지 박스를 그 최댓값(VIEW_BLEED*2까지 여유)만큼 항상 넉넉하게
+              키워두면, viewportRef가 대지 밖으로 튀어나올 일이 없어 이 잘림이 사라진다 — 대지 크기는
+              여전히 방 크기·줌과 무관하게 화면 크기(canvasColWidthPx 등)에만 좌우되는 고정값 그대로다
+              (딱 28px만큼만 항상 더 넉넉해질 뿐, 방을 만들거나 줌을 해도 전혀 흔들리지 않는다). */}
           <div
             className="layoutsim-ground"
             style={{
               position: "relative",
-              width: MAX_CANVAS_W,
-              height: MAX_CANVAS_H,
+              width: MAX_CANVAS_W + VIEW_BLEED * 2,
+              height: MAX_CANVAS_H + VIEW_BLEED * 2,
               flexShrink: 0,
               display: "flex",
               alignItems: "center",
