@@ -11670,12 +11670,14 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 대신, 카테고리별로 위/아래 화살표를 눌러 직접 순서를 바꿀 수 있게 한다. 지금 순서를 바꾸는 중인
   // 모형의 id를 담아뒤서 그 버튼들만 잠깐 비활성화한다(중복 클릭 방지).
   const [movingShapeId, setMovingShapeId] = useState(null);
-  // "품목명 수정할 수 있게 기능 넣어줘" 요청: 모형 목록(카탈로그)에 등록해둔 모형의 이름을 직접 고칠 수
-  // 있게 한다. editingShapeId에 지금 이름을 고치는 중인 모형의 id를 담아두고, 그 줄만 이름 대신 입력칸을
-  // 보여준다(배치판에 이미 놓인 개별 모형의 이름을 고치는 manualNameInput과는 다른, 카탈로그 자체의
-  // 이름을 바꾸는 기능 — 한 번 고치면 그 모형을 앞으로 새로 끌어다 놓을 때부터 새 이름으로 보인다).
+  // "품목명 수정할 수 있게 기능 넣어줘" + "카테고리 잘못 설정해도 수정해서 원하는 카테고리에 넣을 수
+  // 있게" 요청: 모형 목록(카탈로그)에 등록해둔 모형의 이름과 카테고리를 직접 고칠 수 있게 한다.
+  // editingShapeId에 지금 고치는 중인 모형의 id를 담아두고, 그 줄만 이름·카테고리 입력칸을 보여준다
+  // (배치판에 이미 놓인 개별 모형의 이름을 고치는 manualNameInput과는 다른, 카탈로그 자체의 이름·
+  // 카테고리를 바꾸는 기능 — 한 번 고치면 그 모형을 앞으로 새로 끌어다 놓을 때부터 반영된다).
   const [editingShapeId, setEditingShapeId] = useState(null);
   const [editingShapeName, setEditingShapeName] = useState("");
+  const [editingShapeCategory, setEditingShapeCategory] = useState("");
 
   const [widthInput, setWidthInput] = useState("5");
   const [depthInput, setDepthInput] = useState("4");
@@ -11845,20 +11847,33 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     fetchShapes();
   }
 
-  // "품목명 수정할 수 있게 기능 넣어줘" 요청 — 카탈로그(모형 목록)에 등록된 모형 이름을 고쳐서
-  // 저장한다(예: 잘못 붙인 이름 "44"를 "탑책상" 등으로 바로잡기). 빈 이름으로는 저장하지 않고,
-  // 원래 이름과 똑같이 입력했거나 취소한 경우엔 서버에 불필요한 요청을 보내지 않는다.
-  async function handleRenameShape(id, rawName) {
-    const newName = (rawName || "").trim();
+  // "품목명 수정할 수 있게 기능 넣어줘" + "카테고리 잘못 설정해도 수정해서 원하는 카테고리에 넣을 수
+  // 있게" 요청 — 카탈로그(모형 목록)에 등록된 모형의 이름·카테고리를 함께 고쳐서 저장한다(예: 잘못
+  // 붙인 이름 "44"를 바로잡거나, 엉뚱한 카테고리에 들어간 모형을 원하는 카테고리로 옮기기). 카테고리를
+  // 실제로 바꾼 경우에는 새로 등록할 때와 똑같이 그 카테고리의 맨 아래로 놓이도록 sort_order도 새로
+  // 매긴다(카테고리를 안 바꿨으면 원래 순서 그대로 둔다). 이름이 비어있으면 저장하지 않고, 아무것도
+  // 안 바꿨으면 서버에 불필요한 요청을 보내지 않는다.
+  async function handleSaveShapeEdit(id) {
+    const newName = (editingShapeName || "").trim();
+    const newCategory = (editingShapeCategory || "").trim() || "기타";
     setEditingShapeId(null);
     const current = shapes.find((s) => s.id === id);
-    if (!newName || !current || newName === current.name) return;
+    if (!newName || !current) return;
+    const nameChanged = newName !== current.name;
+    const categoryChanged = newCategory !== (current.category || "기타");
+    if (!nameChanged && !categoryChanged) return;
+    const payload = {};
+    if (nameChanged) payload.name = newName;
+    if (categoryChanged) {
+      payload.category = newCategory;
+      payload.sort_order = (shapesByCategory[newCategory] || []).length;
+    }
     // 화면에는 바로 반영해서 기다리는 느낌 없이 즉시 바뀐 것처럼 보이게 하고, 저장이 실패하면 되돌린다.
-    setShapes((prev) => prev.map((s) => (s.id === id ? { ...s, name: newName } : s)));
-    const { error } = await supabase.from("layout_shapes").update({ name: newName }).eq("id", id);
+    setShapes((prev) => prev.map((s) => (s.id === id ? { ...s, ...payload } : s)));
+    const { error } = await supabase.from("layout_shapes").update(payload).eq("id", id);
     if (error) {
-      alert("이름 수정 중 오류가 발생했어요: " + error.message);
-      setShapes((prev) => prev.map((s) => (s.id === id ? { ...s, name: current.name } : s)));
+      alert("수정 중 오류가 발생했어요: " + error.message);
+      fetchShapes();
     }
   }
 
@@ -11959,6 +11974,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         title={isEditingName ? undefined : "끌어서 배치판에 놓으세요"}
         style={{
           display: "flex",
+          flexWrap: "wrap",
           justifyContent: "space-between",
           alignItems: "center",
           gap: 6,
@@ -12015,10 +12031,9 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
             onClick={(e) => e.stopPropagation()}
             onDragStart={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
-              if (e.key === "Enter") handleRenameShape(s.id, editingShapeName);
+              if (e.key === "Enter") handleSaveShapeEdit(s.id);
               else if (e.key === "Escape") setEditingShapeId(null);
             }}
-            onBlur={() => handleRenameShape(s.id, editingShapeName)}
             style={{ ...smallInputStyle, flex: 1, minWidth: 0, boxSizing: "border-box" }}
           />
         ) : (
@@ -12033,12 +12048,49 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               e.stopPropagation();
               setEditingShapeId(s.id);
               setEditingShapeName(s.name);
+              setEditingShapeCategory(s.category || "기타");
             }}
-            title="품목명 수정"
+            title="품목명·카테고리 수정"
             style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 12, flexShrink: 0, padding: "1px 2px" }}
           >
             ✏️
           </button>
+        )}
+        {/* "카테고리 잘못 설정해도 수정해서 원하는 카테고리에 넣을 수 있게" 요청 — 이름 입력칸 바로
+            아래에 카테고리 입력칸을 한 줄 더 보여준다(flexBasis:100%로 줄바꿈). 기존 카테고리 이름을
+            datalist로 미리 보여줘서 오타 없이 골라 쓸 수 있고, 직접 새 이름을 입력해도 된다. 저장·취소
+            버튼을 따로 둬서 이름·카테고리 두 칸을 한 번에 확정하거나 되돌릴 수 있게 했다. */}
+        {isEditingName && (
+          <div style={{ flexBasis: "100%", display: "flex", gap: 6, marginTop: 2 }} onClick={(e) => e.stopPropagation()}>
+            <input
+              value={editingShapeCategory}
+              onChange={(e) => setEditingShapeCategory(e.target.value)}
+              onDragStart={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSaveShapeEdit(s.id);
+                else if (e.key === "Escape") setEditingShapeId(null);
+              }}
+              placeholder="카테고리 (예: 책상류, 테이블류)"
+              list="layoutsim-category-datalist"
+              style={{ ...smallInputStyle, flex: 1, minWidth: 0, boxSizing: "border-box" }}
+            />
+            <button
+              type="button"
+              onClick={() => handleSaveShapeEdit(s.id)}
+              title="저장"
+              style={{ border: "none", background: C.ink, color: "#fff", borderRadius: 4, cursor: "pointer", fontSize: 11, padding: "0 8px", flexShrink: 0 }}
+            >
+              저장
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditingShapeId(null)}
+              title="취소"
+              style={{ border: `1px solid ${C.lineSoft}`, background: "transparent", color: C.muted, borderRadius: 4, cursor: "pointer", fontSize: 11, padding: "0 8px", flexShrink: 0 }}
+            >
+              취소
+            </button>
+          </div>
         )}
         <div style={{ display: "flex", flexDirection: "column", flexShrink: 0 }}>
           <button
@@ -13763,6 +13815,13 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               )}
             </div>
           )}
+          {/* "카테고리 잘못 설정해도 수정해서 원하는 카테고리에 넣을 수 있게" 요청으로 추가한, 카탈로그
+              이름 수정칸에서 쓰는 카테고리 자동완성 목록(모형 목록 전체에서 딱 한 번만 그림). */}
+          <datalist id="layoutsim-category-datalist">
+            {categoryNames.map((cat) => (
+              <option key={cat} value={cat} />
+            ))}
+          </datalist>
           <div style={{ borderTop: `1px solid ${C.lineSoft}`, paddingTop: 10 }}>
             <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>+ 새 모형 추가</div>
             <input
