@@ -2138,6 +2138,47 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     setPlacedItems((prev) => prev.map((it) => (it.groupId && groupIdsToClear.has(it.groupId) ? { ...it, groupId: null } : it)));
   }
 
+  // "가로든 세로든 제품들이 3개 이상 나란히 있을 때는 간격 동일하게" 요청 — 피그마·파워포인트의
+  // "가로 간격 동일하게/세로 간격 동일하게"와 같은 방식. 3개 이상 고른 상태에서 누르면, 맨 처음(가장
+  // 왼쪽 또는 위)과 맨 끝(가장 오른쪽 또는 아래) 모형은 그 자리에 그대로 두고, 그 사이 모형들만 옮겨서
+  // 모형과 모형 사이의 "빈 간격"이 전부 똑같아지도록 다시 배치한다. 가로·세로 중 어느 쪽 버튼을 따로
+  // 고를 필요 없이, 선택한 모형들이 가로로 더 넓게 퍼져 있으면 가로(x)로, 세로로 더 넓게 퍼져 있으면
+  // 세로(y)로 알아서 맞춘다("가로든 세로든" 요청과 일치). 회전한 모형은 화면에 실제로 보이는(회전
+  // 반영된) 가로·세로 크기를 기준으로 간격을 계산해야 진짜 빈 틈이 똑같아지므로, rotatedAabbSize로
+  // 구한 값을 쓴다.
+  function handleDistributeSelected() {
+    if (selectedPlacedIds.size < 3) return;
+    const entries = placedItems
+      .filter((it) => selectedPlacedIds.has(it.id))
+      .map((it) => {
+        const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
+        const aabb = rotatedAabbSize(it.widthCm, it.depthCm, rotation);
+        return { it, w: aabb.w, h: aabb.h };
+      });
+    const spanX = Math.max(...entries.map((e) => e.it.xCm + e.w)) - Math.min(...entries.map((e) => e.it.xCm));
+    const spanY = Math.max(...entries.map((e) => e.it.yCm + e.h)) - Math.min(...entries.map((e) => e.it.yCm));
+    const horizontal = spanX >= spanY;
+    const totalSpan = horizontal ? spanX : spanY;
+    const sorted = [...entries].sort((a, b) => (horizontal ? a.it.xCm - b.it.xCm : a.it.yCm - b.it.yCm));
+    const totalSize = sorted.reduce((sum, e) => sum + (horizontal ? e.w : e.h), 0);
+    const gap = Math.max(0, (totalSpan - totalSize) / (sorted.length - 1));
+    const updates = new Map();
+    let cursor = (horizontal ? sorted[0].it.xCm : sorted[0].it.yCm) + (horizontal ? sorted[0].w : sorted[0].h) + gap;
+    for (let i = 1; i < sorted.length - 1; i++) {
+      const e = sorted[i];
+      updates.set(e.it.id, cursor);
+      cursor += (horizontal ? e.w : e.h) + gap;
+    }
+    if (updates.size === 0) return;
+    setPlacedItems((prev) =>
+      prev.map((it) => {
+        if (!updates.has(it.id)) return it;
+        const pos = updates.get(it.id);
+        return horizontal ? { ...it, xCm: pos } : { ...it, yCm: pos };
+      })
+    );
+  }
+
   // 사각형은 0/90도만 돌려도 충분하지만, ㄱ자·U자는 방 구석·방향에 맞춰 4방향 모두 필요해서
   // 누를 때마다 0→90→180→270→0으로 한 바퀴 돈다. 예전에 저장된 배치(rotated: true/false만 있던
   // 옛 데이터)도 그대로 이어받을 수 있도록 rotation이 없으면 rotated 값으로 대신 계산한다.
@@ -3482,6 +3523,9 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 {placedItems.some((it) => selectedPlacedIds.has(it.id) && it.groupId) && (
                   <button onClick={handleUngroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>⛓️‍💥 그룹 해제</button>
                 )}
+                {selectedPlacedIds.size >= 3 && (
+                  <button onClick={handleDistributeSelected} title="양 끝 모형은 그대로 두고, 그 사이 모형들의 간격을 똑같이 맞춰요(가로로 나란하면 가로로, 세로로 나란하면 세로로 자동 판단)" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>↔ 간격 동일하게</button>
+                )}
                 <button onClick={handleRemoveSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🗑 삭제</button>
                 <button onClick={() => setSelectedPlacedIds(new Set())} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>선택 해제</button>
               </div>
@@ -3525,9 +3569,14 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               // ("테두리도 그리다 만 것 같고... 아마추어 느낌이야, 테두리 마감을 프로페셔널하게" 요청)
               // 예전엔 평소(선택 안 됐을 때) 테두리가 1px밖에 안 돼서, 특히 확대하지 않은 기본 배율에선
               // 거의 안 보이다시피 가늘어 "그리다 만" 스케치처럼 보였다. 1.4px로 살짝 더 또렷하게 올렸다
-              // — 그래도 선택(3px)·그룹(2px)보다는 여전히 가늘어서 강조 위계는 그대로 유지된다.
-              const shapeStrokeWidth = isSelected ? 3 : isGrouped ? 2 : 1.4;
-              const shapeStrokeDasharray = isGrouped && !isSelected ? "4 3" : undefined;
+              // — 그래도 선택(3px)보다는 여전히 가늘어서 강조 위계는 그대로 유지된다.
+              // ("그룹화 되었을 때도 그냥 점선표시 없이 반응을 안 해주면 더 좋겠어" 요청 — 예전엔 그룹인데
+              // 선택은 안 된 모형에 굵기(2px)·점선(4 3) 표시를 따로 줬는데, 이제 그룹 여부는 화면에
+              // 아무 표시도 하지 않는다 — 실제로 선택됐을 때만 반응하고, 그 전까지는 다른 모형과 똑같이
+              // 보인다. groupId 자체(한 번에 같이 선택·이동되는 동작)는 그대로 남아있고, 눈에 보이는
+              // 표시만 없앴다.
+              const shapeStrokeWidth = isSelected ? 3 : 1.4;
+              const shapeStrokeDasharray = undefined;
               // (위 요청 계속) ㄱ자·U자처럼 파인 모서리가 있는 모양은 꺾이는 자리(특히 안쪽으로 오목하게
               // 파인 모서리)의 테두리가 뾰족한 직각(miter, SVG 기본값)으로 그려지면 그 자리만 유독
               // 날카롭고 거칠어 보여 "미완성" 인상을 준다. 캐드 도면·가구 카탈로그에서 흔히 쓰는 방식대로
@@ -3608,7 +3657,10 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     userSelect: "none",
                     borderRadius: 3,
                     transition: "box-shadow 120ms ease, outline-color 120ms ease",
-                    outline: isNonRectShape ? "none" : isSelected ? `2px solid ${C.purple}` : isGrouped ? `1.5px dashed ${C.purple}` : "none",
+                    // ("그룹화 되었을 때도... 반응을 안 해주면 더 좋겠어" 요청 — 그룹인데 선택은 안 된
+                    // 사각형 모형에 주던 점선 테두리(1.5px dashed)를 없앴다. 이제 그룹 여부는 화면에
+                    // 아무 표시가 없고, 실제로 선택됐을 때만 반응한다.
+                    outline: isNonRectShape ? "none" : isSelected ? `2px solid ${C.purple}` : "none",
                     outlineOffset: isSelected ? 1 : 2,
                     // (위 shapeSvgStyle 수정과 같은 이유로) 둥글거나 파인 모양은 이제 이 바깥 네모
                     // 박스에 그림자를 안 주고, 실제 모양을 그리는 SVG의 drop-shadow가 대신한다 —
