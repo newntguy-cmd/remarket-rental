@@ -1762,6 +1762,8 @@ function Dashboard({ profile, onLogout }) {
   const [rentals, setRentals] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [shares, setShares] = useState([]);
+  // 지분관리 목록의 비고(전표/행 단위) — voucher_shares의 지분사별 비고와는 별개의 새 테이블(voucher_equity_notes)에서 불러온다.
+  const [equityNotes, setEquityNotes] = useState([]);
   const [tonOverrides, setTonOverrides] = useState([]); // 기준표에 없어 직원이 직접 입력해 저장해둔 톤수(품목/규격별), 다음 견적서부터 자동으로 채워짐
   const [activeTab, setActiveTab] = useState(null); // 로그인/새로고침 직후엔 메뉴 아무것도 선택 안 된 "무" 상태로 시작하고, 직접 눌러야만 해당 화면으로 이동한다.
   // 지분관리 화면은 목록/상세 중 어디에 있었는지를 자체적으로 기억하고 있어서, 메뉴의 "지분관리"를
@@ -1788,6 +1790,7 @@ function Dashboard({ profile, onLogout }) {
     fetchRentals();
     fetchCustomers();
     fetchShares();
+    fetchEquityNotes();
     fetchTonOverrides();
   }, []);
 
@@ -1806,6 +1809,12 @@ function Dashboard({ profile, onLogout }) {
   async function fetchShares() {
     const { data, error } = await supabase.from("voucher_shares").select("*");
     if (!error) setShares(data || []);
+  }
+
+  async function fetchEquityNotes() {
+    const { data, error } = await supabase.from("voucher_equity_notes").select("*");
+    if (!error) setEquityNotes(data || []);
+    // 테이블이 아직 안 만들어져 있어도(마이그레이션 전) 에러를 조용히 무시한다.
   }
 
   async function fetchTonOverrides() {
@@ -2174,7 +2183,7 @@ function Dashboard({ profile, onLogout }) {
         )}
 
         {activeTab === "shares" && isStaff && (
-          <EquityTab key={sharesResetKey} rentals={rentals} shares={shares} onRefresh={fetchShares} />
+          <EquityTab key={sharesResetKey} rentals={rentals} shares={shares} equityNotes={equityNotes} onRefresh={fetchShares} onNotesRefresh={fetchEquityNotes} />
         )}
 
         {activeTab === "sales" && isStaff && (
@@ -6330,11 +6339,59 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
 // ---------- 지분사 관리 ----------
 const equityListGrid = "28px 140px 140px 130px 1fr 130px 170px";
 
-function EquityTab({ rentals, shares, onRefresh }) {
+// "맨 오른쪽에 비고란도 하나 넣어주고" 요청 — voucher_shares 테이블의 지분사별 비고와는 별개로,
+// 전표(행) 단위로 남기는 비고. 전표번호가 없는 건도 있어서 voucher_no 대신 화면의 각 행 고유값(g.key)을
+// 기준으로 저장·조회한다. delivery_site_notes에서 이미 쓰던 "입력칸에서 포커스 벗어나면(onBlur) 저장"
+// 패턴을 그대로 따른다.
+function EquityNoteCell({ noteKey, initialValue, onSaved }) {
+  const [draft, setDraft] = useState(initialValue);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setDraft(initialValue);
+  }, [initialValue]);
+  async function save() {
+    if (draft === initialValue) return;
+    setSaving(true);
+    const { error } = await supabase
+      .from("voucher_equity_notes")
+      .upsert({ voucher_key: noteKey, note: draft.trim() || null, updated_at: new Date().toISOString() }, { onConflict: "voucher_key" });
+    setSaving(false);
+    if (error) {
+      alert("비고 저장 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    onSaved && onSaved();
+  }
+  return (
+    <input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={save}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.target.blur();
+      }}
+      onClick={(e) => e.stopPropagation()}
+      placeholder="비고"
+      style={{ ...smallInputStyle, width: "100%", boxSizing: "border-box", fontSize: 12.5, opacity: saving ? 0.6 : 1 }}
+      disabled={saving}
+    />
+  );
+}
+
+function EquityTab({ rentals, shares, equityNotes = [], onRefresh, onNotesRefresh }) {
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState(null);
   const [checkedKeys, setCheckedKeys] = useState(new Set());
   const [deletingSelected, setDeletingSelected] = useState(false);
+  // "거래처 옆에 현장명을 넣어줘, 맨 오른쪽에 비고란도 하나 넣어주고 전체적인 비율 밸런스 맞춰주고
+  // 간격조절, 소팅기능 추가해줘" 요청 — 렌탈내역(RentalListTab)에서 이미 쓰던 useResizableColumns를
+  // 여기도 그대로 적용한다. 예전엔 "지분사" 칸이 1fr(남는 공간을 다 먹는 가변폭)이라 화면이 넓으면
+  // 그 칸만 유난히 커 보이고 나머지 칸들은 오른쪽 구석에 몰려 보였다 — 다른 칸들과 비슷한 비율의
+  // 고정폭으로 바꿔서 전체 밸런스를 맞췄다.
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc");
+  const [colWidths, startResize] = useResizableColumns([110, 130, 140, 120, 220, 110, 130, 160]);
+  const equityListGridResizable = "28px " + colWidths.map((w) => `${w}px`).join(" ");
 
   const toggleCheck = (key) => {
     setCheckedKeys((prev) => {
@@ -6366,6 +6423,59 @@ function EquityTab({ rentals, shares, onRefresh }) {
     if (!q) return groups;
     return groups.filter((g) => [g.voucherNo, g.head.customer, g.head.site_name].filter(Boolean).join(" ").toLowerCase().includes(q));
   }, [groups, query]);
+
+  // 전표번호가 없는 건(g.key가 "__single_숫자")까지 포함해서 모든 행에 비고를 남길 수 있도록, voucher_no가
+  // 아니라 이 화면에서 각 행을 가리키는 고유값(g.key)으로 비고를 저장·조회한다.
+  const notesByKey = useMemo(() => {
+    const map = new Map();
+    for (const n of equityNotes) map.set(n.voucher_key, n.note || "");
+    return map;
+  }, [equityNotes]);
+
+  // 지분사 몫·발행/입금 건수까지 미리 계산해둬서, 화면에 그릴 때뿐 아니라 정렬 기준으로도 그대로 쓸 수 있게 한다.
+  const rowsData = useMemo(() => {
+    return filtered.map((g) => {
+      const rows = sharesByVoucher.get(g.voucherNo) || [];
+      const totalPercent = rows.reduce((s, r) => s + (Number(r.share_percent) || 0), 0);
+      const amountVat = Math.round(g.amount * 1.1);
+      const partnerAmount = Math.round(amountVat * (totalPercent / 100));
+      const issuedCount = rows.filter((r) => r.tax_invoice_issued).length;
+      const paidCount = rows.filter((r) => r.paid).length;
+      return { ...g, shareRows: rows, amountVat, partnerAmount, issuedCount, paidCount };
+    });
+  }, [filtered, sharesByVoucher]);
+
+  const sortAccessors = {
+    전표번호: (g) => g.voucherNo || "",
+    거래처: (g) => g.head.customer || "",
+    현장명: (g) => g.head.site_name || "",
+    "총금액(VAT포함)": (g) => g.amountVat,
+    "지분사 몫": (g) => (g.shareRows.length === 0 ? 0 : g.partnerAmount),
+  };
+  const handleSortClick = (label) => {
+    if (!sortAccessors[label]) return;
+    if (sortKey === label) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(label);
+      setSortDir("asc");
+    }
+  };
+  const sortedRowsData = useMemo(() => {
+    if (!sortKey || !sortAccessors[sortKey]) return rowsData;
+    const acc = sortAccessors[sortKey];
+    const list = [...rowsData];
+    list.sort((a, b) => {
+      const va = acc(a);
+      const vb = acc(b);
+      let cmp;
+      if (typeof va === "number" || typeof vb === "number") cmp = (Number(va) || 0) - (Number(vb) || 0);
+      else cmp = String(va).localeCompare(String(vb), "ko");
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowsData, sortKey, sortDir]);
 
   const selected = groups.find((g) => g.key === selectedKey) || null;
 
@@ -6444,29 +6554,45 @@ function EquityTab({ rentals, shares, onRefresh }) {
       )}
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
-        <div style={{ display: "grid", gridTemplateColumns: equityListGrid, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 850 }}>
+        <div style={{ display: "grid", gridTemplateColumns: equityListGridResizable, gap: 8, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 1150 }}>
           <div>
             <input ref={selectAllRef} type="checkbox" checked={allChecked} onChange={toggleSelectAll} />
           </div>
-          <div>전표번호</div>
-          <div>거래처</div>
-          <div>총금액(VAT포함)</div>
-          <div>지분사</div>
-          <div>지분사 몫</div>
-          <div>세금계산서 · 입금</div>
+          {["전표번호", "거래처", "현장명", "총금액(VAT포함)", "지분사", "지분사 몫", "세금계산서 · 입금", "비고"].map((label, i) => (
+            <div key={label} style={{ position: "relative" }}>
+              {sortAccessors[label] ? (
+                <button
+                  type="button"
+                  onClick={() => handleSortClick(label)}
+                  title="눌러서 정렬"
+                  style={{
+                    all: "unset",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 2,
+                    fontSize: 11.5,
+                    color: sortKey === label ? C.ink : C.muted,
+                    fontWeight: sortKey === label ? 700 : 400,
+                  }}
+                >
+                  {label}
+                  <span style={{ fontSize: 9, opacity: sortKey === label ? 1 : 0.35 }}>{sortKey === label ? (sortDir === "asc" ? "▲" : "▼") : "▲"}</span>
+                </button>
+              ) : (
+                label
+              )}
+              <ColResizeHandle onMouseDown={startResize(i)} />
+            </div>
+          ))}
         </div>
 
-        {filtered.map((g) => {
-          const rows = sharesByVoucher.get(g.voucherNo) || [];
-          const totalPercent = rows.reduce((s, r) => s + (Number(r.share_percent) || 0), 0);
-          const amountVat = Math.round(g.amount * 1.1);
-          const partnerAmount = Math.round(amountVat * (totalPercent / 100));
-          const issuedCount = rows.filter((r) => r.tax_invoice_issued).length;
-          const paidCount = rows.filter((r) => r.paid).length;
+        {sortedRowsData.map((g) => {
+          const rows = g.shareRows;
           return (
             <div
               key={g.key}
-              style={{ display: "grid", gridTemplateColumns: equityListGrid, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 850 }}
+              style={{ display: "grid", gridTemplateColumns: equityListGridResizable, gap: 8, padding: "12px 14px", fontSize: 13, alignItems: "center", borderBottom: `1px solid ${C.lineSoft}`, minWidth: 1150 }}
             >
               <div>
                 <input type="checkbox" checked={checkedKeys.has(g.key)} onChange={() => toggleCheck(g.key)} />
@@ -6478,22 +6604,24 @@ function EquityTab({ rentals, shares, onRefresh }) {
                 {g.voucherNo || "(번호없음)"}
               </button>
               <div>{g.head.customer || "-"}</div>
-              <div style={{ fontSize: 12.5 }}>{fmtWon(amountVat)}</div>
+              <div style={{ color: C.inkSoft, fontSize: 12.5 }}>{g.head.site_name || "-"}</div>
+              <div style={{ fontSize: 12.5 }}>{fmtWon(g.amountVat)}</div>
               <div style={{ fontSize: 12.5 }}>
                 {rows.length === 0 ? <span style={{ color: C.muted }}>{g.head.customer || "거래처"} 100%</span> : rows.map((r) => `${r.partner_name} ${r.share_percent}%`).join(", ")}
               </div>
-              <div style={{ fontSize: 12.5 }}>{rows.length === 0 ? "-" : fmtWon(partnerAmount)}</div>
+              <div style={{ fontSize: 12.5 }}>{rows.length === 0 ? "-" : fmtWon(g.partnerAmount)}</div>
               <div style={{ fontSize: 12.5 }}>
                 {rows.length === 0 ? (
                   <span style={{ color: C.muted }}>-</span>
                 ) : (
                   <>
-                    <span style={{ color: issuedCount === rows.length ? C.green : C.brick }}>{issuedCount}/{rows.length}</span>
+                    <span style={{ color: g.issuedCount === rows.length ? C.green : C.brick }}>{g.issuedCount}/{rows.length}</span>
                     {" · "}
-                    <span style={{ color: paidCount === rows.length ? C.green : C.brick }}>{paidCount}/{rows.length}</span>
+                    <span style={{ color: g.paidCount === rows.length ? C.green : C.brick }}>{g.paidCount}/{rows.length}</span>
                   </>
                 )}
               </div>
+              <EquityNoteCell noteKey={g.key} initialValue={notesByKey.get(g.key) || ""} onSaved={onNotesRefresh} />
             </div>
           );
         })}
