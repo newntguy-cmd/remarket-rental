@@ -11653,9 +11653,11 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   const [newShapeNotchWidth, setNewShapeNotchWidth] = useState(""); // ㄱ자: 잘려나간 모서리, U자: 안쪽 파인 부분
   const [newShapeNotchDepth, setNewShapeNotchDepth] = useState("");
   // "ㄱ자 퍼즐책상은 메뉴에도 위 모양대로" 요청으로 ㄱ자를 다시 등록할 수 있게 하면서, 어느 모서리가
-  // 파였는지를 사용자가 부호 없이 아이콘 버튼으로 고를 수 있게 추가한 상태값(기본은 예전과 같은
-  // "오른쪽 위"). handleAddShape에서 이 값에 따라 notch_width_cm/notch_depth_cm의 부호를 정한다.
-  const [newShapeCutCorner, setNewShapeCutCorner] = useState("tr"); // "tr" | "tl" | "br" | "bl"
+  // 파였는지를 사용자가 부호 없이 아이콘 버튼으로 고를 수 있게 추가한 상태값. "ㄱ자에서 왼쪽2개
+  // 없애주고(오른쪽 위, 왼쪽 위)" 요청으로 위쪽이 파인 두 버튼을 없애면서, 기본값도 이제 실제로 고를
+  // 수 있는 값인 "오른쪽 아래"로 바꿨다. handleAddShape에서 이 값에 따라 notch_width_cm/notch_depth_cm의
+  // 부호를 정한다.
+  const [newShapeCutCorner, setNewShapeCutCorner] = useState("br"); // "br" | "bl" (예전엔 "tr"·"tl"도 있었지만 버튼에서 뺌)
   const [newShapeCategory, setNewShapeCategory] = useState(""); // 비워두면 "기타"로 등록됨
   const [savingShape, setSavingShape] = useState(false);
 
@@ -13776,13 +13778,12 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                   예전에 이미 U자·한쪽둥근으로 등록해둔 모형·배치판은 그대로 남아있고 화면에도 그대로
                   나오므로(isPoly/isRoundEnd 렌더 로직은 그대로 둠), 기존 데이터에는 영향이 없다.
                   "(캐드형)"이라는 표기도 사무의자·회의의자 둘 다 없앴다(요청: "(캐드형)이라는 글자 없애주고").
-                  "책상류 퍼즐은... 하단이 직각이 아니라 아로져있어" 요청으로 "곡선ㄱ자"를 ㄱ자 바로
-                  옆에 추가했다 — 파인 모서리를 고르는 방식은 ㄱ자와 완전히 같고, 그 모서리를 직각이 아닌
-                  부드러운 곡선으로 그린다는 점만 다르다. */}
+                  "곡선ㄱ자"도 한 번 추가됐다가 "곡선ㄱ자 없애줘" 요청으로 다시 뺐다 — U자·한쪽둥근과
+                  똑같이 이미 이걸로 등록해둔 모형이 있으면 그대로 남아있고 렌더 로직(isCurvedL)도
+                  그대로 두어서 기존 데이터에는 영향이 없다. */}
               {[
                 { key: "rect", label: "사각형" },
                 { key: "l", label: "ㄱ자" },
-                { key: "curvedl", label: "곡선ㄱ자" },
                 { key: "circle", label: "원형" },
                 { key: "chair", label: "사무의자" },
                 { key: "meetingchair", label: "회의의자" },
@@ -13847,14 +13848,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
             {/* "ㄱ자 퍼즐책상이 메뉴에 뒤집어져 있다" 요청으로 추가한 모서리 선택 — 잘려나간 모서리가
                 네 곳 중 어디인지 부호를 몰라도 아이콘만 보고 그대로 고를 수 있게 한다(고른 값은
                 handleAddShape에서 notch_width_cm/notch_depth_cm의 부호로 바뀌어 저장됨). 미니 아이콘은
-                24×24 정사각형에서 한쪽 모서리가 파인 모양을 그대로 그려서, 실제 결과와 똑같이 보인다. */}
+                24×24 정사각형에서 한쪽 모서리가 파인 모양을 그대로 그려서, 실제 결과와 똑같이 보인다.
+                "ㄱ자에서 왼쪽2개 없애주고(오른쪽 위, 왼쪽 위)" 요청으로 실제로 쓰는 "아래쪽이 파인"
+                두 가지(오른쪽 아래·왼쪽 아래)만 남기고 위쪽 두 가지는 뺐다 — handleAddShape의 부호
+                계산 로직은 그대로라 예전에 위쪽이 파인 걸로 이미 등록해둔 모형은 계속 그대로 보인다. */}
             {(newShapeType === "l" || newShapeType === "curvedl") && (
               <div style={{ marginBottom: 6 }}>
                 <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>어느 모서리가 파였나요?</div>
                 <div style={{ display: "flex", gap: 6 }}>
                   {[
-                    { key: "tr", label: "오른쪽 위", points: "0,0 16,0 16,8 24,8 24,24 0,24" },
-                    { key: "tl", label: "왼쪽 위", points: "8,0 24,0 24,24 0,24 0,8 8,8" },
                     { key: "br", label: "오른쪽 아래", points: "0,0 24,0 24,16 16,16 16,24 0,24" },
                     { key: "bl", label: "왼쪽 아래", points: "0,0 24,0 24,24 8,24 8,16 0,16" },
                   ].map((opt) => (
