@@ -5014,6 +5014,16 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
     }
   };
 
+  // "거래처 현장명 등 구분값 사이사이 간격조절 기능 넣어줘" 요청 — 예전엔 칸 너비가 rentalListGrid로
+  // 고정돼 있어서(거래처·현장명처럼 긴 이름이 있으면 줄바꿈되며 줄이 늘어났었다), 업체별데이터·판매현황
+  // 등 다른 표에서 이미 쓰고 있던 useResizableColumns(헤더 칸 오른쪽 끝을 마우스로 끌어서 너비를
+  // 조절하는 공용 기능)를 여기도 그대로 적용한다. 순서는 예전 rentalListGrid와 동일하게 전표번호·거래처·
+  // 현장명·담당자·배송일자·품목·렌탈기간·렌탈개시일·렌탈만료일·금액·상태 11칸이고, 시작 너비도 예전
+  // 고정폭과 같게 맞췄다(품목 칸만 원래 1fr로 남는 공간을 다 썼던 걸 220px 고정값으로 바꿨다 — 너비
+  // 조절 기능 자체가 "1fr(가변)"과는 같이 쓸 수 없어서, 필요하면 이 칸도 손잡이로 늘리면 된다).
+  const [colWidths, startResize] = useResizableColumns([120, 110, 120, 90, 100, 220, 90, 100, 100, 110, 90]);
+  const rentalListGridResizable = "28px " + colWidths.map((w) => `${w}px`).join(" ");
+
   const toggleCheck = (key) => {
     setCheckedKeys((prev) => {
       const next = new Set(prev);
@@ -5394,7 +5404,7 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: rentalListGrid,
+            gridTemplateColumns: rentalListGridResizable,
             gap: 8,
             padding: "10px 14px",
             fontSize: 11.5,
@@ -5406,31 +5416,33 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
           <div>
             <input ref={selectAllRef} type="checkbox" checked={allChecked} onChange={toggleSelectAll} />
           </div>
-          {["전표번호", "거래처", "현장명", "담당자", "배송일자", "품목", "렌탈기간", "렌탈개시일", "렌탈만료일", "금액", "상태"].map((label) =>
-            sortAccessors[label] ? (
-              <button
-                key={label}
-                type="button"
-                onClick={() => handleSortClick(label)}
-                title="눌러서 정렬"
-                style={{
-                  all: "unset",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 2,
-                  fontSize: 11.5,
-                  color: sortKey === label ? C.ink : C.muted,
-                  fontWeight: sortKey === label ? 700 : 400,
-                }}
-              >
-                {label}
-                <span style={{ fontSize: 9, opacity: sortKey === label ? 1 : 0.35 }}>{sortKey === label ? (sortDir === "asc" ? "▲" : "▼") : "▲"}</span>
-              </button>
-            ) : (
-              <div key={label}>{label}</div>
-            )
-          )}
+          {["전표번호", "거래처", "현장명", "담당자", "배송일자", "품목", "렌탈기간", "렌탈개시일", "렌탈만료일", "금액", "상태"].map((label, i) => (
+            <div key={label} style={{ position: "relative" }}>
+              {sortAccessors[label] ? (
+                <button
+                  type="button"
+                  onClick={() => handleSortClick(label)}
+                  title="눌러서 정렬"
+                  style={{
+                    all: "unset",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 2,
+                    fontSize: 11.5,
+                    color: sortKey === label ? C.ink : C.muted,
+                    fontWeight: sortKey === label ? 700 : 400,
+                  }}
+                >
+                  {label}
+                  <span style={{ fontSize: 9, opacity: sortKey === label ? 1 : 0.35 }}>{sortKey === label ? (sortDir === "asc" ? "▲" : "▼") : "▲"}</span>
+                </button>
+              ) : (
+                label
+              )}
+              <ColResizeHandle onMouseDown={startResize(i)} />
+            </div>
+          ))}
         </div>
 
         {sortedFiltered.map((g) => {
@@ -5447,7 +5459,7 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
               key={g.key}
               style={{
                 display: "grid",
-                gridTemplateColumns: rentalListGrid,
+                gridTemplateColumns: rentalListGridResizable,
                 gap: 8,
                 padding: "12px 14px",
                 fontSize: 13,
