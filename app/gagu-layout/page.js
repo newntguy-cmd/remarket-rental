@@ -3631,9 +3631,13 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     }
                     // 그룹으로 묶인 모형이면 하나만 눌러도 그룹 전체가 같이 선택된다. Shift를 누른 채
                     // 클릭하면 지금 선택 상태에 더하거나(없던 것) 빼는(있던 것) "토글"로 동작한다.
+                    // ("가구 클릭하고 컨트롤 누르고 다른 가구 클릭하면 클릭으로 다 지정되게" 요청 —
+                    // Ctrl(맥은 Cmd)도 Shift와 똑같이 "더하기/빼기 토글"로 동작하게 했다. 마퀴(빈 곳을
+                    // 끌어서 여러 개 고르는 것)에서 이미 Ctrl을 "더하기" 단축키로 쓰고 있어서, 낱개
+                    // 클릭에서도 같은 손가락(Ctrl)으로 일관되게 여러 개를 고를 수 있다.)
                     const groupIds = it.groupId ? placedItems.filter((p) => p.groupId === it.groupId).map((p) => p.id) : [it.id];
                     setSelectedPlacedIds((prev) => {
-                      if (e.shiftKey) {
+                      if (e.shiftKey || e.ctrlKey || e.metaKey) {
                         const next = new Set(prev);
                         const allIn = groupIds.every((id) => next.has(id));
                         groupIds.forEach((id) => (allIn ? next.delete(id) : next.add(id)));
@@ -3645,7 +3649,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                   title={
                     rulerMode
                       ? "줄자 모드 — 클릭하면 이 모형의 가장 가까운 모서리에 점이 찍혀요"
-                      : `${it.name} (${it.widthCm}×${it.depthCm}cm)${isGrouped ? " · 그룹" : ""} — 눌러서 선택(Shift+클릭으로 여러 개, 빈 곳을 끌면 마퀴 선택) 후 방향키로 이동(Shift+방향키는 크게), 끌어서 옮기거나 모서리를 끌어 크기 조절, 버튼으로 회전·삭제, Ctrl+C/Ctrl+V로 복사`
+                      : `${it.name} (${it.widthCm}×${it.depthCm}cm)${isGrouped ? " · 그룹" : ""} — 눌러서 선택(Shift+클릭 또는 Ctrl+클릭으로 여러 개, 빈 곳을 끌면 마퀴 선택) 후 방향키로 이동(Shift+방향키는 크게), 끌어서 옮기거나 모서리를 끌어 크기 조절, 버튼으로 회전·삭제, Ctrl+C/Ctrl+V로 복사`
                   }
                   style={{
                     position: "absolute",
