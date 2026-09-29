@@ -5664,48 +5664,6 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
     setExportingItems(false);
   }
 
-  // "드래그 앤 드랍으로 입력한 견적서도 엑셀로 출력할 수 있는 기능을 넣어줘" 요청 — 위 "선택 엑셀출력"은
-  // 체크한 품목만 내려받는데, 이건 체크 여부와 상관없이 이 전표에 있는 품목 전체를 내려받는다. 원본
-  // 견적서가 PDF였든 엑셀이었든(드래그 앤 드랍으로 올린 그대로), 지금 화면에 있는(직접 고쳤으면 고친
-  // 그대로) 품목표를 새 엑셀 파일로 뽑아준다.
-  const [exportingAllItems, setExportingAllItems] = useState(false);
-  async function handleExportAllItemsExcel() {
-    if (items.length === 0) {
-      alert("내려받을 품목이 없어요.");
-      return;
-    }
-    setExportingAllItems(true);
-    const XLSX = await import("xlsx");
-    const rows = items.map((it) => {
-      const vat = Math.round((Number(it.amount) || 0) * 0.1);
-      return [
-        it.item || "",
-        it.spec || "",
-        Number(it.qty) || 0,
-        Number(it.unit_price) || 0,
-        Number(it.amount) || 0,
-        vat,
-        it.note || "",
-        (Number(it.amount) || 0) + vat,
-      ];
-    });
-    const header2 = ["품목명", "규격", "수량", "단가", "공급가액", "부가세", "적요", "합계"];
-    const aoa = [
-      [`${header.voucherNo || "전표"} 품목 내역`],
-      [`거래처: ${header.customer || ""}  현장명: ${header.siteName || ""}`],
-      [`추출일: ${todayISO()}`],
-      [],
-      header2,
-      ...rows,
-    ];
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [{ wch: 20 }, { wch: 22 }, { wch: 8 }, { wch: 12 }, { wch: 13 }, { wch: 11 }, { wch: 16 }, { wch: 13 }];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "품목 내역");
-    XLSX.writeFile(wb, `${header.voucherNo || "전표"}_품목내역_전체_${todayISO()}.xlsx`);
-    setExportingAllItems(false);
-  }
-
   const handleDeleteSelectedItems = () => {
     if (checkedItemIdxs.size === 0) return;
     const msg = hideInsteadOfDelete
@@ -5733,13 +5691,96 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
   const [tonEdits, setTonEdits] = useState({}); // idx -> 사용자가 직접 고친 톤수(저장 전 임시 편집값)
   const [savingTonIdx, setSavingTonIdx] = useState(null);
 
-  // "배송비 옆에 품목별데이터(같은 품목은 같은 품목끼리 수량 합산해서 계산해주는거) 버튼 하나 넣어줘" 요청 —
-  // "품목별데이터/톤수/배송비"(QuickTonCalcPanel) 화면에서 이미 쓰던 groupItemQuantities(같은 품목명+규격끼리
-  // 수량을 합쳐주는 공용 함수)를, 지금 이 전표의 품목(itemsWithTon — 배송비·설치비 등 요금성 품목은 이미
-  // tonExcluded로 표시돼 있어 자동으로 빠짐)에 그대로 적용한다.
+  // "배송비 옆에 품목별데이터 버튼 넣어주고 체크박스·선택삭제·소팅·출력기능까지 넣어주는데, 실제 출력물은
+  // 업체별데이터(CustomerDataTab)의 "품목별 수량 통계"와 똑같은 방식으로" 요청 — 그 화면에서 이미 잘 쓰고
+  // 있던 체크박스 선택삭제·소팅·인쇄 방식을 그대로 옮겨오되, 여러 전표를 모은 게 아니라 지금 이 전표 하나의
+  // 품목(items)만 기준으로 합산한다. (엑셀로 출력 버튼은 이 인쇄 기능과 헷갈릴 수 있어서 뺐다 — "선택
+  // 엑셀출력"은 품목 내역 표에 있던 기존 기능이라 그대로 남아있다.)
   const [itemStatsOpen, setItemStatsOpen] = useState(false);
-  const groupedItemStats = useMemo(() => groupItemQuantities(itemsWithTon), [itemsWithTon]);
-  const groupedItemTotalQty = groupedItemStats.reduce((s, r) => s + r.qty, 0);
+
+  // 품목/규격/총수량 머리글을 눌러 정렬 기준·방향을 바꿀 수 있게 한다(기본은 총수량 많은순 — CustomerDataTab과 동일).
+  const [itemStatSortKey, setItemStatSortKey] = useState("qty"); // "item" | "spec" | "qty"
+  const [itemStatSortDir, setItemStatSortDir] = useState("desc"); // "asc" | "desc"
+  function toggleItemStatSort(key) {
+    if (itemStatSortKey === key) {
+      setItemStatSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setItemStatSortKey(key);
+      setItemStatSortDir("asc");
+    }
+  }
+
+  // 같은 품목명+규격끼리 수량을 합산한다. 업체별데이터의 "품목별 수량 통계"와 똑같이, 배송비·설치비 등도
+  // (그 자체가 하나의 품목행으로 들어와 있다면) 그대로 포함한다 — 톤수 계산용 tonExcluded와는 무관한 화면이다.
+  const rawItemStats = useMemo(() => {
+    const map = new Map();
+    for (const it of items) {
+      const itemName = (it.item || "").trim() || "(품목명 없음)";
+      const specName = (it.spec || "").trim();
+      const key = `${itemName}〓${specName}`;
+      if (!map.has(key)) map.set(key, { key, item: itemName, spec: specName, qty: 0 });
+      map.get(key).qty += Number(it.qty) || 0;
+    }
+    return Array.from(map.values());
+  }, [items]);
+
+  // 이 출력물에서만 숨긴 품목 — 전표별로 구분해서 저장한다(다른 전표에 영향 없이, 이 컴퓨터·이 브라우저에서만 유지).
+  // 업체별데이터의 "품목별 수량 통계"에서 이미 쓰던 저장 방식(getHiddenItemStatKeys/setHiddenItemStatKeys)을 그대로 재사용한다.
+  const [hiddenItemStatKeysState, setHiddenItemStatKeysState] = useState(() => new Set(getHiddenItemStatKeys(group.key)));
+  const [checkedItemStatKeys, setCheckedItemStatKeys] = useState(new Set());
+
+  const itemStats = useMemo(() => {
+    const arr = rawItemStats.filter((r) => !hiddenItemStatKeysState.has(r.key));
+    const dir = itemStatSortDir === "asc" ? 1 : -1;
+    arr.sort((a, b) => {
+      if (itemStatSortKey === "qty") return (a.qty - b.qty) * dir;
+      const av = itemStatSortKey === "item" ? a.item : a.spec;
+      const bv = itemStatSortKey === "item" ? b.item : b.spec;
+      return (av || "").localeCompare(bv || "", "ko") * dir;
+    });
+    return arr;
+  }, [rawItemStats, hiddenItemStatKeysState, itemStatSortKey, itemStatSortDir]);
+  const itemStatsTotalQty = itemStats.reduce((s, r) => s + r.qty, 0);
+  const hiddenItemStatCount = rawItemStats.filter((r) => hiddenItemStatKeysState.has(r.key)).length;
+
+  function toggleItemStatChecked(key) {
+    setCheckedItemStatKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+  function toggleItemStatCheckedAll() {
+    setCheckedItemStatKeys((prev) => (prev.size === itemStats.length ? new Set() : new Set(itemStats.map((r) => r.key))));
+  }
+  // 선택한 품목을 "이 출력물에서만" 숨긴다. items(품목 내역 표)는 전혀 건드리지 않는다.
+  function handleDeleteSelectedItemStats() {
+    const chosen = itemStats.filter((r) => checkedItemStatKeys.has(r.key));
+    if (chosen.length === 0) return;
+    if (!confirm(`선택한 품목 ${chosen.length}종을 이 "품목별 수량 통계" 출력물에서만 숨길까요?\n(품목 내역 표의 원본 데이터에는 전혀 영향을 주지 않아요)`)) return;
+    const next = new Set(hiddenItemStatKeysState);
+    for (const r of chosen) next.add(r.key);
+    setHiddenItemStatKeysState(next);
+    setHiddenItemStatKeys(group.key, Array.from(next));
+    setCheckedItemStatKeys(new Set());
+  }
+  function handleRestoreHiddenItemStats() {
+    setHiddenItemStatKeysState(new Set());
+    setHiddenItemStatKeys(group.key, []);
+  }
+  // 인쇄/PDF 저장 시 브라우저 상단에 뜨는 문서 제목을 잠깐 "품목별 수량통계"로 바꿔서, 인쇄 머리글과
+  // "PDF로 저장" 시 기본 파일명이 모두 "품목별 수량통계"가 되게 한다(업체별데이터와 동일한 방식).
+  function handlePrintItemStats() {
+    const prevTitle = document.title;
+    document.title = "품목별 수량통계";
+    const restoreTitle = () => {
+      document.title = prevTitle;
+    };
+    window.addEventListener("afterprint", restoreTitle, { once: true });
+    window.print();
+    setTimeout(restoreTitle, 2000);
+  }
 
   // 이 품목(품목명+규격)의 톤수를 다음부터 자동으로 채워지도록 ton_overrides에 저장한다.
   // 같은 품목+규격을 가진 다른 전표/품목에도 바로 반영된다(ImportPreview의 저장 기능과 동일한 원리).
@@ -6117,35 +6158,118 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
             품목별데이터
             <span style={{ fontSize: 11, color: C.muted, marginLeft: 2 }}>{itemStatsOpen ? "▲ 접기" : "▼ 보기"}</span>
           </button>
-          <button type="button" onClick={handleExportAllItemsExcel} disabled={exportingAllItems} style={ghostBtnStyle}>
-            {exportingAllItems ? "내려받는 중…" : "엑셀로 출력"}
-          </button>
         </div>
 
         {itemStatsOpen && (
-          <div style={{ borderTop: `1px solid ${C.line}`, padding: "12px 18px" }}>
-            <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 10 }}>
-              같은 품목·규격끼리 수량을 합쳐서 보여줘요. (배송비·설치비 등 요금성 품목은 자동으로 빠져요)
+          <div className="rdp-itemstats-outer" style={{ borderTop: `1px solid ${C.line}`, padding: "16px 18px" }}>
+            <style>{`
+              @media print {
+                body * { visibility: hidden; }
+                #rdp-itemstats-print-area, #rdp-itemstats-print-area * { visibility: visible; }
+                #rdp-itemstats-print-area { position: absolute; top: 0; left: 0; width: 100%; padding: 24px; }
+                .rdp-itemstats-no-print { display: none !important; }
+              }
+            `}</style>
+
+            <div className="rdp-itemstats-no-print" style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+              <button type="button" onClick={handlePrintItemStats} style={primaryBtnStyle2}>인쇄 / PDF로 저장</button>
+              <button
+                type="button"
+                onClick={handleDeleteSelectedItemStats}
+                disabled={checkedItemStatKeys.size === 0}
+                style={{ ...ghostBtnStyle, opacity: checkedItemStatKeys.size === 0 ? 0.5 : 1 }}
+              >
+                {`선택삭제${checkedItemStatKeys.size > 0 ? ` (${checkedItemStatKeys.size})` : ""}`}
+              </button>
+              {hiddenItemStatCount > 0 && (
+                <button type="button" onClick={handleRestoreHiddenItemStats} style={ghostBtnStyle}>
+                  숨긴 품목 복원 ({hiddenItemStatCount})
+                </button>
+              )}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 100px", gap: 8, fontSize: 11.5, color: C.muted, padding: "4px 0", borderBottom: `1px solid ${C.line}` }}>
-              <div>품목</div>
-              <div>규격</div>
-              <div>총수량</div>
+            <div className="rdp-itemstats-no-print" style={{ fontSize: 11.5, color: C.muted, marginTop: -6, marginBottom: 12 }}>
+              * 여기서 "선택삭제"는 이 출력물에서만 안 보이게 숨기는 거예요. 품목 내역 표의 원본 데이터에는 영향이 없어요.
             </div>
-            {groupedItemStats.map((g) => (
-              <div key={g.key} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 100px", gap: 8, alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.lineSoft}`, fontSize: 12.5 }}>
-                <div>{g.item}</div>
-                <div style={{ color: C.inkSoft }}>{g.spec || "-"}</div>
-                <div>{g.qty.toLocaleString("ko-KR")}개</div>
+
+            <div id="rdp-itemstats-print-area" style={{ border: `1px solid ${C.line}`, background: "#fff", padding: 24 }}>
+              <div style={{ textAlign: "center", marginBottom: 20 }}>
+                <div style={{ fontFamily: serif, fontSize: 20 }}>품목별 수량 통계</div>
               </div>
-            ))}
-            {groupedItemStats.length === 0 ? (
-              <div style={{ padding: 16, textAlign: "center", color: C.muted, fontSize: 12.5 }}>표시할 품목이 없어요.</div>
-            ) : (
-              <div style={{ display: "flex", justifyContent: "flex-end", fontSize: 12.5, paddingTop: 8, fontWeight: 600 }}>
-                총 {groupedItemStats.length}종 · {groupedItemTotalQty.toLocaleString("ko-KR")}개
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 16 }}>
+                <div>
+                  <div>
+                    거래처: {header.customer || "-"}
+                    {header.siteName ? ` · 현장명: ${header.siteName}` : ""}
+                  </div>
+                  <div>담당자: {header.manager || "-"}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div>전표번호: {header.voucherNo || "(번호없음)"}</div>
+                </div>
               </div>
-            )}
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <th className="rdp-itemstats-no-print" style={{ border: `1px solid ${C.line}`, padding: "8px 10px", background: C.bg, width: 32 }}>
+                      <input
+                        type="checkbox"
+                        checked={itemStats.length > 0 && checkedItemStatKeys.size === itemStats.length}
+                        onChange={toggleItemStatCheckedAll}
+                      />
+                    </th>
+                    {[
+                      { label: "품목", key: "item" },
+                      { label: "규격", key: "spec" },
+                      { label: "총수량", key: "qty" },
+                    ].map((h) => (
+                      <th
+                        key={h.key}
+                        onClick={() => toggleItemStatSort(h.key)}
+                        style={{
+                          border: `1px solid ${C.line}`,
+                          padding: "8px 10px",
+                          background: C.bg,
+                          textAlign: h.key === "qty" ? "right" : "left",
+                          cursor: "pointer",
+                          userSelect: "none",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {h.label}
+                        {itemStatSortKey === h.key ? (itemStatSortDir === "asc" ? " ▲" : " ▼") : ""}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {itemStats.map((r) => (
+                    <tr key={r.key}>
+                      <td className="rdp-itemstats-no-print" style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>
+                        <input type="checkbox" checked={checkedItemStatKeys.has(r.key)} onChange={() => toggleItemStatChecked(r.key)} />
+                      </td>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.item}</td>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.spec || "-"}</td>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td className="rdp-itemstats-no-print" style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}></td>
+                    <td colSpan={2} style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
+                      합계
+                    </td>
+                    <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>
+                      {itemStatsTotalQty.toLocaleString("ko-KR")}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+
+              {itemStats.length === 0 && (
+                <div style={{ padding: 30, textAlign: "center", color: C.muted, fontSize: 13 }}>표시할 품목이 없어요.</div>
+              )}
+            </div>
           </div>
         )}
 
