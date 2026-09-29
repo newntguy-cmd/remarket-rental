@@ -4974,6 +4974,14 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
   const [merging, setMerging] = useState(false);
   const [deletingSelected, setDeletingSelected] = useState(false);
   const [downloadingFiles, setDownloadingFiles] = useState(false);
+  // "무영씨엠이든 (주)무영씨엠이든 무영씨엠건축사사무소든 다 같은 회사... 체크한 후 상단에 버튼을
+  // 눌러 공식명칭(사업자등록증상 상호)으로 통일" 요청 — 목록에서 체크한 건들의 거래처명을 한 번에
+  // 하나의 이름으로 바꿔주는 기능. CustomerDataTab의 handleMergeCustomerGroup(사업자등록번호가 이미
+  // customers 테이블에 같이 등록돼 있어야 자동으로 찾아줌)과 달리, 여기는 그 번호가 없어도 사람이
+  // 직접 보고 골라 체크한 건들을 그대로 원하는 이름으로 바꿀 수 있어 더 즉각적으로 쓸 수 있다.
+  const [showMergeCustomerName, setShowMergeCustomerName] = useState(false);
+  const [mergeCustomerNameInput, setMergeCustomerNameInput] = useState("");
+  const [mergingCustomerName, setMergingCustomerName] = useState(false);
   const [showAdvSearch, setShowAdvSearch] = useState(false);
   const [advSearch, setAdvSearch] = useState(emptyAdvSearch);
   const [appliedAdv, setAppliedAdv] = useState(emptyAdvSearch);
@@ -5089,6 +5097,20 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
   const visibleKeys = sortedFiltered.map((g) => g.key);
   const allChecked = visibleKeys.length > 0 && visibleKeys.every((k) => checkedKeys.has(k));
   const someChecked = visibleKeys.some((k) => checkedKeys.has(k));
+
+  // 체크한 건들에 실제로 쓰인 거래처명들(중복 제거) — 여러 표기가 섞여 있으면 그대로 보여주고,
+  // 새로 입력할 이름칸의 기본값은 그중 가장 긴 이름(보통 "무영씨엠건축사사무소"처럼 정식 상호가
+  // 더 길다)으로 미리 채워준다.
+  const checkedDistinctCustomers = useMemo(() => {
+    const set = new Set();
+    for (const g of groups) {
+      if (checkedKeys.has(g.key)) {
+        const c = (g.head.customer || "").trim();
+        if (c) set.add(c);
+      }
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "ko"));
+  }, [groups, checkedKeys]);
   const selectAllRef = useRef(null);
   useEffect(() => {
     if (selectAllRef.current) selectAllRef.current.indeterminate = someChecked && !allChecked;
@@ -5133,6 +5155,43 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
       alert("합치는 중 오류가 발생했어요: " + error.message);
       return;
     }
+    setCheckedKeys(new Set());
+    onRefresh();
+  }
+
+  // "무영씨엠이든 (주)무영씨엠이든... 체크박스 체크한 후 상단 버튼을 누르면 공식명칭으로 통일" 요청 —
+  // 체크한 건들의 거래처명을 입력한 이름 하나로 한꺼번에 바꾼다.
+  async function handleMergeCustomerName() {
+    const finalName = mergeCustomerNameInput.trim();
+    if (!finalName) return;
+    const chosen = groups.filter((g) => checkedKeys.has(g.key));
+    if (chosen.length === 0) return;
+    const otherNames = checkedDistinctCustomers.filter((n) => n !== finalName);
+    if (
+      !confirm(
+        `선택한 ${chosen.length}건의 거래처명을 전부 "${finalName}"(으)로 통일할까요?` +
+          (otherNames.length > 0 ? `\n("${otherNames.join(", ")}" 표기도 전부 이 이름으로 바뀌어요)` : "") +
+          `\n렌탈내역·구매내역·업체별데이터 등 모든 화면에 반영돼요.`
+      )
+    )
+      return;
+    setMergingCustomerName(true);
+    const allIds = chosen.flatMap((g) => g.rows.map((r) => r.id));
+    const { error } = await supabase.from("rentals").update({ customer: finalName }).in("id", allIds);
+    if (error) {
+      setMergingCustomerName(false);
+      alert("거래처명 통합 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    // customers 테이블(견적서 업로드 시 저장돼두는 거래처별 정보)에 예전 이름으로 남은 등록도 함께
+    // 정리해서, 다음에 같은 거래처를 입력할 때 다시 예전 이름으로 자동완성되지 않게 한다(실패해도
+    // 위 렌탈내역 통합 자체는 이미 끝났으므로 그냥 넘어간다).
+    if (otherNames.length > 0) {
+      await supabase.from("customers").delete().in("name", otherNames);
+    }
+    setMergingCustomerName(false);
+    setShowMergeCustomerName(false);
+    setMergeCustomerNameInput("");
     setCheckedKeys(new Set());
     onRefresh();
   }
@@ -5272,10 +5331,62 @@ function RentalListTab({ rentals, onRefresh, isAdmin = true, managerName = "", t
           <button onClick={handleDownloadSelectedFiles} disabled={downloadingFiles} style={miniBtnStyle}>
             {downloadingFiles ? "다운로드 중…" : "원본 파일 다운로드"}
           </button>
+          {/* "무영씨엠이든 (주)무영씨엠이든 무영씨엠건축사사무소든 다 같은 회사... 체크박스 체크한 후
+              상단에 버튼을 하나 넣어주고 누르면 공식명칭(사업자등록증상 상호)으로 변환되어 같은 회사로
+              인지되는 기능" 요청. */}
+          <button
+            onClick={() => {
+              const longest = checkedDistinctCustomers.reduce((best, n) => (n.length > (best || "").length ? n : best), "");
+              setMergeCustomerNameInput(longest);
+              setShowMergeCustomerName(true);
+            }}
+            style={miniBtnStyle}
+            title="체크한 건들의 거래처명(표기가 서로 달라도)을 하나의 공식 명칭으로 통일해요"
+          >
+            거래처명 통합
+          </button>
           <button onClick={handleDeleteSelected} disabled={deletingSelected} style={{ ...miniBtnStyle, borderColor: C.brick, color: C.brick }}>
             {deletingSelected ? "삭제 중…" : "선택 삭제"}
           </button>
-          <button onClick={() => setCheckedKeys(new Set())} style={miniBtnStyle}>선택 해제</button>
+          <button
+            onClick={() => {
+              setCheckedKeys(new Set());
+              setShowMergeCustomerName(false);
+              setMergeCustomerNameInput("");
+            }}
+            style={miniBtnStyle}
+          >
+            선택 해제
+          </button>
+        </div>
+      )}
+
+      {checkedKeys.size > 0 && showMergeCustomerName && (
+        <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 14, marginBottom: 10 }}>
+          <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 8 }}>
+            선택한 {checkedKeys.size}건에 쓰인 거래처명: {checkedDistinctCustomers.join(", ") || "(없음)"}
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input
+              placeholder="통일할 공식 명칭(사업자등록증상 상호)을 입력하세요"
+              value={mergeCustomerNameInput}
+              onChange={(e) => setMergeCustomerNameInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleMergeCustomerName(); }}
+              style={{ ...inputStyle, width: 320 }}
+              autoFocus
+            />
+            <button
+              onClick={handleMergeCustomerName}
+              disabled={!mergeCustomerNameInput.trim() || mergingCustomerName}
+              style={miniBtnStylePrimary}
+            >
+              {mergingCustomerName ? "통합하는 중…" : "이 이름으로 통합"}
+            </button>
+            <button onClick={() => setShowMergeCustomerName(false)} style={miniBtnStyle}>취소</button>
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+            선택한 {checkedKeys.size}건 전부의 거래처명이 이 이름으로 바뀌어요(렌탈내역·구매내역·업체별데이터 등 모든 화면에 반영).
+          </div>
         </div>
       )}
 
