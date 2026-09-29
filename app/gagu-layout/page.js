@@ -1393,13 +1393,45 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  // 배치판(canvasRef, 실제 방 크기만큼 그려지는 "내용물")은 확대할수록 커지지만, 그걸 담는 바깥 창
+  // (viewportRef)은 항상 같은 크기로 고정해서 옆 목록 등 다른 화면 배치가 확대 배율에 따라 흔들리지
+  // 않게 한다. VIEW_BLEED는 확대하지 않은 기본 상태에서도 선택된 모형의 테두리·그림자가("오른쪽과
+  // 하단은 여전히 제품을 먹고 있어" 신고로 없앤 overflow:hidden 대신 이번엔 이 여유 공간으로) 창
+  // 가장자리에 잘리지 않도록 두는 안전 여백이다(대지(layoutsim-ground) 크기 계산에서도 쓰기 때문에,
+  // MAX_CANVAS_W/H보다 먼저 선언해둔다).
+  const VIEW_BLEED = 14;
+  // "전체보기에서 대지 부분이 마우스로 스크롤 안 내려도 한 화면에 다 들어와야 한다" 요청 — 대지
+  // (layoutsim-ground)에 직접 ref를 달아, 화면(전체보기 오버레이) 맨 위에서 대지가 실제로 시작하는
+  // 지점(groundTopPx)을 매번 실측한다(canvasColWidthPx를 실측하는 것과 같은 방식). 처음 그려지기
+  // 전에는 잴 수 없으니 예전에 쓰던 "220"과 비슷한 값을 기본값으로 두고, 그려진 뒤(아래 useLayoutEffect)
+  // 바로 정확한 값으로 고쳐 잰다. 대지 위쪽 내용(안내문구가 몇 줄로 접히는지, 저장된 배치안 목록이
+  // 있는지 등)이 바뀔 때마다 다시 재도록, 그 값들을 의존값으로 둔다.
+  const groundRef = useRef(null);
+  const [groundTopPx, setGroundTopPx] = useState(220);
+  useLayoutEffect(() => {
+    if (!isFullView || !groundRef.current) return;
+    const top = Math.round(groundRef.current.getBoundingClientRect().top);
+    setGroundTopPx((prev) => (Math.abs(prev - top) >= 2 ? top : prev));
+  }, [isFullView, boards.length, spaceWidthM, spaceDepthM, viewportSize.w, viewportSize.h, canvasColWidthPx]);
   const MAX_CANVAS_W = Math.max(360, canvasColWidthPx);
   // "전체판은... 고정값이고 결코 움직이지 않아 / 세로는 4칸 정도면 되겠다" 요청대로, 평소(전체보기
   // 아닐 때)의 세로 크기는 창 높이에 따라 늘었다 줄었다 하지 않는 고정 크기로 못박았다 — 방이 아무리
   // 커도(또는 창이 아무리 커도) 이 안에서 줌인·줌아웃으로 들여다보는 식이다. "전체보기" 버튼을 눌러
   // 화면 전체로 키운 상태는 별개로, 그때는 여전히 창 높이만큼 넉넉하게 쓴다.
   const NORMAL_CANVAS_H = 600;
-  const MAX_CANVAS_H = isFullView ? Math.max(420, viewportSize.h - 220) : NORMAL_CANVAS_H;
+  // (버그 수정) "전체보기에서 대지 부분이 마우스로 스크롤 안 내려도 한 화면에 다 들어와야 하는데, 지금은
+  // 스크롤을 내려야 대지 아래쪽이 보인다" 신고 — 예전엔 대지 위(제목·안내문구·공간 크기 입력줄·저장된
+  // 배치안 목록·안내문구+도구모음줄 등)에 실제로 얼마나 자리를 차지하는지 "220"이라는 숫자 하나로
+  // 대충 짐작해서 뺐는데, 이 숫자가 실제 상황(안내문구가 화면 폭에 따라 몇 줄로 접히는지, 저장된
+  // 배치안이 있어서 그 줄이 하나 더 생기는지 등)과 안 맞으면 늘 이런 식으로 틀어졌다(가로 폭 계산을
+  // canvasColWidthPx로 실제 재는 것과 똑같은 문제였다). 그래서 세로도 똑같이, "대지가 실제로 화면
+  // 어디서부터 시작하는지"(groundTopPx, 아래 groundRef로 직접 잰 값)를 직접 재서 그 자리까지 빼는
+  // 방식으로 바꿨다 — 위에 있는 내용이 몇 줄이 되든, 저장된 배치안이 몇 개가 있든 상관없이 항상
+  // 정확하게 화면 안에 맞아떨어진다.
+  const BOTTOM_GAP_PX = 14; // 전체보기 오버레이 자체의 아래쪽 padding(14px)과 맞춰, 대지 아래에도 숨쉴 틈을 남겨둔다.
+  const MAX_CANVAS_H = isFullView
+    ? Math.max(420, viewportSize.h - groundTopPx - BOTTOM_GAP_PX - VIEW_BLEED * 2)
+    : NORMAL_CANVAS_H;
   const scale = Math.min(MAX_CANVAS_W / (spaceWidthM * 100), MAX_CANVAS_H / (spaceDepthM * 100));
   const canvasWidthPx = spaceWidthM * 100 * scale;
   const canvasHeightPx = spaceDepthM * 100 * scale;
@@ -1426,12 +1458,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 실제로 화면에 그릴 때 쓰는 배율 = 딱 맞춤 배율(scale) × 확대 배율(zoomLevel). 배치판 위 모든
   // 모형·줄자·선택 표시·마우스 좌표 계산은 이제 이 값을 기준으로 한다.
   const renderScale = scale * zoomLevel;
-  // 배치판(canvasRef, 실제 방 크기만큼 그려지는 "내용물")은 확대할수록 커지지만, 그걸 담는 바깥 창
-  // (viewportRef)은 항상 같은 크기로 고정해서 옆 목록 등 다른 화면 배치가 확대 배율에 따라 흔들리지
-  // 않게 한다. VIEW_BLEED는 확대하지 않은 기본 상태에서도 선택된 모형의 테두리·그림자가("오른쪽과
-  // 하단은 여전히 제품을 먹고 있어" 신고로 없앤 overflow:hidden 대신 이번엔 이 여유 공간으로) 창
-  // 가장자리에 잘리지 않도록 두는 안전 여백이다.
-  const VIEW_BLEED = 14;
+  // (VIEW_BLEED는 이제 MAX_CANVAS_W/H 바로 앞에서 선언한다 — 대지 크기 계산에도 쓰기 때문.)
   // (버그 수정) "대지 안에서는 시프트 마우스로 자유롭게 움직여야 하는데... 확대 후 움직이는 과정에서
   // 어느 선까지만 이동이 되는구나 끝까지 갈수가 없음" 신고 — 예전엔 이 창(viewportRef, 실제로 Shift+
   // 끌기가 먹히는 잘리는 범위)이 방의 "딱 맞춤" 크기(canvasWidthPx/HeightPx)에 여백만 살짝 더한
@@ -3243,6 +3270,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               여전히 방 크기·줌과 무관하게 화면 크기(canvasColWidthPx 등)에만 좌우되는 고정값 그대로다
               (딱 28px만큼만 항상 더 넉넉해질 뿐, 방을 만들거나 줌을 해도 전혀 흔들리지 않는다). */}
           <div
+            ref={groundRef}
             className="layoutsim-ground"
             style={{
               position: "relative",
