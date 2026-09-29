@@ -6881,8 +6881,10 @@ function EquityDetailPanel({ group, shares, onClose, onSaved }) {
     next[idx] = { ...next[idx], ...patch };
     setRows(next);
   };
+  // "지분사명이 기본적으로 '주관사'라고 되어 있는데, '주관사'라고 하지 말고 그냥 거래처명을 자동으로
+  // 넣어줘" 요청 — 첫 번째 지분사 행을 추가할 때 "주관사"라는 고정 문구 대신, 이 전표의 거래처명을 그대로 채워준다.
   const addRow = () =>
-    setRows([...rows, { id: null, partnerName: rows.length === 0 ? "주관사" : "", sharePercent: "", note: "", taxInvoiceIssued: false, paid: false }]);
+    setRows([...rows, { id: null, partnerName: rows.length === 0 ? (group.head.customer || "") : "", sharePercent: "", note: "", taxInvoiceIssued: false, paid: false }]);
   const removeRow = (idx) => setRows(rows.filter((_, i) => i !== idx));
 
   const totalPercent = rows.reduce((s, r) => s + (Number(r.sharePercent) || 0), 0);
