@@ -5663,6 +5663,49 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
     XLSX.writeFile(wb, `${header.voucherNo || "전표"}_품목내역_${todayISO()}.xlsx`);
     setExportingItems(false);
   }
+
+  // "드래그 앤 드랍으로 입력한 견적서도 엑셀로 출력할 수 있는 기능을 넣어줘" 요청 — 위 "선택 엑셀출력"은
+  // 체크한 품목만 내려받는데, 이건 체크 여부와 상관없이 이 전표에 있는 품목 전체를 내려받는다. 원본
+  // 견적서가 PDF였든 엑셀이었든(드래그 앤 드랍으로 올린 그대로), 지금 화면에 있는(직접 고쳤으면 고친
+  // 그대로) 품목표를 새 엑셀 파일로 뽑아준다.
+  const [exportingAllItems, setExportingAllItems] = useState(false);
+  async function handleExportAllItemsExcel() {
+    if (items.length === 0) {
+      alert("내려받을 품목이 없어요.");
+      return;
+    }
+    setExportingAllItems(true);
+    const XLSX = await import("xlsx");
+    const rows = items.map((it) => {
+      const vat = Math.round((Number(it.amount) || 0) * 0.1);
+      return [
+        it.item || "",
+        it.spec || "",
+        Number(it.qty) || 0,
+        Number(it.unit_price) || 0,
+        Number(it.amount) || 0,
+        vat,
+        it.note || "",
+        (Number(it.amount) || 0) + vat,
+      ];
+    });
+    const header2 = ["품목명", "규격", "수량", "단가", "공급가액", "부가세", "적요", "합계"];
+    const aoa = [
+      [`${header.voucherNo || "전표"} 품목 내역`],
+      [`거래처: ${header.customer || ""}  현장명: ${header.siteName || ""}`],
+      [`추출일: ${todayISO()}`],
+      [],
+      header2,
+      ...rows,
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 20 }, { wch: 22 }, { wch: 8 }, { wch: 12 }, { wch: 13 }, { wch: 11 }, { wch: 16 }, { wch: 13 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "품목 내역");
+    XLSX.writeFile(wb, `${header.voucherNo || "전표"}_품목내역_전체_${todayISO()}.xlsx`);
+    setExportingAllItems(false);
+  }
+
   const handleDeleteSelectedItems = () => {
     if (checkedItemIdxs.size === 0) return;
     const msg = hideInsteadOfDelete
@@ -5689,6 +5732,14 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
   const [tonDetailOpen, setTonDetailOpen] = useState(false);
   const [tonEdits, setTonEdits] = useState({}); // idx -> 사용자가 직접 고친 톤수(저장 전 임시 편집값)
   const [savingTonIdx, setSavingTonIdx] = useState(null);
+
+  // "배송비 옆에 품목별데이터(같은 품목은 같은 품목끼리 수량 합산해서 계산해주는거) 버튼 하나 넣어줘" 요청 —
+  // "품목별데이터/톤수/배송비"(QuickTonCalcPanel) 화면에서 이미 쓰던 groupItemQuantities(같은 품목명+규격끼리
+  // 수량을 합쳐주는 공용 함수)를, 지금 이 전표의 품목(itemsWithTon — 배송비·설치비 등 요금성 품목은 이미
+  // tonExcluded로 표시돼 있어 자동으로 빠짐)에 그대로 적용한다.
+  const [itemStatsOpen, setItemStatsOpen] = useState(false);
+  const groupedItemStats = useMemo(() => groupItemQuantities(itemsWithTon), [itemsWithTon]);
+  const groupedItemTotalQty = groupedItemStats.reduce((s, r) => s + r.qty, 0);
 
   // 이 품목(품목명+규격)의 톤수를 다음부터 자동으로 채워지도록 ton_overrides에 저장한다.
   // 같은 품목+규격을 가진 다른 전표/품목에도 바로 반영된다(ImportPreview의 저장 기능과 동일한 원리).
@@ -6056,7 +6107,47 @@ function RentalDetailPanel({ group, onClose, onSaved, isAdmin = true, managerNam
           {header.siteAddress && <div style={{ width: 1, alignSelf: "stretch", background: C.line }} />}
           <DeliverySiteInfoButton address={header.siteAddress} />
           <DeliveryFeeButton address={header.siteAddress} transactionType={header.transactionType} totalTon={totalTon} />
+          <div style={{ width: 1, alignSelf: "stretch", background: C.line }} />
+          <button
+            type="button"
+            onClick={() => setItemStatsOpen((v) => !v)}
+            title="눌러서 같은 품목·규격끼리 수량을 합친 데이터를 확인해요"
+            style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 14, color: C.ink, fontFamily: sans }}
+          >
+            품목별데이터
+            <span style={{ fontSize: 11, color: C.muted, marginLeft: 2 }}>{itemStatsOpen ? "▲ 접기" : "▼ 보기"}</span>
+          </button>
+          <button type="button" onClick={handleExportAllItemsExcel} disabled={exportingAllItems} style={ghostBtnStyle}>
+            {exportingAllItems ? "내려받는 중…" : "엑셀로 출력"}
+          </button>
         </div>
+
+        {itemStatsOpen && (
+          <div style={{ borderTop: `1px solid ${C.line}`, padding: "12px 18px" }}>
+            <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 10 }}>
+              같은 품목·규격끼리 수량을 합쳐서 보여줘요. (배송비·설치비 등 요금성 품목은 자동으로 빠져요)
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 100px", gap: 8, fontSize: 11.5, color: C.muted, padding: "4px 0", borderBottom: `1px solid ${C.line}` }}>
+              <div>품목</div>
+              <div>규격</div>
+              <div>총수량</div>
+            </div>
+            {groupedItemStats.map((g) => (
+              <div key={g.key} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 100px", gap: 8, alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.lineSoft}`, fontSize: 12.5 }}>
+                <div>{g.item}</div>
+                <div style={{ color: C.inkSoft }}>{g.spec || "-"}</div>
+                <div>{g.qty.toLocaleString("ko-KR")}개</div>
+              </div>
+            ))}
+            {groupedItemStats.length === 0 ? (
+              <div style={{ padding: 16, textAlign: "center", color: C.muted, fontSize: 12.5 }}>표시할 품목이 없어요.</div>
+            ) : (
+              <div style={{ display: "flex", justifyContent: "flex-end", fontSize: 12.5, paddingTop: 8, fontWeight: 600 }}>
+                총 {groupedItemStats.length}종 · {groupedItemTotalQty.toLocaleString("ko-KR")}개
+              </div>
+            )}
+          </div>
+        )}
 
         {tonDetailOpen && (
           <div style={{ borderTop: `1px solid ${C.line}`, padding: "12px 18px" }}>
