@@ -3522,8 +3522,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               // 그래서 이런 모양들은 바깥 네모 박스에는 더 이상 테두리·글로우를 주지 않고, 실제 모양을
               // 그리는 SVG 쪽에(파인 부분·둥근 모서리를 그대로 따라가도록) 선택 표시를 옮겼다.
               const isNonRectShape = isPoly || isCircle || isRoundEnd || isCurvedL || isChair || isMeetingChair || isSofa;
-              const shapeStrokeWidth = isSelected ? 3 : isGrouped ? 2 : 1;
+              // ("테두리도 그리다 만 것 같고... 아마추어 느낌이야, 테두리 마감을 프로페셔널하게" 요청)
+              // 예전엔 평소(선택 안 됐을 때) 테두리가 1px밖에 안 돼서, 특히 확대하지 않은 기본 배율에선
+              // 거의 안 보이다시피 가늘어 "그리다 만" 스케치처럼 보였다. 1.4px로 살짝 더 또렷하게 올렸다
+              // — 그래도 선택(3px)·그룹(2px)보다는 여전히 가늘어서 강조 위계는 그대로 유지된다.
+              const shapeStrokeWidth = isSelected ? 3 : isGrouped ? 2 : 1.4;
               const shapeStrokeDasharray = isGrouped && !isSelected ? "4 3" : undefined;
+              // (위 요청 계속) ㄱ자·U자처럼 파인 모서리가 있는 모양은 꺾이는 자리(특히 안쪽으로 오목하게
+              // 파인 모서리)의 테두리가 뾰족한 직각(miter, SVG 기본값)으로 그려지면 그 자리만 유독
+              // 날카롭고 거칠어 보여 "미완성" 인상을 준다. 캐드 도면·가구 카탈로그에서 흔히 쓰는 방식대로
+              // 모서리를 살짝 둥글려(round) 매끄럽게 마감했다 — 모형의 실제 치수·꼭짓점 좌표는 전혀
+              // 안 바뀌고, 그 테두리선을 그리는 붓끝 모양만 부드러워진다.
+              const shapeStrokeJoin = "round";
               // (버그 수정) "동그라미 주위로 네모박스의 희미한 잔상이 안보이니?" 신고 — 선택했을 때
               // 생기는 보라색 테두리·글로우는 예전에 이미 SVG 쪽(실제 모양)으로 옮겨서 고쳤는데
               // (위 14152번째 줄 주석 참고), 정작 "평소에 늘 켜져 있는" 은은한 입체감 그림자(아래
@@ -3532,9 +3542,12 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               // 바깥의 네 귀퉁이에서 이 네모난 그림자만 살짝 삐져나와 "네모 잔상"처럼 보였다. 이제
               // 이 그림자도 선택 글로우와 똑같이 실제 모양(SVG)을 따라가도록 옮겨서, 항상(선택
               // 여부와 상관없이) 네모가 아니라 진짜 모양의 윤곽을 따라 은은하게 깔리게 했다.
+              // (위 요청 계속) 평소 그림자도 아주 옅게(0.12) 깔려 있어서 입체감이 잘 안 느껴졌다 —
+              // 살짝만 더 짙고 깊게(0.18, 퍼짐도 4px로) 줘서, 배치판 바탕 위에 실제로 "놓여 있는" 느낌이
+              // 나도록 다듬었다.
               const shapeSvgStyle = {
                 display: "block",
-                filter: isSelected ? "drop-shadow(0 0 4px rgba(107,92,165,0.6))" : "drop-shadow(0 1px 3px rgba(28,43,58,0.12))",
+                filter: isSelected ? "drop-shadow(0 0 4px rgba(107,92,165,0.6))" : "drop-shadow(0 1.5px 4px rgba(28,43,58,0.18))",
               };
               return (
                 <div
@@ -3628,6 +3641,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                           stroke={C.purple}
                           strokeWidth={shapeStrokeWidth}
                           strokeDasharray={shapeStrokeDasharray}
+                          strokeLinejoin={shapeStrokeJoin}
                           vectorEffect="non-scaling-stroke"
                         />
                       </svg>
@@ -3642,6 +3656,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                           stroke={C.purple}
                           strokeWidth={shapeStrokeWidth}
                           strokeDasharray={shapeStrokeDasharray}
+                          strokeLinejoin={shapeStrokeJoin}
                         />
                       </svg>
                     ) : isRoundEnd ? (
@@ -3652,6 +3667,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                           stroke={C.purple}
                           strokeWidth={shapeStrokeWidth}
                           strokeDasharray={shapeStrokeDasharray}
+                          strokeLinejoin={shapeStrokeJoin}
                           vectorEffect="non-scaling-stroke"
                         />
                       </svg>
@@ -3663,6 +3679,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                           stroke={C.purple}
                           strokeWidth={shapeStrokeWidth}
                           strokeDasharray={shapeStrokeDasharray}
+                          strokeLinejoin={shapeStrokeJoin}
                           vectorEffect="non-scaling-stroke"
                         />
                       </svg>
@@ -3679,7 +3696,11 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                         <SofaTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
                       </svg>
                     ) : (
-                      <div style={{ width: "100%", height: "100%", background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 3, boxSizing: "border-box" }} />
+                      // (위 요청 계속) 사각형은 선택 강조를 이 안쪽 테두리가 아니라 바깥 wrapper의
+                      // outline·그림자가 이미 맡고 있어서(위쪽 style의 outline/boxShadow 참고), 여기
+                      // 안쪽 테두리는 selection 여부와 무관하게 다른 모양들의 "평소" 굵기(1.4px)에
+                      // 맞춰 통일감만 준다 — 선택했을 때 outline과 겹쳐 두꺼워 보이는 일이 없도록.
+                      <div style={{ width: "100%", height: "100%", background: C.purpleBg, border: `1.4px solid ${C.purple}`, borderRadius: 3, boxSizing: "border-box" }} />
                     )}
                   </div>
                   {/* "가구 이름이 지저분하게 나오니까 깔끔하게" 요청 — 이름 대신 규격(가로×세로)만
