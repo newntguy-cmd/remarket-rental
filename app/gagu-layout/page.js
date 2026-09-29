@@ -1432,8 +1432,19 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 하단은 여전히 제품을 먹고 있어" 신고로 없앤 overflow:hidden 대신 이번엔 이 여유 공간으로) 창
   // 가장자리에 잘리지 않도록 두는 안전 여백이다.
   const VIEW_BLEED = 14;
-  const viewportWidthPx = canvasWidthPx + VIEW_BLEED * 2;
-  const viewportHeightPx = canvasHeightPx + VIEW_BLEED * 2;
+  // (버그 수정) "대지 안에서는 시프트 마우스로 자유롭게 움직여야 하는데... 확대 후 움직이는 과정에서
+  // 어느 선까지만 이동이 되는구나 끝까지 갈수가 없음" 신고 — 예전엔 이 창(viewportRef, 실제로 Shift+
+  // 끌기가 먹히는 잘리는 범위)이 방의 "딱 맞춤" 크기(canvasWidthPx/HeightPx)에 여백만 살짝 더한
+  // 크기로 고정돼 있었다. 그래서 대지(점선 테두리, MAX_CANVAS_W×MAX_CANVAS_H)가 훨씬 넓어도, 확대한
+  // 방을 끌어서 옮길 수 있는 실제 범위는 그 작은 창 안으로만 한정됐고, 창 밖으로는 제아무리 끌어도
+  // 더 나가지지 않아 "끝까지 갈 수 없는" 것처럼 보였다 — 대지의 남는 공간이 통째로 낭비되고 있었던
+  // 셈이다. 이제 이 창을 대지 크기(MAX_CANVAS_W×MAX_CANVAS_H) 밑으로는 절대 작아지지 않게
+  // Math.max로 키워서, 대지 안의 모든 공간을 실제로 Shift+끌기 이동 범위로 쓸 수 있게 한다 — 방이
+  // 딱 맞춤 배율에서 이미 한쪽 방향으로 대지 끝까지 꽉 차 있는 경우(scale을 정한 바로 그 방향)만
+  // 예전처럼 canvasWidthPx/HeightPx+여백 크기를 그대로 쓴다(그래야 그 방향에서 대지보다 창이 더
+  // 작아지는 일 없이 항상 최소한 이전과 동일하게 동작한다).
+  const viewportWidthPx = Math.max(canvasWidthPx + VIEW_BLEED * 2, MAX_CANVAS_W);
+  const viewportHeightPx = Math.max(canvasHeightPx + VIEW_BLEED * 2, MAX_CANVAS_H);
   const worldWidthPx = spaceWidthM * 100 * renderScale;
   const worldHeightPx = spaceDepthM * 100 * renderScale;
 
@@ -1456,8 +1467,14 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     const renderScaleAt = scale * zoom;
     const wPx = spaceWidthM * 100 * renderScaleAt;
     const hPx = spaceDepthM * 100 * renderScaleAt;
-    const baseLeft = VIEW_BLEED - (wPx - canvasWidthPx) / 2;
-    const baseTop = VIEW_BLEED - (hPx - canvasHeightPx) / 2;
+    // (위 viewportWidthPx/HeightPx 수정과 짝을 이루는 부분) 예전엔 "VIEW_BLEED - (wPx-canvasWidthPx)/2"
+    // 식으로, 창 크기가 늘 canvasWidthPx+VIEW_BLEED*2라는 걸 전제로 한 공식이었다. 이제 창이 대지
+    // 크기까지 커질 수 있으므로, 실제 창 크기(viewportWidthPx/HeightPx)를 기준으로 방을 가운데
+    // 놓는 일반적인 공식으로 바꿨다 — 창이 예전 크기 그대로일 때는 두 식이 수학적으로 완전히 같아서
+    // (VIEW_BLEED - (wPx-canvasWidthPx)/2 = (canvasWidthPx+VIEW_BLEED*2 - wPx)/2 = (viewportWidthPx-wPx)/2)
+    // 기존 동작은 그대로 유지된다.
+    const baseLeft = (viewportWidthPx - wPx) / 2;
+    const baseTop = (viewportHeightPx - hPx) / 2;
     return { left: baseLeft + pan.x, top: baseTop + pan.y, baseLeft, baseTop, worldWidthPx: wPx, worldHeightPx: hPx, renderScaleAt };
   }
   const worldOffset = computeWorldOffset(zoomLevel, viewPan);
