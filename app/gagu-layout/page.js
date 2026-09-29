@@ -736,6 +736,12 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 대신, 카테고리별로 위/아래 화살표를 눌러 직접 순서를 바꿀 수 있게 한다. 지금 순서를 바꾸는 중인
   // 모형의 id를 담아뒤서 그 버튼들만 잠깐 비활성화한다(중복 클릭 방지).
   const [movingShapeId, setMovingShapeId] = useState(null);
+  // "품목명 수정할 수 있게 기능 넣어줘" 요청: 모형 목록(카탈로그)에 등록해둔 모형의 이름을 직접 고칠 수
+  // 있게 한다. editingShapeId에 지금 이름을 고치는 중인 모형의 id를 담아두고, 그 줄만 이름 대신 입력칸을
+  // 보여준다(배치판에 이미 놓인 개별 모형의 이름을 고치는 manualNameInput과는 다른, 카탈로그 자체의
+  // 이름을 바꾸는 기능 — 한 번 고치면 그 모형을 앞으로 새로 끌어다 놓을 때부터 새 이름으로 보인다).
+  const [editingShapeId, setEditingShapeId] = useState(null);
+  const [editingShapeName, setEditingShapeName] = useState("");
 
   const [widthInput, setWidthInput] = useState("5");
   const [depthInput, setDepthInput] = useState("4");
@@ -905,6 +911,23 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     fetchShapes();
   }
 
+  // "품목명 수정할 수 있게 기능 넣어줘" 요청 — 카탈로그(모형 목록)에 등록된 모형 이름을 고쳐서
+  // 저장한다(예: 잘못 붙인 이름 "44"를 "탑책상" 등으로 바로잡기). 빈 이름으로는 저장하지 않고,
+  // 원래 이름과 똑같이 입력했거나 취소한 경우엔 서버에 불필요한 요청을 보내지 않는다.
+  async function handleRenameShape(id, rawName) {
+    const newName = (rawName || "").trim();
+    setEditingShapeId(null);
+    const current = shapes.find((s) => s.id === id);
+    if (!newName || !current || newName === current.name) return;
+    // 화면에는 바로 반영해서 기다리는 느낌 없이 즉시 바뀐 것처럼 보이게 하고, 저장이 실패하면 되돌린다.
+    setShapes((prev) => prev.map((s) => (s.id === id ? { ...s, name: newName } : s)));
+    const { error } = await supabase.from("layout_shapes").update({ name: newName }).eq("id", id);
+    if (error) {
+      alert("이름 수정 중 오류가 발생했어요: " + error.message);
+      setShapes((prev) => prev.map((s) => (s.id === id ? { ...s, name: current.name } : s)));
+    }
+  }
+
   // "위아래 옮길 수 있게도 해줘" 요청: 같은 카테고리 안에서만 순서를 바꾼다(다른 카테고리로 옮기는
   // 기능은 아님). 눌린 모형과 그 위/아래 이웃의 자리를 바꾼 뒤, 그 카테고리 안의 모든 모형에 0부터
   // 다시 순서 번호(sort_order)를 매겨서 저장한다 — 순서가 없던 예전 데이터가 섞여 있어도 한 번
@@ -993,12 +1016,13 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     const isFirstInCat = posInCat <= 0;
     const isLastInCat = posInCat === -1 || posInCat >= catItems.length - 1;
     const isMoving = movingShapeId === s.id;
+    const isEditingName = editingShapeId === s.id;
     return (
       <div
         key={s.id}
-        draggable
+        draggable={!isEditingName}
         onDragStart={(e) => handleDragStartCatalog(e, s)}
-        title="끌어서 배치판에 놓으세요"
+        title={isEditingName ? undefined : "끌어서 배치판에 놓으세요"}
         style={{
           display: "flex",
           justifyContent: "space-between",
@@ -1049,9 +1073,39 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         ) : (
           <div style={{ width: 14, height: 14, background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 2, flexShrink: 0 }} />
         )}
-        <span style={{ flex: 1 }}>
-          {s.name} <span style={{ color: C.muted, fontSize: 11 }}>({sizeLabel})</span>
-        </span>
+        {isEditingName ? (
+          <input
+            autoFocus
+            value={editingShapeName}
+            onChange={(e) => setEditingShapeName(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onDragStart={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleRenameShape(s.id, editingShapeName);
+              else if (e.key === "Escape") setEditingShapeId(null);
+            }}
+            onBlur={() => handleRenameShape(s.id, editingShapeName)}
+            style={{ ...smallInputStyle, flex: 1, minWidth: 0, boxSizing: "border-box" }}
+          />
+        ) : (
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {s.name} <span style={{ color: C.muted, fontSize: 11 }}>({sizeLabel})</span>
+          </span>
+        )}
+        {!isEditingName && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setEditingShapeId(s.id);
+              setEditingShapeName(s.name);
+            }}
+            title="품목명 수정"
+            style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 12, flexShrink: 0, padding: "1px 2px" }}
+          >
+            ✏️
+          </button>
+        )}
         <div style={{ display: "flex", flexDirection: "column", flexShrink: 0 }}>
           <button
             type="button"
