@@ -10094,6 +10094,32 @@ function AsBoardTab({ isAdmin, managerName }) {
   const [uploadState, setUploadState] = useState(null);
   const [uploadKey, setUploadKey] = useState(0); // 새 파일/붙여넣기로 다시 채울 때마다 확인 폼을 강제로 새로 마운트시키는 키
 
+  // "A/S관리대장 번호 고객명 등 간격조절기능, 소팅기능 넣어줘" 요청 — 다른 표들과 마찬가지로 헤더 칸
+  // 오른쪽 끝을 드래그해서 너비를 조절하고, 칸 제목을 눌러서 정렬할 수 있게 한다.
+  const [colWidths, startResize] = useResizableColumns([70, 100, 120, 100, 170, 200, 80, 90, 100]);
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc"); // "asc" | "desc"
+  const AS_COLUMNS = ["번호", "고객명", "연락처", "방문예정일", "주소", "A/S 내용", "작성자", "작성일", "진행상태"];
+  const sortAccessors = {
+    번호: (r) => Number(r.management_no) || 0,
+    고객명: (r) => r.customer_name || "",
+    연락처: (r) => r.contact || "",
+    방문예정일: (r) => r.visit_date || "",
+    주소: (r) => r.address || "",
+    "A/S 내용": (r) => r.content || "",
+    작성자: (r) => r.author || "",
+    작성일: (r) => r.created_at || "",
+    진행상태: (r) => r.status || "",
+  };
+  const handleSortClick = (label) => {
+    if (!sortAccessors[label]) return;
+    if (sortKey === label) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(label);
+      setSortDir("asc");
+    }
+  };
+
   useEffect(() => {
     fetchRecords();
   }, []);
@@ -10123,13 +10149,29 @@ function AsBoardTab({ isAdmin, managerName }) {
     return list;
   }, [records, statusFilter, query]);
 
+  // 열 제목을 눌러 정렬을 지정했으면 그 기준으로, 아니면 원래 순서(작성일 최신순)를 그대로 유지한다.
+  const sortedFiltered = useMemo(() => {
+    if (!sortKey || !sortAccessors[sortKey]) return filtered;
+    const acc = sortAccessors[sortKey];
+    const list = [...filtered];
+    list.sort((a, b) => {
+      const va = acc(a);
+      const vb = acc(b);
+      let cmp;
+      if (typeof va === "number" || typeof vb === "number") cmp = (Number(va) || 0) - (Number(vb) || 0);
+      else cmp = String(va).localeCompare(String(vb), "ko");
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return list;
+  }, [filtered, sortKey, sortDir]);
+
   useEffect(() => {
     setPage(1); // 상태 탭/검색어가 바뀌면 항상 1페이지로 되돌린다.
   }, [statusFilter, query]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / AS_PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages);
-  const pageItems = filtered.slice((pageSafe - 1) * AS_PAGE_SIZE, pageSafe * AS_PAGE_SIZE);
+  const pageItems = sortedFiltered.slice((pageSafe - 1) * AS_PAGE_SIZE, pageSafe * AS_PAGE_SIZE);
 
   function openNew() {
     setEditingRecord(null);
@@ -10346,21 +10388,39 @@ function AsBoardTab({ isAdmin, managerName }) {
       )}
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
-        <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 980, width: "100%" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 1064, width: "100%", tableLayout: "fixed" }}>
           <thead>
             <tr style={{ background: C.bg, borderBottom: `1px solid ${C.line}` }}>
-              <th style={asTh}>
+              <th style={{ ...asTh, width: 34 }}>
                 <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAllPage} />
               </th>
-              <th style={asTh}>번호</th>
-              <th style={asTh}>고객명</th>
-              <th style={asTh}>연락처</th>
-              <th style={asTh}>방문예정일</th>
-              <th style={asTh}>주소</th>
-              <th style={{ ...asTh, minWidth: 220 }}>A/S 내용</th>
-              <th style={asTh}>작성자</th>
-              <th style={asTh}>작성일</th>
-              <th style={asTh}>진행상태</th>
+              {AS_COLUMNS.map((label, i) => (
+                <th key={label} style={{ ...asTh, width: colWidths[i], position: "relative" }}>
+                  {sortAccessors[label] ? (
+                    <button
+                      type="button"
+                      onClick={() => handleSortClick(label)}
+                      title="눌러서 정렬"
+                      style={{
+                        all: "unset",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 2,
+                        fontSize: 11.5,
+                        color: sortKey === label ? C.ink : C.muted,
+                        fontWeight: sortKey === label ? 700 : 600,
+                      }}
+                    >
+                      {label}
+                      <span style={{ fontSize: 9, opacity: sortKey === label ? 1 : 0.35 }}>{sortKey === label ? (sortDir === "asc" ? "▲" : "▼") : "▲"}</span>
+                    </button>
+                  ) : (
+                    label
+                  )}
+                  <ColResizeHandle onMouseDown={startResize(i)} />
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -10656,6 +10716,32 @@ function CollectionBoardTab({ isAdmin, managerName }) {
   const [uploadState, setUploadState] = useState(null);
   const [uploadKey, setUploadKey] = useState(0);
 
+  // "렌탈회수관리 번호 고객명 등 간격조절기능, 소팅기능 넣어줘" 요청 — A/S관리대장과 동일한 방식으로
+  // 헤더 칸을 드래그해서 너비를 조절하고, 칸 제목을 눌러서 정렬할 수 있게 한다.
+  const [colWidths, startResize] = useResizableColumns([70, 100, 100, 100, 170, 200, 80, 90, 100]);
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc"); // "asc" | "desc"
+  const COLLECTION_COLUMNS = ["번호", "고객명", "담당자", "회수일", "주소", "회수품목", "작성자", "작성일", "진행상태"];
+  const sortAccessors = {
+    번호: (r) => Number(r.management_no) || 0,
+    고객명: (r) => r.customer_name || "",
+    담당자: (r) => r.contact || "",
+    회수일: (r) => r.collection_date || "",
+    주소: (r) => r.address || "",
+    회수품목: (r) => summarizeCollectionItems(r.items),
+    작성자: (r) => r.author || "",
+    작성일: (r) => r.created_at || "",
+    진행상태: (r) => r.status || "",
+  };
+  const handleSortClick = (label) => {
+    if (!sortAccessors[label]) return;
+    if (sortKey === label) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(label);
+      setSortDir("asc");
+    }
+  };
+
   useEffect(() => {
     fetchRecords();
   }, []);
@@ -10689,18 +10775,30 @@ function CollectionBoardTab({ isAdmin, managerName }) {
     return list;
   }, [records, statusFilter, query]);
 
+  // 열 제목을 눌러 정렬을 지정했으면 그 기준으로, 아니면 원래 순서(작성일 최신순)를 그대로 유지한다.
+  const sortedFiltered = useMemo(() => {
+    if (!sortKey || !sortAccessors[sortKey]) return filtered;
+    const acc = sortAccessors[sortKey];
+    const list = [...filtered];
+    list.sort((a, b) => {
+      const va = acc(a);
+      const vb = acc(b);
+      let cmp;
+      if (typeof va === "number" || typeof vb === "number") cmp = (Number(va) || 0) - (Number(vb) || 0);
+      else cmp = String(va).localeCompare(String(vb), "ko");
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return list;
+  }, [filtered, sortKey, sortDir]);
+
   useEffect(() => {
     setPage(1);
   }, [statusFilter, query]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / COLLECTION_PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages);
-  const pageItems = filtered.slice((pageSafe - 1) * COLLECTION_PAGE_SIZE, pageSafe * COLLECTION_PAGE_SIZE);
+  const pageItems = sortedFiltered.slice((pageSafe - 1) * COLLECTION_PAGE_SIZE, pageSafe * COLLECTION_PAGE_SIZE);
 
-  function openNew() {
-    setEditingRecord(null);
-    setShowForm(true);
-  }
   function openEdit(record) {
     setEditingRecord(record);
     setShowForm(true);
@@ -10894,7 +10992,6 @@ function CollectionBoardTab({ isAdmin, managerName }) {
         >
           + 엑셀로 등록
         </button>
-        <button onClick={openNew} style={primaryBtnStyle2}>+ 신규 등록</button>
       </div>
 
       {selectedIds.size > 0 && (
@@ -10911,21 +11008,39 @@ function CollectionBoardTab({ isAdmin, managerName }) {
       )}
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
-        <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 980, width: "100%" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 1064, width: "100%", tableLayout: "fixed" }}>
           <thead>
             <tr style={{ background: C.bg, borderBottom: `1px solid ${C.line}` }}>
-              <th style={asTh}>
+              <th style={{ ...asTh, width: 34 }}>
                 <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAllPage} />
               </th>
-              <th style={asTh}>번호</th>
-              <th style={asTh}>고객명</th>
-              <th style={asTh}>담당자</th>
-              <th style={asTh}>회수일</th>
-              <th style={asTh}>주소</th>
-              <th style={{ ...asTh, minWidth: 220 }}>회수품목</th>
-              <th style={asTh}>작성자</th>
-              <th style={asTh}>작성일</th>
-              <th style={asTh}>진행상태</th>
+              {COLLECTION_COLUMNS.map((label, i) => (
+                <th key={label} style={{ ...asTh, width: colWidths[i], position: "relative" }}>
+                  {sortAccessors[label] ? (
+                    <button
+                      type="button"
+                      onClick={() => handleSortClick(label)}
+                      title="눌러서 정렬"
+                      style={{
+                        all: "unset",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 2,
+                        fontSize: 11.5,
+                        color: sortKey === label ? C.ink : C.muted,
+                        fontWeight: sortKey === label ? 700 : 600,
+                      }}
+                    >
+                      {label}
+                      <span style={{ fontSize: 9, opacity: sortKey === label ? 1 : 0.35 }}>{sortKey === label ? (sortDir === "asc" ? "▲" : "▼") : "▲"}</span>
+                    </button>
+                  ) : (
+                    label
+                  )}
+                  <ColResizeHandle onMouseDown={startResize(i)} />
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -10937,7 +11052,7 @@ function CollectionBoardTab({ isAdmin, managerName }) {
             {!loading && pageItems.length === 0 && (
               <tr>
                 <td colSpan={10} style={{ ...asTd, textAlign: "center", color: C.muted, padding: 30 }}>
-                  등록된 회수 내역이 없어요. "+ 신규 등록"으로 시작해보세요.
+                  등록된 회수 내역이 없어요. "+ 엑셀로 등록"으로 시작해보세요.
                 </td>
               </tr>
             )}
