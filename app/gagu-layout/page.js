@@ -746,6 +746,11 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   const [editingShapeId, setEditingShapeId] = useState(null);
   const [editingShapeName, setEditingShapeName] = useState("");
   const [editingShapeCategory, setEditingShapeCategory] = useState("");
+  // "하단에 전체 카테고리 다 뜨게" 요청 — 카테고리 입력칸에 포커스가 잡히는 순간 값을 잠깐
+  // 비워서(datalist 필터링을 피해) 전체 카테고리를 보여주는데, 그동안 원래 값을 여기 담아뒀다가
+  // 아무것도 새로 고르지 않고 포커스를 벗어나면 되돌린다.
+  const editingShapeCategoryPrevRef = useRef("");
+  const newShapeCategoryPrevRef = useRef("");
 
   const [widthInput, setWidthInput] = useState("5");
   const [depthInput, setDepthInput] = useState("4");
@@ -1134,9 +1139,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               value={editingShapeCategory}
               onChange={(e) => setEditingShapeCategory(e.target.value)}
               onDragStart={(e) => e.stopPropagation()}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleSaveShapeEdit(s.id);
-                else if (e.key === "Escape") setEditingShapeId(null);
+              onFocus={() => {
+                // "하단에 전체 카테고리 다 뜨게 수정해줭" 요청 — 이 칸에는 이미 현재 카테고리
+                // 이름(예: "기타")이 들어가 있어서, 브라우저가 datalist 목록을 그 글자를 포함하는
+                // 항목으로만 걸러서 보여주고 있었다(그래서 "소파·파티션·기타"·"기타"만 보이고 나머지
+                // 카테고리는 안 보였음). 포커스가 잡히는 순간 값을 잠깐 비워서 전체 카테고리가 다
+                // 보이게 하고, 아무것도 고르거나 새로 입력하지 않은 채 포커스를 벗어나면(onBlur)
+                // 원래 값으로 되돌려서 실수로 비어버리지 않게 한다.
+                editingShapeCategoryPrevRef.current = editingShapeCategory;
+                setEditingShapeCategory("");
+              }}
+              onBlur={() => {
+                setEditingShapeCategory((cur) => (cur ? cur : editingShapeCategoryPrevRef.current || ""));
               }}
               placeholder="카테고리 (예: 책상류, 테이블류)"
               list="layoutsim-category-datalist"
@@ -2130,8 +2144,11 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       if (!drag) return;
       const dxCm = (e.clientX - drag.startX) / renderScale;
       const dyCm = (e.clientY - drag.startY) / renderScale;
-      let newWidthCm = Math.max(10, drag.swapped ? drag.startWidthCm + dyCm : drag.startWidthCm + dxCm);
-      let newDepthCm = Math.max(10, drag.swapped ? drag.startDepthCm + dxCm : drag.startDepthCm + dyCm);
+      // (버그 수정) "파티션 기본얇기 4.5로... 직접 입력하면 입력값으로 수정되게" 신고 — 손잡이로 끌 때도
+      // 여기 있던 최소 10cm 제한 때문에 파티션처럼 10cm보다 얇은 모형은 그 밑으로 못 줄였다. 직접 입력
+      // 칸(handleApplyManualSize)과 똑같이 0.1cm까지만 막고 나머지는 끄는 대로 그대로 반영한다.
+      let newWidthCm = Math.max(0.1, drag.swapped ? drag.startWidthCm + dyCm : drag.startWidthCm + dxCm);
+      let newDepthCm = Math.max(0.1, drag.swapped ? drag.startDepthCm + dxCm : drag.startDepthCm + dyCm);
       // 손잡이가 오른쪽 아래에 있어 왼쪽·위쪽 위치(xCm/yCm)는 그대로인 채 커지므로, 화면에 보이는
       // 가로·세로(swapped 반영)가 배치판 오른쪽·아래쪽 벽을 넘지 않도록 커지는 만큼만 제한한다.
       // (하단·우측을 침범하지 않게: 크기 조절로 방 밖까지 늘어나던 문제를 막는다.)
@@ -2266,8 +2283,13 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     const it = selectedSingleItem;
     const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
     const swapped = rotation === 90 || rotation === 270;
-    let newWidthCm = Math.max(10, Number(manualWidthInput) || it.widthCm);
-    let newDepthCm = Math.max(10, Number(manualDepthInput) || it.depthCm);
+    // (버그 수정) "파티션 기본얇기 4.5로... 4라고 치고 입력해도 자동으로 10으로 됨" 신고 — 여기 있던
+    // Math.max(10, ...)이 직접 입력한 값을 무조건 최소 10cm로 밀어올려서, 파티션처럼 원래 10cm보다
+    // 얇은(예: 4.5cm, 실제 "45T" 파티션 두께) 값을 입력해도 그대로 반영되지 않고 10으로 바뀌어버렸다.
+    // 직접 입력은 "정확히 이 숫자로 맞추기"가 목적이므로, 0이나 음수처럼 아예 말이 안 되는 값만
+    // 걸러내고(최소 0.1cm) 나머지는 입력한 값 그대로 쓴다.
+    let newWidthCm = Math.max(0.1, Number(manualWidthInput) || it.widthCm);
+    let newDepthCm = Math.max(0.1, Number(manualDepthInput) || it.depthCm);
     // 화면에 보이는(회전 반영) 가로·세로가 배치판 오른쪽·아래쪽 벽을 넘지 않도록 제한한다(손잡이로
     // 끌어서 크기를 조절할 때와 똑같은 규칙 — 남은 공간이 좁으면 그 실제 값까지만 허용).
     const maxOnScreenW = Math.max(0, spaceWidthM * 100 - it.xCm);
@@ -2934,8 +2956,11 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               ))}
             </div>
             <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+              {/* "소수점까지 인식되게 해줘" 요청 — 새로 등록하는 모형의 가로·세로·파인 크기도 0.1cm
+                  단위 소수점을 자연스럽게 입력할 수 있게 step을 맞췄다(예: 파티션 두께 4.5cm). */}
               <input
                 type="number"
+                step="0.1"
                 style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
                 placeholder="전체 가로(cm)"
                 value={newShapeWidth}
@@ -2943,6 +2968,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               />
               <input
                 type="number"
+                step="0.1"
                 style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
                 placeholder="전체 세로(cm)"
                 value={newShapeDepth}
@@ -2957,6 +2983,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 <div style={{ display: "flex", gap: 6 }}>
                   <input
                     type="number"
+                    step="0.1"
                     style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
                     placeholder="가로(cm)"
                     value={newShapeNotchWidth}
@@ -2964,6 +2991,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                   />
                   <input
                     type="number"
+                    step="0.1"
                     style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
                     placeholder="세로(cm)"
                     value={newShapeNotchDepth}
@@ -3019,6 +3047,16 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               placeholder="카테고리 (예: 책상류, 테이블류 — 비워두면 기타)"
               value={newShapeCategory}
               onChange={(e) => setNewShapeCategory(e.target.value)}
+              onFocus={() => {
+                // 위 카테고리 수정칸과 같은 이유 — 이미 글자가 입력돼 있으면 datalist가 그 글자를
+                // 포함하는 카테고리로만 걸러져 전체 목록이 다 안 보였다. 포커스 시 잠깐 비워서
+                // 전체 카테고리가 다 뜨게 하고, 그대로 포커스를 벗어나면 원래 값으로 되돌린다.
+                newShapeCategoryPrevRef.current = newShapeCategory;
+                setNewShapeCategory("");
+              }}
+              onBlur={() => {
+                setNewShapeCategory((cur) => (cur ? cur : newShapeCategoryPrevRef.current || ""));
+              }}
               list="layoutsim-category-list"
             />
             <datalist id="layoutsim-category-list">
@@ -3337,8 +3375,13 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       style={{ ...smallInputStyle, width: 100, boxSizing: "border-box" }}
                     />
                     <span style={{ fontSize: 12, color: C.lineSoft }}>|</span>
+                    {/* "소수점까지 인식되게 해줘" 요청 — step="0.1"을 줘서 4.5처럼 소수점 있는 값도
+                        스핀 버튼(▲▼)이 0.1 단위로 자연스럽게 움직이고, 직접 타이핑한 소수점 값도
+                        아무 위화감 없이 그대로 입력되게 한다(Number()로 읽는 부분은 원래부터 소수점을
+                        그대로 인식했다 — step만 정수 1로 남아있던 게 어색함의 원인이었다). */}
                     <input
                       type="number"
+                      step="0.1"
                       value={manualWidthInput}
                       onChange={(e) => setManualWidthInput(e.target.value)}
                       onKeyDown={(e) => {
@@ -3351,6 +3394,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     <span style={{ fontSize: 12, color: C.muted }}>×</span>
                     <input
                       type="number"
+                      step="0.1"
                       value={manualDepthInput}
                       onChange={(e) => setManualDepthInput(e.target.value)}
                       onKeyDown={(e) => {
