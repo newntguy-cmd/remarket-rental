@@ -5254,6 +5254,67 @@ function QuotePhotoOutputView({ state, onClose }) {
   );
 }
 
+// "사진파일 등록은 드래그앤 드랍버전, 파일 선택버전 2개로 구성해주고" 요청 — 위쪽 QuoteDropZone 등과
+// 같은 구조로, 사진을 끌어다 놓아도 되고(드래그앤드롭) 클릭해서 파일탐색기로 골라도 되게(파일 선택)
+// 한 영역 안에 두 방식을 같이 넣었다. 이미 고른 파일이 있으면 그 파일명을 보여주고, 다른 파일을
+// 끌어다 놓거나 다시 클릭하면 바꿀 수 있다.
+function PhotoDropZone({ onFile, fileName }) {
+  const inputRef = useRef(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  function handleDrop(e) {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) onFile(file);
+  }
+
+  return (
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={handleDrop}
+      onClick={() => inputRef.current?.click()}
+      style={{
+        border: `2px dashed ${dragOver ? C.purple : C.lineSoft}`,
+        background: dragOver ? C.purpleBg : C.bg,
+        padding: "9px 12px",
+        textAlign: "center",
+        cursor: "pointer",
+        minWidth: 220,
+        boxSizing: "border-box",
+      }}
+    >
+      <input
+        type="file"
+        accept="image/*"
+        ref={inputRef}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) onFile(file);
+        }}
+        style={{ display: "none" }}
+      />
+      {fileName ? (
+        <div style={{ fontSize: 11.5, color: C.ink }}>
+          📷 {fileName}
+          <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2 }}>다른 사진으로 바꾸려면 클릭하거나 끌어다 놓으세요</div>
+        </div>
+      ) : (
+        <div style={{ fontSize: 11.5, color: C.muted }}>
+          사진을 끌어다 놓거나
+          <br />
+          클릭해서 파일 선택
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------- 제품사진 라이브러리 (사무집기 사진을 품목명과 함께 미리 등록해두는 관리 화면) ----------
 // "이미지 파일을 별도로 줄거야"라는 요청에 맞춰, 화면에서 사진을 하나씩 올리고 품목명(+선택적으로
 // 규격)을 입력해 등록하는 방식으로 만들었다. 여기 등록한 사진은 견적서 업로드 화면의 "사진 출력물
@@ -5327,7 +5388,16 @@ function PhotoLibraryTab() {
     const { error: uploadError } = await supabase.storage.from("item-photos").upload(path, newFile, { upsert: false });
     if (uploadError) {
       setSaving(false);
-      alert("사진 업로드에 실패했어요: " + uploadError.message);
+      // "row-level security policy" 오류는 대부분 Supabase에 item-photos 저장공간(버킷)이 아직 없거나,
+      // 있어도 업로드를 허용하는 권한 규칙이 안 걸려있어서 생긴다 — item_photos_setup.sql을 한 번
+      // 실행하면 해결된다.
+      alert(
+        "사진 업로드에 실패했어요: " +
+          uploadError.message +
+          (uploadError.message.includes("row-level security") || uploadError.message.includes("Bucket not found")
+            ? " (Supabase에 item-photos 저장공간(버킷)·권한 규칙이 아직 설정되지 않았을 수 있어요. item_photos_setup.sql을 Supabase SQL Editor에서 한 번 실행해주세요.)"
+            : "")
+      );
       return;
     }
     const { error: insertError } = await supabase.from("item_photos").insert({
@@ -5383,7 +5453,7 @@ function PhotoLibraryTab() {
         </div>
         <div>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>사진 파일 *</div>
-          <input type="file" accept="image/*" onChange={(e) => setNewFile(e.target.files?.[0] || null)} style={{ fontSize: 12.5 }} />
+          <PhotoDropZone onFile={setNewFile} fileName={newFile?.name} />
         </div>
         <button type="button" onClick={handleAdd} disabled={saving} style={primaryBtnStyle2}>
           {saving ? "등록 중…" : "+ 등록"}
