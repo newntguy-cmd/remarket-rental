@@ -35,6 +35,10 @@ const C = {
   purple: "#5B4FE5",
   purpleDark: "#4638C2",
   purpleBg: "#EEECFF",
+  // (2026-09-30) "가구 테두리를 세련된 브라운으로" 요청 반영 — page.js의 LayoutSimTab 코드가 이 두
+  // 색을 그대로 참조하므로, 이 화면에도 똑같이 정의해둬야 한다(값도 page.js와 동일하게 맞춤).
+  brownAccent: "#8C6A42",
+  furnitureBg: "#F3EAD9",
   mutedBg: "#EEEEEC",
   muted: "#6B7280",
 };
@@ -1068,39 +1072,39 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       >
         {isPoly ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
-            <polygon points={previewPoints} fill={C.purpleBg} stroke={C.purple} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
+            <polygon points={previewPoints} fill={C.furnitureBg} stroke={C.brownAccent} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
           </svg>
         ) : isCircle ? (
           <svg width={14} height={14} style={{ flexShrink: 0 }}>
-            <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={C.purpleBg} stroke={C.purple} strokeWidth={1} />
+            <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={C.furnitureBg} stroke={C.brownAccent} strokeWidth={1} />
           </svg>
         ) : isRoundEnd ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
-            <path d={roundEndTablePathD(s.width_cm, s.depth_cm)} fill={C.purpleBg} stroke={C.purple} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
+            <path d={roundEndTablePathD(s.width_cm, s.depth_cm)} fill={C.furnitureBg} stroke={C.brownAccent} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
           </svg>
         ) : isCurvedL ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
             <path
               d={curvedLDeskPathD(s.width_cm, s.depth_cm, s.notch_width_cm, s.notch_depth_cm)}
-              fill={C.purpleBg}
-              stroke={C.purple}
+              fill={C.furnitureBg}
+              stroke={C.brownAccent}
               strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12}
             />
           </svg>
         ) : isChair ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
-            <ChairTopIcon w={s.width_cm} d={s.depth_cm} fill={C.purpleBg} stroke={C.purple} />
+            <ChairTopIcon w={s.width_cm} d={s.depth_cm} fill={C.furnitureBg} stroke={C.brownAccent} />
           </svg>
         ) : isMeetingChair ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
-            <MeetingChairTopIcon w={s.width_cm} d={s.depth_cm} fill={C.purpleBg} stroke={C.purple} />
+            <MeetingChairTopIcon w={s.width_cm} d={s.depth_cm} fill={C.furnitureBg} stroke={C.brownAccent} />
           </svg>
         ) : isSofa ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
-            <SofaTopIcon w={s.width_cm} d={s.depth_cm} fill={C.purpleBg} stroke={C.purple} />
+            <SofaTopIcon w={s.width_cm} d={s.depth_cm} fill={C.furnitureBg} stroke={C.brownAccent} />
           </svg>
         ) : (
-          <div style={{ width: 14, height: 14, background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 2, flexShrink: 0 }} />
+          <div style={{ width: 14, height: 14, background: C.furnitureBg, border: `1px solid ${C.brownAccent}`, borderRadius: 2, flexShrink: 0 }} />
         )}
         {isEditingName ? (
           <input
@@ -3647,9 +3651,17 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               // (위 요청 계속) 평소 그림자도 아주 옅게(0.12) 깔려 있어서 입체감이 잘 안 느껴졌다 —
               // 살짝만 더 짙고 깊게(0.18, 퍼짐도 4px로) 줘서, 배치판 바탕 위에 실제로 "놓여 있는" 느낌이
               // 나도록 다듬었다.
+              // (2026-09-30 미세조정) "테두리 마감이 불안정하다, 모든 테두리를 동일한 굵기로 깔끔하게"
+              // 신고 — 실제 테두리선(stroke) 자체는 항상 일정했지만, 평소(선택 안 됐을 때) 켜져 있던
+              // 입체감 그림자가 blur 반경(4px)이 테두리 굵기(1.4px)보다 훨씬 커서, ㄱ자·U자처럼 안쪽으로
+              // 파인(오목한) 모서리에서는 두 변의 그림자가 서로 겹쳐 테두리선과 뭉개져 "두껍고 지저분하게"
+              // 보이고, 반듯한 직선 구간에서는 그림자가 테두리와 안 겹쳐 "얇고 깔끔하게" 보이는 식으로
+              // 자리마다 다르게 보였던 것이 원인이었다. blur 반경을 훨씬 좁게(1.6px) 줄이고 아래로
+              // 치우치던 방향(offset)도 거의 없애서, 그림자가 테두리선과 섞이지 않고 모든 모양·모든
+              // 자리에서 똑같이 얇고 또렷한 테두리로 보이게 했다.
               const shapeSvgStyle = {
                 display: "block",
-                filter: isSelected ? "drop-shadow(0 0 4px rgba(91, 79, 229,0.6))" : "drop-shadow(0 1.5px 4px rgba(28,43,58,0.18))",
+                filter: isSelected ? "drop-shadow(0 0 4px rgba(91, 79, 229,0.6))" : "drop-shadow(0 0.5px 1.6px rgba(28,43,58,0.22))",
               };
               return (
                 <div
@@ -3746,8 +3758,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
                         <polygon
                           points={polyPoints}
-                          fill={C.purpleBg}
-                          stroke={C.purple}
+                          fill={C.furnitureBg}
+                          stroke={C.brownAccent}
                           strokeWidth={shapeStrokeWidth}
                           strokeDasharray={shapeStrokeDasharray}
                           strokeLinejoin={shapeStrokeJoin}
@@ -3761,8 +3773,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                           cy="50%"
                           rx="50%"
                           ry="50%"
-                          fill={C.purpleBg}
-                          stroke={C.purple}
+                          fill={C.furnitureBg}
+                          stroke={C.brownAccent}
                           strokeWidth={shapeStrokeWidth}
                           strokeDasharray={shapeStrokeDasharray}
                           strokeLinejoin={shapeStrokeJoin}
@@ -3772,8 +3784,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
                         <path
                           d={roundEndTablePathD(it.widthCm, it.depthCm)}
-                          fill={C.purpleBg}
-                          stroke={C.purple}
+                          fill={C.furnitureBg}
+                          stroke={C.brownAccent}
                           strokeWidth={shapeStrokeWidth}
                           strokeDasharray={shapeStrokeDasharray}
                           strokeLinejoin={shapeStrokeJoin}
@@ -3784,8 +3796,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
                         <path
                           d={curvedLDeskPathD(it.widthCm, it.depthCm, it.notchWidthCm, it.notchDepthCm)}
-                          fill={C.purpleBg}
-                          stroke={C.purple}
+                          fill={C.furnitureBg}
+                          stroke={C.brownAccent}
                           strokeWidth={shapeStrokeWidth}
                           strokeDasharray={shapeStrokeDasharray}
                           strokeLinejoin={shapeStrokeJoin}
@@ -3794,22 +3806,22 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       </svg>
                     ) : isChair ? (
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
-                        <ChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
+                        <ChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.furnitureBg} stroke={C.brownAccent} />
                       </svg>
                     ) : isMeetingChair ? (
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
-                        <MeetingChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
+                        <MeetingChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.furnitureBg} stroke={C.brownAccent} />
                       </svg>
                     ) : isSofa ? (
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
-                        <SofaTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
+                        <SofaTopIcon w={it.widthCm} d={it.depthCm} fill={C.furnitureBg} stroke={C.brownAccent} />
                       </svg>
                     ) : (
                       // (위 요청 계속) 사각형은 선택 강조를 이 안쪽 테두리가 아니라 바깥 wrapper의
                       // outline·그림자가 이미 맡고 있어서(위쪽 style의 outline/boxShadow 참고), 여기
                       // 안쪽 테두리는 selection 여부와 무관하게 다른 모양들의 "평소" 굵기(1.4px)에
                       // 맞춰 통일감만 준다 — 선택했을 때 outline과 겹쳐 두꺼워 보이는 일이 없도록.
-                      <div style={{ width: "100%", height: "100%", background: C.purpleBg, border: `1.4px solid ${C.purple}`, borderRadius: 3, boxSizing: "border-box" }} />
+                      <div style={{ width: "100%", height: "100%", background: C.furnitureBg, border: `1.4px solid ${C.brownAccent}`, borderRadius: 3, boxSizing: "border-box" }} />
                     )}
                   </div>
                   {/* "가구 이름이 지저분하게 나오니까 깔끔하게" 요청 — 이름 대신 규격(가로×세로)만
