@@ -31,8 +31,10 @@ const C = {
   greenBg: "#E8F1EC",
   brick: "#B0402E",
   brickBg: "#F7E9E6",
-  purple: "#6B5CA5",
-  purpleBg: "#EFEBFA",
+  // (2026-09-30) page.js와 같은 포인트 컬러로 맞춰서 두 화면이 서로 어긋나지 않게 통일했다.
+  purple: "#5B4FE5",
+  purpleDark: "#4638C2",
+  purpleBg: "#EEECFF",
   mutedBg: "#EEEEEC",
   muted: "#6B7280",
 };
@@ -2830,13 +2832,13 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           box-shadow: 0 3px 8px rgba(28, 43, 58, 0.22) !important;
         }
         .layoutsim-placed-item.layoutsim-placed-item--selected:not(.layoutsim-placed-item--nonrect):hover {
-          box-shadow: 0 0 0 5px rgba(107, 92, 165, 0.16), 0 3px 8px rgba(28, 43, 58, 0.26) !important;
+          box-shadow: 0 0 0 5px rgba(91, 79, 229, 0.16), 0 3px 8px rgba(28, 43, 58, 0.26) !important;
         }
         .layoutsim-placed-item--nonrect:hover svg {
           filter: drop-shadow(0 3px 6px rgba(28, 43, 58, 0.28)) !important;
         }
         .layoutsim-placed-item--nonrect.layoutsim-placed-item--selected:hover svg {
-          filter: drop-shadow(0 0 4px rgba(107, 92, 165, 0.6)) drop-shadow(0 3px 6px rgba(28, 43, 58, 0.3)) !important;
+          filter: drop-shadow(0 0 4px rgba(91, 79, 229, 0.6)) drop-shadow(0 3px 6px rgba(28, 43, 58, 0.3)) !important;
         }
       `}</style>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>가구배치(시뮬레이션)</div>
@@ -3599,7 +3601,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               // 나도록 다듬었다.
               const shapeSvgStyle = {
                 display: "block",
-                filter: isSelected ? "drop-shadow(0 0 4px rgba(107,92,165,0.6))" : "drop-shadow(0 1.5px 4px rgba(28,43,58,0.18))",
+                filter: isSelected ? "drop-shadow(0 0 4px rgba(91, 79, 229,0.6))" : "drop-shadow(0 1.5px 4px rgba(28,43,58,0.18))",
               };
               return (
                 <div
@@ -3675,7 +3677,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     boxShadow: isNonRectShape
                       ? "none"
                       : isSelected
-                      ? "0 0 0 5px rgba(107, 92, 165, 0.16), 0 2px 6px rgba(28,43,58,0.18)"
+                      ? "0 0 0 5px rgba(91, 79, 229, 0.16), 0 2px 6px rgba(28,43,58,0.18)"
                       : "0 1px 3px rgba(28,43,58,0.12)",
                     zIndex: isSelected ? 1 : 0,
                   }}
@@ -3911,7 +3913,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                   top: marqueeRect.yCm * renderScale,
                   width: marqueeRect.wCm * renderScale,
                   height: marqueeRect.hCm * renderScale,
-                  background: "rgba(107, 92, 165, 0.12)",
+                  background: "rgba(91, 79, 229, 0.12)",
                   border: `1px dashed ${C.purple}`,
                   pointerEvents: "none",
                 }}
@@ -3945,7 +3947,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       borderRadius: "50%",
                       border: `1.5px solid ${C.purple}`,
                       background: isActive ? C.purple : "#fff",
-                      boxShadow: isActive ? "0 0 0 3px rgba(107,92,165,0.25)" : "none",
+                      boxShadow: isActive ? "0 0 0 3px rgba(91, 79, 229,0.25)" : "none",
                       transition: "all 80ms ease-out",
                       pointerEvents: "none",
                     }}
@@ -4282,7 +4284,7 @@ export default function Page() {
       `}</style>
       <div
         style={{
-          borderBottom: `1px solid ${C.line}`,
+          borderBottom: `3px solid ${C.purple}`,
           background: C.panel,
           padding: "14px 20px",
           display: "flex",
