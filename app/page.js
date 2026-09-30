@@ -26,8 +26,17 @@ const C = {
   greenBg: "#E8F1EC",
   brick: "#B0402E",
   brickBg: "#F7E9E6",
-  purple: "#6B5CA5",
-  purpleBg: "#EFEBFA",
+  // (2026-09-30 재수정) "메뉴바 남색/보라색 별로" 피드백으로, 칙칙한 남색+탁한 보라 조합을 걷어내고
+  // 더 또렷하고 세련된 인디고 바이올렛 포인트 컬러로 바꿨다(밝을 때 배경용 purpleBg, 눌렀을 때/그라데이션
+  // 진한 쪽 purpleDark도 같이 정리). 이 값들은 사이드바 강조, 헤더 밑줄, 버튼 포커스 링, 표 조절바 hover
+  // 등 앱 전체 곳곳에서 재사용되므로, 여기 한 곳만 바꿔도 전체 화면이 같은 톤으로 통일되게 맞춰뒀다.
+  purple: "#5B4FE5",
+  purpleDark: "#4638C2",
+  purpleBg: "#EEECFF",
+  // 사이드바·모바일 메뉴 서랍의 배경. 예전 C.ink(남색)를 그대로 재사용했더니 "남색" 느낌이 강했는데,
+  // 이제 채도를 낮춘 거의 검정에 가까운 그래파이트 톤으로 바꿔서 포인트 컬러(purple)가 더 또렷하게 도드라진다.
+  surfaceDark: "#14151C",
+  surfaceDarkSoft: "#1E1F29",
   mutedBg: "#EEEEEC",
   muted: "#6B7280",
 };
@@ -2033,13 +2042,14 @@ function Dashboard({ profile, onLogout }) {
           padding: "13px 12px",
           marginBottom: 2,
           borderRadius: 8,
-          // "디자인을 과감하게" 요청(2026-09-30)으로 왼쪽 메뉴를 어두운 남색 사이드바로 바꾸면서,
-          // 선택된 메뉴는 이제 보라색 포인트 컬러로 꽉 채워서 확실히 눈에 띄게 했다(예전엔 옅은 왼쪽
-          // 줄 하나로만 표시해서 너무 미묘했었다).
-          background: active ? C.purple : "transparent",
+          // (2026-09-30 재수정) "메뉴바 남색/보라색이 별로다, 더 섹시하고 세련되게" 피드백으로, 선택된
+          // 메뉴를 밋밋한 단색 대신 그라데이션 + 은은한 글로우로 채워서 입체감을 줬다. 사이드바 배경도
+          // 더 이상 남색이 아니라 채도를 낮춘 거의 검정에 가까운 그래파이트(surfaceDark)라, 포인트 컬러
+          // 그라데이션이 훨씬 또렷하게 도드라진다.
+          background: active ? `linear-gradient(135deg, ${C.purple}, ${C.purpleDark})` : "transparent",
           border: "none",
-          boxShadow: active ? "0 4px 14px rgba(107,92,165,0.4)" : "none",
-          color: active ? "#fff" : "#AEB9C4",
+          boxShadow: active ? "0 4px 16px rgba(91, 79, 229,0.45)" : "none",
+          color: active ? "#fff" : "#8B93A3",
           fontSize: 14,
           fontWeight: active ? 600 : 500,
           cursor: "pointer",
@@ -2060,7 +2070,7 @@ function Dashboard({ profile, onLogout }) {
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: sans, color: C.ink }}>
       <style>{`
         .rm-menu-btn { transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease; }
-        .rm-menu-btn.is-inactive:hover { background: rgba(255,255,255,0.08) !important; color: #fff !important; }
+        .rm-menu-btn.is-inactive:hover { background: ${C.surfaceDarkSoft} !important; color: #fff !important; }
         .rm-logout-btn:hover { background: ${C.bg}; border-color: ${C.ink}; color: ${C.ink}; }
         .col-resize-bar { background: #C7CDD6; transition: background 0.12s ease, width 0.12s ease; }
         .col-resize-handle:hover .col-resize-bar { background: ${C.ink}; width: 4px; }
@@ -2097,8 +2107,9 @@ function Dashboard({ profile, onLogout }) {
         }
       `}</style>
       {/* "과감하게" 요청으로 제목 아래 보라색 브랜드 바를 넣어서, 어느 화면을 열어도 "리마켓" 제품임이
-          한눈에 각인되도록 했다(예전엔 옅은 회색 줄 하나뿐이었다). */}
-      <div style={{ borderBottom: `3px solid ${C.purple}`, background: C.panel, boxShadow: "0 1px 0 rgba(28,43,58,0.06)" }}>
+          한눈에 각인되도록 했다(예전엔 옅은 회색 줄 하나뿐이었다). (2026-09-30 재수정) 톤을 더 또렷한
+          인디고 바이올렛으로 바꾸고, 바 아래에 은은한 포인트 컬러 그림자를 살짝 깔아서 입체감을 더했다. */}
+      <div style={{ borderBottom: `3px solid ${C.purple}`, background: C.panel, boxShadow: "0 1px 0 rgba(28,43,58,0.06), 0 10px 24px -16px rgba(91,79,229,0.45)" }}>
         <div style={{ maxWidth: 1600, margin: "0 auto", padding: isMobile ? "12px 14px" : "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
             {isMobile && (
@@ -2139,20 +2150,22 @@ function Dashboard({ profile, onLogout }) {
 
       <div style={{ maxWidth: 1600, margin: "0 auto", padding: isMobile ? "14px 12px 50px" : "28px 24px 60px", display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 10 : 24, alignItems: "flex-start" }}>
         {!isMobile && (
-          // "과감하게 리디자인" 요청(2026-09-30)으로 왼쪽 메뉴를 어두운 남색 사이드바로 바꿨다(예전엔
+          // "과감하게 리디자인" 요청(2026-09-30)으로 왼쪽 메뉴를 어두운 사이드바로 바꿨다(예전엔
           // 본문과 똑같은 흰 배경이라 경계가 흐릿했는데, 이제 한눈에 "탐색 영역"으로 구분된다). 실제
-          // 화면 내용(본문 카드들)은 손대지 않고 그대로다.
+          // 화면 내용(본문 카드들)은 손대지 않고 그대로다. (2026-09-30 재수정) "남색/보라색이 별로다"
+          // 피드백으로, 배경을 남색(C.ink) 대신 채도를 낮춘 거의 검정에 가까운 그래파이트(surfaceDark)로
+          // 바꿔서 더 고급스럽게, 그리고 선택된 메뉴의 인디고 바이올렛 그라데이션이 더 또렷하게 보이도록 했다.
           <aside
             style={{
               width: 232,
               flexShrink: 0,
               border: "none",
               borderRadius: 10,
-              background: C.ink,
+              background: C.surfaceDark,
               padding: 6,
               position: "sticky",
               top: 20,
-              boxShadow: "0 6px 20px rgba(28,43,58,0.18)",
+              boxShadow: "0 6px 24px rgba(0,0,0,0.35)",
             }}
           >
             <div style={{ padding: "10px 12px 8px", fontSize: 10.5, color: "rgba(255,255,255,0.4)", letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
@@ -2177,7 +2190,7 @@ function Dashboard({ profile, onLogout }) {
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              style={{ width: "80vw", maxWidth: 300, height: "100%", background: C.ink, padding: 6, overflowY: "auto", boxShadow: "2px 0 14px rgba(0,0,0,0.28)" }}
+              style={{ width: "80vw", maxWidth: 300, height: "100%", background: C.surfaceDark, padding: 6, overflowY: "auto", boxShadow: "2px 0 14px rgba(0,0,0,0.28)" }}
             >
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 8px 8px 12px" }}>
                 <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.4)", letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
@@ -10518,7 +10531,7 @@ function StatusFilterTabs({ tabs, activeKey, counts, onChange }) {
               fontWeight: isActive ? 700 : 500,
               fontFamily: sans,
               cursor: "pointer",
-              boxShadow: isActive ? "0 3px 8px rgba(107,92,165,0.3)" : "none",
+              boxShadow: isActive ? "0 3px 8px rgba(91, 79, 229,0.3)" : "none",
               whiteSpace: "nowrap",
             }}
           >
@@ -14417,13 +14430,13 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           box-shadow: 0 3px 8px rgba(28, 43, 58, 0.22) !important;
         }
         .layoutsim-placed-item.layoutsim-placed-item--selected:not(.layoutsim-placed-item--nonrect):hover {
-          box-shadow: 0 0 0 5px rgba(107, 92, 165, 0.16), 0 3px 8px rgba(28, 43, 58, 0.26) !important;
+          box-shadow: 0 0 0 5px rgba(91, 79, 229, 0.16), 0 3px 8px rgba(28, 43, 58, 0.26) !important;
         }
         .layoutsim-placed-item--nonrect:hover svg {
           filter: drop-shadow(0 3px 6px rgba(28, 43, 58, 0.28)) !important;
         }
         .layoutsim-placed-item--nonrect.layoutsim-placed-item--selected:hover svg {
-          filter: drop-shadow(0 0 4px rgba(107, 92, 165, 0.6)) drop-shadow(0 3px 6px rgba(28, 43, 58, 0.3)) !important;
+          filter: drop-shadow(0 0 4px rgba(91, 79, 229, 0.6)) drop-shadow(0 3px 6px rgba(28, 43, 58, 0.3)) !important;
         }
       `}</style>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>가구배치(시뮬레이션)</div>
@@ -15186,7 +15199,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               // 나도록 다듬었다.
               const shapeSvgStyle = {
                 display: "block",
-                filter: isSelected ? "drop-shadow(0 0 4px rgba(107,92,165,0.6))" : "drop-shadow(0 1.5px 4px rgba(28,43,58,0.18))",
+                filter: isSelected ? "drop-shadow(0 0 4px rgba(91, 79, 229,0.6))" : "drop-shadow(0 1.5px 4px rgba(28,43,58,0.18))",
               };
               return (
                 <div
@@ -15262,7 +15275,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     boxShadow: isNonRectShape
                       ? "none"
                       : isSelected
-                      ? "0 0 0 5px rgba(107, 92, 165, 0.16), 0 2px 6px rgba(28,43,58,0.18)"
+                      ? "0 0 0 5px rgba(91, 79, 229, 0.16), 0 2px 6px rgba(28,43,58,0.18)"
                       : "0 1px 3px rgba(28,43,58,0.12)",
                     zIndex: isSelected ? 1 : 0,
                   }}
@@ -15498,7 +15511,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                   top: marqueeRect.yCm * renderScale,
                   width: marqueeRect.wCm * renderScale,
                   height: marqueeRect.hCm * renderScale,
-                  background: "rgba(107, 92, 165, 0.12)",
+                  background: "rgba(91, 79, 229, 0.12)",
                   border: `1px dashed ${C.purple}`,
                   pointerEvents: "none",
                 }}
@@ -15532,7 +15545,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       borderRadius: "50%",
                       border: `1.5px solid ${C.purple}`,
                       background: isActive ? C.purple : "#fff",
-                      boxShadow: isActive ? "0 0 0 3px rgba(107,92,165,0.25)" : "none",
+                      boxShadow: isActive ? "0 0 0 3px rgba(91, 79, 229,0.25)" : "none",
                       transition: "all 80ms ease-out",
                       pointerEvents: "none",
                     }}
