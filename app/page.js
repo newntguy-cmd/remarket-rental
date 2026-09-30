@@ -15136,7 +15136,11 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               보였다. 안내문구 칸에 flex:1 + minWidth:0을 줘서, 버튼이 길어질 땐 안내문구 쪽이 먼저 줄어들며
               (필요하면 문구 자체가 내부에서 줄바꿈) 흡수하게 하고, 버튼 칸은 flexShrink:0으로 항상 제 크기를
               유지하게 해서 이 줄 자체가 두 줄로 접히는 일이 없도록 한다. */}
-          <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+          {/* "대지 테두리 위쪽 상단을 왼쪽 모형 목록 메뉴판 상단하고 일치시켜 달라(위로 좀 올렸으면)"는
+              요청으로, 이 안내문구+버튼 줄 아래 여백(marginBottom)을 없앴다 — 이 줄 자체(버튼들의 기능·
+              배치·크기)는 전혀 건드리지 않고, 그 아래 "대지" 박스와의 간격만 줄여 대지 테두리가 최대한
+              위로(왼쪽 모형 목록 패널의 맨 위와 같은 높이에 가깝게) 올라오도록 했다. */}
+          <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 0 }}>
             {/* (2026-09-30 미세조정) "글씨도 많고 중구난방" 피드백으로, 조작법 전체를 항상 펼쳐두는 대신
                 한 줄(공간 크기)만 보여주고 자세한 조작법은 옆 ⓘ에 마우스를 올리면 그대로 볼 수 있게
                 옮겼다. 바깥 div의 flex:"1 1 auto"+minWidth:0은 위 주석의 이유(줄자 버튼 글자가 길어져도
