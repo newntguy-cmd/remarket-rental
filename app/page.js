@@ -33,10 +33,16 @@ const C = {
   purple: "#5B4FE5",
   purpleDark: "#4638C2",
   purpleBg: "#EEECFF",
-  // 사이드바·모바일 메뉴 서랍의 배경. 처음엔 차가운 검정 계열로 바꿨었는데 "검정 배경 별로다, 고급지게
-  // 브라운 톤으로" 피드백(2026-09-30 3차 수정)으로, 채도를 낮춘 고급스러운 에스프레소 브라운으로 다시 바꿨다.
-  surfaceDark: "#2B2019",
-  surfaceDarkSoft: "#3B2C22",
+  // 사이드바·모바일 메뉴 서랍의 배경. 처음엔 차가운 검정 계열 → 에스프레소 브라운으로 바꿨는데 "브라운이
+  // 좀 둔탁하다, 조금 더 세련되고 밝게" 피드백(2026-09-30 4차 수정)으로, 톤을 한 단계 밝고 따뜻한
+  // 월넛(호두나무) 브라운으로 다시 조정했다. 글자색(아래 surfaceInk*)도 예전 남색 사이드바 시절에 쓰던
+  // 차가운 청회색 그대로 남아있었던 게 브라운과 안 어울려 둔해 보이던 원인 중 하나라, 브라운 톤과
+  // 어울리는 따뜻한 베이지 계열로 같이 바꿨다.
+  surfaceDark: "#4A3826",
+  surfaceDarkSoft: "#5C4630",
+  // 사이드바 안 글자색(비활성 메뉴 글자, MENU 라벨 등)을 브라운 배경에 어울리는 따뜻한 베이지 톤으로 통일.
+  surfaceInkSoft: "#D8C4AE",
+  surfaceInkFaint: "rgba(230,210,190,0.55)",
   mutedBg: "#EEEEEC",
   muted: "#6B7280",
 };
@@ -2049,7 +2055,7 @@ function Dashboard({ profile, onLogout }) {
           background: active ? `linear-gradient(135deg, ${C.purple}, ${C.purpleDark})` : "transparent",
           border: "none",
           boxShadow: active ? "0 4px 16px rgba(91, 79, 229,0.45)" : "none",
-          color: active ? "#fff" : "#8B93A3",
+          color: active ? "#fff" : C.surfaceInkSoft,
           fontSize: 14,
           fontWeight: active ? 600 : 500,
           cursor: "pointer",
@@ -2127,13 +2133,16 @@ function Dashboard({ profile, onLogout }) {
               </button>
             )}
             {/* "제목 글씨를 약간만 더 섹시하게" 요청으로, 단색 대신 잉크색→포인트 컬러로 은은하게
-                번지는 그러데이션 글자색을 줬다(과하지 않게 살짝만). */}
+                번지는 그러데이션 글자색을 줬다(과하지 않게 살짝만). (2026-09-30 미세조정) "약간만 더
+                오른쪽으로 와도 되겠다"는 요청으로 살짝만(marginLeft) 오른쪽으로 밀었다 — 사이드바 자체
+                위치는 그대로다. */}
             <div
               style={{
                 fontFamily: serif,
                 fontSize: isMobile ? 17.5 : 22,
                 fontWeight: 800,
                 letterSpacing: "-0.02em",
+                marginLeft: isMobile ? 0 : 6,
                 background: `linear-gradient(115deg, ${C.ink} 35%, ${C.purple} 115%)`,
                 WebkitBackgroundClip: "text",
                 WebkitTextFillColor: "transparent",
@@ -2195,7 +2204,7 @@ function Dashboard({ profile, onLogout }) {
               boxShadow: "0 6px 24px rgba(0,0,0,0.35)",
             }}
           >
-            <div style={{ padding: "10px 12px 8px", fontSize: 10.5, color: "rgba(255,255,255,0.4)", letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
+            <div style={{ padding: "10px 12px 8px", fontSize: 10.5, color: C.surfaceInkFaint, letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
             {menuButtonsJsx}
           </aside>
         )}
@@ -2220,11 +2229,11 @@ function Dashboard({ profile, onLogout }) {
               style={{ width: "80vw", maxWidth: 300, height: "100%", background: C.surfaceDark, padding: 6, overflowY: "auto", boxShadow: "2px 0 14px rgba(0,0,0,0.28)" }}
             >
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 8px 8px 12px" }}>
-                <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.4)", letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
+                <div style={{ fontSize: 10.5, color: C.surfaceInkFaint, letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
                 <button
                   onClick={() => setMobileMenuOpen(false)}
                   aria-label="메뉴 닫기"
-                  style={{ border: "none", background: "transparent", fontSize: 22, lineHeight: 1, color: "rgba(255,255,255,0.6)", cursor: "pointer", padding: 4 }}
+                  style={{ border: "none", background: "transparent", fontSize: 22, lineHeight: 1, color: C.surfaceInkSoft, cursor: "pointer", padding: 4 }}
                 >
                   ×
                 </button>
