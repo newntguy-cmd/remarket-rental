@@ -1988,6 +1988,7 @@ function Dashboard({ profile, onLogout }) {
     ...(isStaff ? [{ key: "quickcalc", label: "품목별데이터/톤수/배송비" }] : []),
     ...(isStaff ? [{ key: "layoutSim", label: "가구배치(시뮬레이션)" }] : []),
     ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
+    ...(isStaff ? [{ key: "photoLibrary", label: "제품사진 라이브러리" }] : []),
     ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
     ...(isStaff ? [{ key: "purchases", label: "구매내역" }] : []),
     ...(isStaff ? [{ key: "shares", label: "지분관리" }] : []),
@@ -2219,6 +2220,8 @@ function Dashboard({ profile, onLogout }) {
         )}
 
         {activeTab === "layoutSim" && isStaff && <LayoutSimTab managerName={managerName} />}
+
+        {activeTab === "photoLibrary" && isStaff && <PhotoLibraryTab />}
 
         {activeTab == null && isStaff && (
           <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 40, textAlign: "center", color: C.muted, fontSize: 13.5 }}>
@@ -4854,6 +4857,10 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOve
   const [colWidths, startResize] = useResizableColumns(importPreviewInitialWidths);
   const gridTemplate = colWidths.map((w) => `${w}px`).join(" ");
 
+  // "견적서를 업로드하면 자동으로 사무집기 이미지를 출력물로 만들어달라"는 요청으로 추가된 기능 —
+  // 미리 등록해둔 사진(제품사진 라이브러리)을 품목명 기준으로 자동 매칭해 보여주는 화면을 켜고 끈다.
+  const [showPhotoOutput, setShowPhotoOutput] = useState(false);
+
   return (
     <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 20, marginBottom: 16 }}>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>품목 내역</div>
@@ -4864,7 +4871,16 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOve
         왼쪽 체크박스로 골라서 지워주세요.
       </div>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+        <button
+          type="button"
+          onClick={() => setShowPhotoOutput(true)}
+          disabled={state.items.length === 0}
+          style={{ ...ghostBtnStyle, opacity: state.items.length === 0 ? 0.4 : 1, cursor: state.items.length === 0 ? "not-allowed" : "pointer" }}
+          title="제품사진 라이브러리에 등록해둔 사진을 품목명으로 자동 매칭해서 출력물로 보여줘요"
+        >
+          사진 출력물 보기
+        </button>
         <button
           type="button"
           onClick={deleteSelected}
@@ -4874,6 +4890,8 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOve
           선택 삭제{selected.size > 0 ? ` (${selected.size}건)` : ""}
         </button>
       </div>
+
+      {showPhotoOutput && <QuotePhotoOutputView state={state} onClose={() => setShowPhotoOutput(false)} />}
 
       <div style={{ maxHeight: 360, overflow: "auto", border: `1px solid ${C.lineSoft}`, marginBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderBottom: `1px solid ${C.lineSoft}`, position: "sticky", top: 0, background: C.panel, minWidth: "max-content", zIndex: 1 }}>
@@ -4955,6 +4973,361 @@ function ImportPreview({ state, setState, onCancel, onConfirm, importing, tonOve
         </button>
         <button onClick={onCancel} style={ghostBtnStyle}>취소</button>
       </div>
+    </div>
+  );
+}
+
+// ---------- 견적서 품목 ↔ 사무집기 사진 자동 매칭 ----------
+// "이미지 파일을 별도로 줄테니 견적서를 업로드하면 자동으로 사무집기 이미지를 출력물로 만들어달라"는
+// 요청에 따라, 제품사진 라이브러리(item_photos)에 미리 등록해둔 사진을 품목명 기준으로 자동으로 찾아
+// 붙여준다. 견적서마다 품목명이 완전히 똑같이 적혀있지 않을 수 있어(공백·괄호 등 표기 차이), 완전히
+// 같은 이름이 없어도 최대한 "센스있게" 비슷한 걸 찾도록 했다: 1) 정리한 이름이 완전히 같으면 최우선,
+// 2) 한쪽 이름이 다른 쪽에 포함되면 그다음, 3) 그것도 아니면 글자 2개씩 겹치는 정도(다이스 유사도)로
+// 가장 비슷한 것을 고르고, 규격까지 등록돼 있으면 규격 일치 여부로 점수를 더 보정한다.
+function normalizeForPhotoMatch(s) {
+  return (s || "")
+    .toString()
+    .toLowerCase()
+    .replace(/[\s()\[\]{}\-_/,.:;·※]/g, "")
+    .trim();
+}
+function photoMatchBigrams(s) {
+  const set = new Set();
+  for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2));
+  return set;
+}
+function photoMatchDiceCoefficient(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const A = photoMatchBigrams(a);
+  const B = photoMatchBigrams(b);
+  if (A.size === 0 || B.size === 0) return 0;
+  let common = 0;
+  A.forEach((g) => {
+    if (B.has(g)) common++;
+  });
+  return (2 * common) / (A.size + B.size);
+}
+function matchItemPhoto(itemName, spec, photos) {
+  const ni = normalizeForPhotoMatch(itemName);
+  if (!ni || !photos || photos.length === 0) return null;
+  const ns = normalizeForPhotoMatch(spec);
+  let best = null;
+  let bestScore = 0;
+  for (const p of photos) {
+    const pn = normalizeForPhotoMatch(p.item_name);
+    if (!pn) continue;
+    let score;
+    if (pn === ni) {
+      score = 1;
+    } else if (pn.includes(ni) || ni.includes(pn)) {
+      const shorter = Math.min(pn.length, ni.length);
+      const longer = Math.max(pn.length, ni.length);
+      score = 0.85 + (shorter / longer) * 0.1;
+    } else {
+      score = photoMatchDiceCoefficient(ni, pn) * 0.8; // 이름만 비슷한 경우엔 상한을 낮춰 규격 일치로 보완할 여지를 둔다
+    }
+    const ps = normalizeForPhotoMatch(p.spec);
+    if (ns && ps) {
+      if (ps === ns) score += 0.15;
+      else if (ps.includes(ns) || ns.includes(ps)) score += 0.07;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = p;
+    }
+  }
+  return bestScore >= 0.5 ? best : null;
+}
+
+// 견적서 품목 목록에 등록된 사진을 자동으로 매칭해서 인쇄/PDF 저장할 수 있는 출력물로 보여주는 화면.
+// ImportPreview의 "사진 출력물 보기" 버튼으로 열린다.
+function QuotePhotoOutputView({ state, onClose }) {
+  const [photos, setPhotos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [urlById, setUrlById] = useState({});
+
+  useEffect(() => {
+    let revoked = false;
+    const urls = [];
+    async function load() {
+      setLoading(true);
+      const { data, error } = await supabase.from("item_photos").select("*").order("item_name", { ascending: true });
+      if (error) {
+        setLoading(false);
+        alert(
+          "사진 목록을 불러오지 못했어요: " + error.message + " (Supabase에 item_photos 테이블이 아직 없다면 관리자에게 설정을 요청해주세요.)"
+        );
+        return;
+      }
+      const list = data || [];
+      setPhotos(list);
+      const map = {};
+      for (const p of list) {
+        if (!p.image_path) continue;
+        const { data: fileData, error: dlError } = await supabase.storage.from("item-photos").download(p.image_path);
+        if (!dlError && fileData) {
+          const url = URL.createObjectURL(fileData);
+          urls.push(url);
+          map[p.id] = url;
+        }
+      }
+      if (!revoked) {
+        setUrlById(map);
+        setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      revoked = true;
+      urls.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, []);
+
+  function handlePrintPhotoOutput() {
+    const prevTitle = document.title;
+    document.title = `사무집기 이미지 출력물${state.voucherNo ? " #" + state.voucherNo : ""}`;
+    const restoreTitle = () => {
+      document.title = prevTitle;
+    };
+    window.addEventListener("afterprint", restoreTitle, { once: true });
+    window.print();
+    setTimeout(restoreTitle, 2000);
+  }
+
+  const rowsWithMatch = state.items.map((it) => ({ it, photo: matchItemPhoto(it.item, it.spec, photos) }));
+  const matchedCount = rowsWithMatch.filter((r) => r.photo).length;
+
+  return (
+    <div
+      className="qpo-overlay"
+      style={{ position: "fixed", inset: 0, background: "rgba(20,20,20,0.5)", zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+    >
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #qpo-print-area, #qpo-print-area * { visibility: visible; }
+          #qpo-print-area { position: absolute; top: 0; left: 0; width: 100%; padding: 24px; }
+          .qpo-no-print { display: none !important; }
+          .qpo-overlay { position: static !important; background: none !important; padding: 0 !important; }
+        }
+      `}</style>
+      <div style={{ background: "#fff", width: "min(920px, 100%)", maxHeight: "92vh", overflow: "auto", border: `1px solid ${C.line}`, padding: 24 }}>
+        <div className="qpo-no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontFamily: serif, fontSize: 16 }}>
+            사무집기 이미지 출력물{loading ? " (사진 불러오는 중…)" : ` — 사진 매칭 ${matchedCount}/${state.items.length}건`}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" onClick={handlePrintPhotoOutput} disabled={loading} style={primaryBtnStyle2}>
+              인쇄 / PDF로 저장
+            </button>
+            <button type="button" onClick={onClose} style={ghostBtnStyle}>
+              닫기
+            </button>
+          </div>
+        </div>
+
+        <div id="qpo-print-area">
+          <div style={{ textAlign: "center", marginBottom: 18 }}>
+            <div style={{ fontFamily: serif, fontSize: 20 }}>사무집기 이미지 출력물</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
+              {state.customer || state.recipient || ""}
+              {state.siteName ? ` · ${state.siteName}` : ""}
+              {state.voucherNo ? ` · #${state.voucherNo}` : ""}
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
+            {rowsWithMatch.map(({ it, photo }, idx) => (
+              <div key={idx} style={{ border: `1px solid ${C.lineSoft}`, padding: 10, breakInside: "avoid" }}>
+                <div style={{ width: "100%", height: 150, background: "#F5F5F5", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 8, overflow: "hidden" }}>
+                  {photo && urlById[photo.id] ? (
+                    <img src={urlById[photo.id]} alt={it.item || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                  ) : (
+                    <span style={{ fontSize: 11.5, color: C.muted }}>사진 없음</span>
+                  )}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 2 }}>{it.item || "(품목명 없음)"}</div>
+                {it.spec && <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 4 }}>{it.spec}</div>}
+                <div style={{ fontSize: 11.5, color: C.inkSoft }}>
+                  수량 {it.qty ?? "-"} · 단가 {fmtWon(it.unit_price)} · 금액 {fmtWon(it.amount)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- 제품사진 라이브러리 (사무집기 사진을 품목명과 함께 미리 등록해두는 관리 화면) ----------
+// "이미지 파일을 별도로 줄거야"라는 요청에 맞춰, 화면에서 사진을 하나씩 올리고 품목명(+선택적으로
+// 규격)을 입력해 등록하는 방식으로 만들었다. 여기 등록한 사진은 견적서 업로드 화면의 "사진 출력물
+// 보기"에서 matchItemPhoto로 자동 매칭된다.
+function PhotoLibraryTab() {
+  const [photos, setPhotos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [urlById, setUrlById] = useState({});
+  const [newName, setNewName] = useState("");
+  const [newSpec, setNewSpec] = useState("");
+  const [newFile, setNewFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
+
+  async function fetchPhotos() {
+    setLoading(true);
+    const { data, error } = await supabase.from("item_photos").select("*").order("created_at", { ascending: false });
+    if (error) {
+      setLoading(false);
+      alert(
+        "사진 목록을 불러오지 못했어요: " + error.message + " (Supabase에 item_photos 테이블이 아직 없다면 관리자에게 설정을 요청해주세요.)"
+      );
+      return;
+    }
+    setPhotos(data || []);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    fetchPhotos();
+  }, []);
+
+  useEffect(() => {
+    let revoked = false;
+    const urls = [];
+    async function loadThumbs() {
+      const map = {};
+      for (const p of photos) {
+        if (!p.image_path) continue;
+        const { data, error } = await supabase.storage.from("item-photos").download(p.image_path);
+        if (!error && data) {
+          const url = URL.createObjectURL(data);
+          urls.push(url);
+          map[p.id] = url;
+        }
+      }
+      if (!revoked) setUrlById(map);
+    }
+    if (photos.length > 0) loadThumbs();
+    return () => {
+      revoked = true;
+      urls.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [photos]);
+
+  async function handleAdd() {
+    if (!newName.trim()) {
+      alert("품목명을 입력해주세요.");
+      return;
+    }
+    if (!newFile) {
+      alert("사진 파일을 선택해주세요.");
+      return;
+    }
+    setSaving(true);
+    // Storage 경로에는 한글 등이 들어가면 오류가 나므로(다른 업로드와 같은 이유), 경로는 시간으로만
+    // 안전하게 만들고 실제 품목명은 item_photos.item_name 컬럼에 그대로 저장해 화면에 보여준다.
+    const extMatch = newFile.name.match(/\.[a-zA-Z0-9]+$/);
+    const ext = extMatch ? extMatch[0] : "";
+    const path = `photo-${Date.now()}${ext}`;
+    const { error: uploadError } = await supabase.storage.from("item-photos").upload(path, newFile, { upsert: false });
+    if (uploadError) {
+      setSaving(false);
+      alert("사진 업로드에 실패했어요: " + uploadError.message);
+      return;
+    }
+    const { error: insertError } = await supabase.from("item_photos").insert({
+      item_name: newName.trim(),
+      spec: newSpec.trim() || null,
+      image_path: path,
+    });
+    setSaving(false);
+    if (insertError) {
+      alert(
+        "등록에 실패했어요: " + insertError.message + " (Supabase에 item_photos 테이블이 아직 없다면 관리자에게 설정을 요청해주세요.)"
+      );
+      return;
+    }
+    setNewName("");
+    setNewSpec("");
+    setNewFile(null);
+    fetchPhotos();
+  }
+
+  async function handleDelete(p) {
+    if (!confirm(`"${p.item_name}" 사진을 삭제할까요?`)) return;
+    setDeletingId(p.id);
+    const { error } = await supabase.from("item_photos").delete().eq("id", p.id);
+    if (error) {
+      setDeletingId(null);
+      alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    if (p.image_path) {
+      supabase.storage.from("item-photos").remove([p.image_path]).catch(() => {});
+    }
+    setDeletingId(null);
+    fetchPhotos();
+  }
+
+  return (
+    <div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>제품사진 라이브러리</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+        사무집기 사진을 품목명과 함께 등록해두면, 견적서 업로드 화면의 "사진 출력물 보기"에서 품목명이 비슷한 사진을 자동으로
+        찾아 붙여줘요. 규격까지 적어두면 더 정확하게 매칭돼요(선택 입력).
+      </div>
+
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginBottom: 20, display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>품목명 *</div>
+          <input style={{ ...smallInputStyle, width: 180 }} value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="예: 사무용 책상" />
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>규격 (선택)</div>
+          <input style={{ ...smallInputStyle, width: 160 }} value={newSpec} onChange={(e) => setNewSpec(e.target.value)} placeholder="예: 1400×700" />
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>사진 파일 *</div>
+          <input type="file" accept="image/*" onChange={(e) => setNewFile(e.target.files?.[0] || null)} style={{ fontSize: 12.5 }} />
+        </div>
+        <button type="button" onClick={handleAdd} disabled={saving} style={primaryBtnStyle2}>
+          {saving ? "등록 중…" : "+ 등록"}
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={{ fontSize: 12.5, color: C.muted }}>불러오는 중…</div>
+      ) : photos.length === 0 ? (
+        <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 40, textAlign: "center", color: C.muted, fontSize: 13.5 }}>
+          아직 등록된 사진이 없어요. 위에서 품목명과 사진을 등록해보세요.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 14 }}>
+          {photos.map((p) => (
+            <div key={p.id} style={{ border: `1px solid ${C.lineSoft}`, padding: 10 }}>
+              <div style={{ width: "100%", height: 130, background: "#F5F5F5", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 8, overflow: "hidden" }}>
+                {urlById[p.id] ? (
+                  <img src={urlById[p.id]} alt={p.item_name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                ) : (
+                  <span style={{ fontSize: 11, color: C.muted }}>불러오는 중…</span>
+                )}
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{p.item_name}</div>
+              {p.spec && <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 8 }}>{p.spec}</div>}
+              <button
+                type="button"
+                onClick={() => handleDelete(p)}
+                disabled={deletingId === p.id}
+                style={{ ...ghostBtnStyle, width: "100%", fontSize: 12 }}
+              >
+                {deletingId === p.id ? "삭제 중…" : "삭제"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
