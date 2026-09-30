@@ -2032,13 +2032,14 @@ function Dashboard({ profile, onLogout }) {
           textAlign: "left",
           padding: "13px 12px",
           marginBottom: 2,
-          borderRadius: 7,
-          background: active ? C.ink : "transparent",
+          borderRadius: 8,
+          // "디자인을 과감하게" 요청(2026-09-30)으로 왼쪽 메뉴를 어두운 남색 사이드바로 바꾸면서,
+          // 선택된 메뉴는 이제 보라색 포인트 컬러로 꽉 채워서 확실히 눈에 띄게 했다(예전엔 옅은 왼쪽
+          // 줄 하나로만 표시해서 너무 미묘했었다).
+          background: active ? C.purple : "transparent",
           border: "none",
-          // 활성 메뉴에 보라색 포인트 바를 왼쪽에 살짝 넣어서, 이 색이 화면 곳곳(입력창 포커스·체크박스 등)의
-          // 포인트 컬러와 같은 계열이라는 걸 자연스럽게 느끼게 했다(전체적인 색상 통일감 개선).
-          boxShadow: active ? `inset 3px 0 0 ${C.purple}` : "none",
-          color: active ? "#fff" : C.inkSoft,
+          boxShadow: active ? "0 4px 14px rgba(107,92,165,0.4)" : "none",
+          color: active ? "#fff" : "#AEB9C4",
           fontSize: 14,
           fontWeight: active ? 600 : 500,
           cursor: "pointer",
@@ -2046,7 +2047,7 @@ function Dashboard({ profile, onLogout }) {
           whiteSpace: "nowrap",
         }}
       >
-        <span style={{ display: "inline-block", width: 15, color: m.starColor || (active ? "#fff" : "#000") }}>
+        <span style={{ display: "inline-block", width: 15, color: m.starColor || (active ? "#fff" : "#F2C744") }}>
           {m.star ? "★" : ""}
         </span>
         {m.label}
@@ -2059,7 +2060,7 @@ function Dashboard({ profile, onLogout }) {
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: sans, color: C.ink }}>
       <style>{`
         .rm-menu-btn { transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease; }
-        .rm-menu-btn.is-inactive:hover { background: ${C.bg} !important; color: ${C.ink} !important; }
+        .rm-menu-btn.is-inactive:hover { background: rgba(255,255,255,0.08) !important; color: #fff !important; }
         .rm-logout-btn:hover { background: ${C.bg}; border-color: ${C.ink}; color: ${C.ink}; }
         .col-resize-bar { background: #C7CDD6; transition: background 0.12s ease, width 0.12s ease; }
         .col-resize-handle:hover .col-resize-bar { background: ${C.ink}; width: 4px; }
@@ -2095,7 +2096,9 @@ function Dashboard({ profile, onLogout }) {
           input, select, textarea { font-size: 16px !important; }
         }
       `}</style>
-      <div style={{ borderBottom: `1px solid ${C.line}`, background: C.panel }}>
+      {/* "과감하게" 요청으로 제목 아래 보라색 브랜드 바를 넣어서, 어느 화면을 열어도 "리마켓" 제품임이
+          한눈에 각인되도록 했다(예전엔 옅은 회색 줄 하나뿐이었다). */}
+      <div style={{ borderBottom: `3px solid ${C.purple}`, background: C.panel, boxShadow: "0 1px 0 rgba(28,43,58,0.06)" }}>
         <div style={{ maxWidth: 1600, margin: "0 auto", padding: isMobile ? "12px 14px" : "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
             {isMobile && (
@@ -2136,19 +2139,23 @@ function Dashboard({ profile, onLogout }) {
 
       <div style={{ maxWidth: 1600, margin: "0 auto", padding: isMobile ? "14px 12px 50px" : "28px 24px 60px", display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 10 : 24, alignItems: "flex-start" }}>
         {!isMobile && (
+          // "과감하게 리디자인" 요청(2026-09-30)으로 왼쪽 메뉴를 어두운 남색 사이드바로 바꿨다(예전엔
+          // 본문과 똑같은 흰 배경이라 경계가 흐릿했는데, 이제 한눈에 "탐색 영역"으로 구분된다). 실제
+          // 화면 내용(본문 카드들)은 손대지 않고 그대로다.
           <aside
             style={{
               width: 232,
               flexShrink: 0,
-              border: `1px solid ${C.line}`,
-              borderRadius: 6,
-              background: C.panel,
+              border: "none",
+              borderRadius: 10,
+              background: C.ink,
               padding: 6,
               position: "sticky",
               top: 20,
+              boxShadow: "0 6px 20px rgba(28,43,58,0.18)",
             }}
           >
-            <div style={{ padding: "10px 12px 8px", fontSize: 10.5, color: C.muted, letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
+            <div style={{ padding: "10px 12px 8px", fontSize: 10.5, color: "rgba(255,255,255,0.4)", letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
             {menuButtonsJsx}
           </aside>
         )}
@@ -2170,14 +2177,14 @@ function Dashboard({ profile, onLogout }) {
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              style={{ width: "80vw", maxWidth: 300, height: "100%", background: C.panel, padding: 6, overflowY: "auto", boxShadow: "2px 0 14px rgba(0,0,0,0.18)" }}
+              style={{ width: "80vw", maxWidth: 300, height: "100%", background: C.ink, padding: 6, overflowY: "auto", boxShadow: "2px 0 14px rgba(0,0,0,0.28)" }}
             >
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 8px 8px 12px" }}>
-                <div style={{ fontSize: 10.5, color: C.muted, letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
+                <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.4)", letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
                 <button
                   onClick={() => setMobileMenuOpen(false)}
                   aria-label="메뉴 닫기"
-                  style={{ border: "none", background: "transparent", fontSize: 22, lineHeight: 1, color: C.muted, cursor: "pointer", padding: 4 }}
+                  style={{ border: "none", background: "transparent", fontSize: 22, lineHeight: 1, color: "rgba(255,255,255,0.6)", cursor: "pointer", padding: 4 }}
                 >
                   ×
                 </button>
@@ -10489,9 +10496,11 @@ function fmtAsDate(v) {
 // 따로 테두리를 가진 모양 대신 연한 회색 트랙 하나 안에 선택된 항목만 흰 배경+그림자로 떠 보이게
 // 바꿨다(세그먼트 컨트롤 느낌). 두 화면(A/S관리대장·렌탈회수관리)이 똑같은 컴포넌트를 같이 쓰도록
 // 해서 앞으로도 두 화면이 서로 어긋나지 않고 계속 통일되게 했다.
+// (2026-09-30 재수정) "회색 구분선이 너무 구림" 피드백으로, 트랙 전체를 감싸던 옅은 회색 배경(mutedBg)을
+// 완전히 없앴다. 이제 회색 배경·테두리 없이, 선택된 항목만 보라색으로 꽉 채워서 보여주는 단순한 형태다.
 function StatusFilterTabs({ tabs, activeKey, counts, onChange }) {
   return (
-    <div style={{ display: "inline-flex", flexWrap: "wrap", gap: 2, padding: 3, background: C.mutedBg, borderRadius: 10 }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
       {tabs.map((t) => {
         const isActive = activeKey === t.key;
         return (
@@ -10500,20 +10509,20 @@ function StatusFilterTabs({ tabs, activeKey, counts, onChange }) {
             type="button"
             onClick={() => onChange(t.key)}
             style={{
-              padding: "6px 13px",
-              background: isActive ? C.panel : "transparent",
-              color: isActive ? C.ink : C.inkSoft,
+              padding: "7px 14px",
+              background: isActive ? C.purple : "transparent",
+              color: isActive ? "#fff" : C.inkSoft,
               border: "none",
               borderRadius: 8,
               fontSize: 12.5,
               fontWeight: isActive ? 700 : 500,
               fontFamily: sans,
               cursor: "pointer",
-              boxShadow: isActive ? "0 1px 3px rgba(28,43,58,0.16)" : "none",
+              boxShadow: isActive ? "0 3px 8px rgba(107,92,165,0.3)" : "none",
               whiteSpace: "nowrap",
             }}
           >
-            {t.label} <span style={{ opacity: 0.6 }}>({counts[t.key] ?? 0})</span>
+            {t.label} <span style={{ opacity: isActive ? 0.85 : 0.6 }}>({counts[t.key] ?? 0})</span>
           </button>
         );
       })}
@@ -10825,30 +10834,36 @@ function AsBoardTab({ isAdmin, managerName }) {
                 <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAllPage} />
               </th>
               {AS_COLUMNS.map((label, i) => (
-                <th key={label} style={{ ...asTh, width: colWidths[i], position: "relative" }}>
-                  {sortAccessors[label] ? (
-                    <button
-                      type="button"
-                      onClick={() => handleSortClick(label)}
-                      title="눌러서 정렬"
-                      style={{
-                        all: "unset",
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 2,
-                        fontSize: 11.5,
-                        color: sortKey === label ? C.ink : C.muted,
-                        fontWeight: sortKey === label ? 700 : 600,
-                      }}
-                    >
-                      {label}
-                      <span style={{ fontSize: 9, opacity: sortKey === label ? 1 : 0.35 }}>{sortKey === label ? (sortDir === "asc" ? "▲" : "▼") : "▲"}</span>
-                    </button>
-                  ) : (
-                    label
-                  )}
-                  <ColResizeHandle onMouseDown={startResize(i)} />
+                <th key={label} style={{ ...asTh, width: colWidths[i] }}>
+                  {/* (2026-09-30) 칸 너비조절 바(ColResizeHandle)가 th 자체(패딩 포함, 세로로 김)를 기준으로
+                      늘어나면 렌탈내역 화면(div 기반, 패딩 없이 글자 높이만큼만)보다 훨씬 굵고 크게 보였다.
+                      이제 글자 높이만큼만 차지하는 별도의 안쪽 래퍼에 position:relative를 주고, 조절바가
+                      그 래퍼 기준으로만 늘어나게 해서 렌탈내역과 같은 얇고 세련된 모양으로 맞췄다. */}
+                  <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+                    {sortAccessors[label] ? (
+                      <button
+                        type="button"
+                        onClick={() => handleSortClick(label)}
+                        title="눌러서 정렬"
+                        style={{
+                          all: "unset",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 2,
+                          fontSize: 11.5,
+                          color: sortKey === label ? C.ink : C.muted,
+                          fontWeight: sortKey === label ? 700 : 600,
+                        }}
+                      >
+                        {label}
+                        <span style={{ fontSize: 9, opacity: sortKey === label ? 1 : 0.35 }}>{sortKey === label ? (sortDir === "asc" ? "▲" : "▼") : "▲"}</span>
+                      </button>
+                    ) : (
+                      label
+                    )}
+                    <ColResizeHandle onMouseDown={startResize(i)} />
+                  </div>
                 </th>
               ))}
             </tr>
@@ -11432,30 +11447,34 @@ function CollectionBoardTab({ isAdmin, managerName }) {
                 <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAllPage} />
               </th>
               {COLLECTION_COLUMNS.map((label, i) => (
-                <th key={label} style={{ ...asTh, width: colWidths[i], position: "relative" }}>
-                  {sortAccessors[label] ? (
-                    <button
-                      type="button"
-                      onClick={() => handleSortClick(label)}
-                      title="눌러서 정렬"
-                      style={{
-                        all: "unset",
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 2,
-                        fontSize: 11.5,
-                        color: sortKey === label ? C.ink : C.muted,
-                        fontWeight: sortKey === label ? 700 : 600,
-                      }}
-                    >
-                      {label}
-                      <span style={{ fontSize: 9, opacity: sortKey === label ? 1 : 0.35 }}>{sortKey === label ? (sortDir === "asc" ? "▲" : "▼") : "▲"}</span>
-                    </button>
-                  ) : (
-                    label
-                  )}
-                  <ColResizeHandle onMouseDown={startResize(i)} />
+                <th key={label} style={{ ...asTh, width: colWidths[i] }}>
+                  {/* (2026-09-30) A/S관리대장과 같은 이유로, 조절바가 th 전체 높이가 아니라 글자 높이만큼만
+                      차지하는 안쪽 래퍼 기준으로 늘어나게 해서 렌탈내역과 같은 얇은 모양으로 맞췄다. */}
+                  <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+                    {sortAccessors[label] ? (
+                      <button
+                        type="button"
+                        onClick={() => handleSortClick(label)}
+                        title="눌러서 정렬"
+                        style={{
+                          all: "unset",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 2,
+                          fontSize: 11.5,
+                          color: sortKey === label ? C.ink : C.muted,
+                          fontWeight: sortKey === label ? 700 : 600,
+                        }}
+                      >
+                        {label}
+                        <span style={{ fontSize: 9, opacity: sortKey === label ? 1 : 0.35 }}>{sortKey === label ? (sortDir === "asc" ? "▲" : "▼") : "▲"}</span>
+                      </button>
+                    ) : (
+                      label
+                    )}
+                    <ColResizeHandle onMouseDown={startResize(i)} />
+                  </div>
                 </th>
               ))}
             </tr>
