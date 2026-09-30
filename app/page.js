@@ -12424,6 +12424,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 줄자 기능: 캔버스를 두 번 눌러 그 사이 실제 거리(cm/m)를 재본다. 세 번째 클릭부터는 새로 잰다.
   const [rulerMode, setRulerMode] = useState(false);
   const [rulerPoints, setRulerPoints] = useState([]); // [{xCm, yCm}] 0~2개
+  const [rulerCopied, setRulerCopied] = useState(false); // "복사됨" 표시를 잠깐 보여줬다가 되돌리는 용도
 
   // "이미지 임포트" 요청: 실제 도면(사진·스캔 등)을 배경으로 깔아두고 그 위에 정확한 축척으로 모형을
   // 배치할 수 있게 한다. 도면을 올리면 그 안에서 실제 거리를 아는 두 지점을 순서대로 찍고 그 실제
@@ -14324,6 +14325,19 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   const rulerDistanceCm =
     rulerPoints.length === 2 ? Math.hypot(rulerPoints[1].xCm - rulerPoints[0].xCm, rulerPoints[1].yCm - rulerPoints[0].yCm) : null;
 
+  // (2026-09-30 미세조정) "줄자 기능을 조금만 더 실용적으로" 요청 — 다 잰 거리를 굳이 손으로 다시
+  // 타이핑하지 않고 그대로 복사해서 메모·견적서 등에 붙여넣을 수 있게 했다. 캔버스 위 말풍선과 똑같은
+  // 형식(100cm 넘으면 "1.18m (118cm)", 안 넘으면 "83.0cm")으로 복사한다.
+  function handleCopyRulerDistance() {
+    if (rulerDistanceCm == null) return;
+    const text = rulerDistanceCm >= 100 ? `${(rulerDistanceCm / 100).toFixed(2)}m (${rulerDistanceCm.toFixed(0)}cm)` : `${rulerDistanceCm.toFixed(1)}cm`;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    setRulerCopied(true);
+    setTimeout(() => setRulerCopied(false), 1500);
+  }
+
   async function handleSaveBoard() {
     const name = (boardName || "").trim();
     if (!name) {
@@ -14864,13 +14878,19 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               {rulerPoints.length > 0 && (
                 <button onClick={handleClearRuler} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>줄자 지우기</button>
               )}
-              {/* "줄자 기능을 좀 더 고급지게" 요청: 줄자 모드에서 점을 찍기 전에, 지금 마우스가 배치판의
-                  정확히 어느 cm 위치를 가리키고 있는지 실시간으로 보여준다. 확대해서 정확한 자리를
-                  찾는 걸 도와준다. */}
-              {rulerMode && hoverCm && (
-                <span style={{ fontSize: 11, color: C.inkSoft, whiteSpace: "nowrap" }}>
-                  → {hoverCm.xCm.toFixed(1)}cm, {hoverCm.yCm.toFixed(1)}cm
-                </span>
+              {/* (2026-09-30 미세조정) "줄자 옆에 좌표체킹 하는 부분 없애주고" 요청으로, 마우스 위치의
+                  cm 좌표(→ 389.0cm, 130.7cm)를 실시간으로 보여주던 부분을 없앴다 — 실제로 잰 거리
+                  자체는 캔버스 위 빨간 말풍선(📏 1.18m)에 그대로 나오니 정보 손실은 없다. 대신
+                  "줄자 기능을 조금 더 실용적으로" 요청에 맞춰, 다 잰 거리를 한 번에 복사해서 메모·견적서
+                  등에 바로 붙여넣을 수 있는 "복사" 버튼을 추가했다. */}
+              {rulerDistanceCm != null && (
+                <button
+                  onClick={handleCopyRulerDistance}
+                  title="방금 잰 거리를 복사해요(메모·견적서 등에 바로 붙여넣기)"
+                  style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}
+                >
+                  {rulerCopied ? "복사됨 ✓" : "📋 거리 복사"}
+                </button>
               )}
               {/* "이미지 임포트" 요청: 실제 도면(사진·스캔) 파일을 올려서 배경으로 깔아두고, 그 위에
                   정확한 축척으로 모형을 배치할 수 있다. 파일을 고르면 바로 올라가지 않고 먼저 축척
