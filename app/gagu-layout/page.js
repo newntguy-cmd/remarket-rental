@@ -2864,11 +2864,19 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         .layoutsim-placed-item.layoutsim-placed-item--selected:not(.layoutsim-placed-item--nonrect):hover {
           box-shadow: 0 0 0 5px rgba(91, 79, 229, 0.16), 0 3px 8px rgba(28, 43, 58, 0.26) !important;
         }
+        /* (2026-09-30 재확인) "깎아내거나 파인 부분만 유독 진하게 보인다"는 신고가 위 평소(resting)
+           상태 수정 후에도 안 없어져서, 배포된 실제 화면을 직접 열어 번들 코드를 확인해봤다 — 평소
+           상태(shapeSvgStyle)는 이미 그림자가 "none"으로 잘 빠져있었는데, 바로 아래 이 hover 전용 CSS
+           규칙(!important)이 따로 남아있어서 마우스를 얹기만 하면 방향(0 3px, 아래로 치우침) 있는
+           그림자가 인라인 스타일을 덮어쓰며 그대로 되살아났다 — 화면을 스크린샷할 때 마우스가 모형
+           위에 있으면 바로 이 경로로 재현된다. 평소 상태를 고칠 때와 같은 이유로, hover 때 살짝
+           떠 보이게 하는 그림자도 방향을 없애 사방으로 고르게 퍼지게 바꿔서 곡선·파인 모서리에서도
+           절대 두꺼워 보이지 않게 했다. */
         .layoutsim-placed-item--nonrect:hover svg {
-          filter: drop-shadow(0 3px 6px rgba(28, 43, 58, 0.28)) !important;
+          filter: drop-shadow(0 0 3px rgba(28, 43, 58, 0.35)) !important;
         }
         .layoutsim-placed-item--nonrect.layoutsim-placed-item--selected:hover svg {
-          filter: drop-shadow(0 0 4px rgba(91, 79, 229, 0.6)) drop-shadow(0 3px 6px rgba(28, 43, 58, 0.3)) !important;
+          filter: drop-shadow(0 0 4px rgba(91, 79, 229, 0.6)) drop-shadow(0 0 3px rgba(28, 43, 58, 0.35)) !important;
         }
       `}</style>
       {/* (2026-09-30 미세조정) "글씨도 많고 디자인이 중구난방"이라는 피드백으로, 안내문구를 화면에
