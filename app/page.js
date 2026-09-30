@@ -14591,6 +14591,19 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     setRulerPoints([]);
   }
 
+  // "줄자로 재고 마우스 우클릭을 누르면 재어진 상태가 화면에 그대로 남고, 커서는 다시 자유롭게
+  // 움직이는 원래 상태로 돌아가서 다른 가구를 또 배치할 수 있게" 요청. 두 점을 다 찍어 거리가 이미
+  // 표시된 상태에서 캔버스를 오른쪽 클릭하면, 그 측정 결과(선·점·거리 말풍선)는 지우지 않고 그대로
+  // 화면에 남겨둔 채(줄자 지우기는 여전히 위 "줄자 지우기" 버튼으로 따로 처리) 줄자 모드만 꺼서, 마우스가
+  // 곧바로 모형을 선택·이동·배치하는 원래 동작으로 돌아간다(줄자 버튼을 다시 눌러 끄는 것과 동일한
+  // 효과). 아직 점을 하나도 안 찍었거나 한 점만 찍은 상태에서는(측정이 끝나지 않았으므로) 브라우저의
+  // 기본 우클릭 메뉴만 막고, 줄자 모드 자체는 그대로 켜둔다.
+  function handleCanvasContextMenu(e) {
+    if (!rulerMode) return;
+    e.preventDefault();
+    if (rulerPoints.length === 2) setRulerMode(false);
+  }
+
   const rulerDistanceCm =
     rulerPoints.length === 2 ? Math.hypot(rulerPoints[1].xCm - rulerPoints[0].xCm, rulerPoints[1].yCm - rulerPoints[0].yCm) : null;
 
@@ -15364,6 +15377,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
             onDrop={handleCanvasDrop}
             onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleCanvasMouseMoveForRuler}
+            onContextMenu={handleCanvasContextMenu}
             style={{
               position: "absolute",
               left: worldOffset.left,
