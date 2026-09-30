@@ -5258,7 +5258,10 @@ function QuotePhotoOutputView({ state, onClose }) {
 // 같은 구조로, 사진을 끌어다 놓아도 되고(드래그앤드롭) 클릭해서 파일탐색기로 골라도 되게(파일 선택)
 // 한 영역 안에 두 방식을 같이 넣었다. 이미 고른 파일이 있으면 그 파일명을 보여주고, 다른 파일을
 // 끌어다 놓거나 다시 클릭하면 바꿀 수 있다.
-function PhotoDropZone({ onFile, fileName }) {
+// "사진을 잘못 가져왔을 수도 있잖아 취소버튼을 하나 넣어주고" 요청으로, 파일을 고른 뒤(드래그든
+// 클릭이든) 등록을 누르기 전에 다시 뺄 수 있는 × 버튼을 추가했다. onClear가 없으면(다른 곳에서
+// 재사용할 때 대비) 취소 버튼 자체를 안 그린다.
+function PhotoDropZone({ onFile, fileName, onClear }) {
   const inputRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -5279,6 +5282,7 @@ function PhotoDropZone({ onFile, fileName }) {
       onDrop={handleDrop}
       onClick={() => inputRef.current?.click()}
       style={{
+        position: "relative",
         border: `2px dashed ${dragOver ? C.purple : C.lineSoft}`,
         background: dragOver ? C.purpleBg : C.bg,
         padding: "9px 12px",
@@ -5303,6 +5307,33 @@ function PhotoDropZone({ onFile, fileName }) {
         <div style={{ fontSize: 11.5, color: C.ink }}>
           📷 {fileName}
           <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2 }}>다른 사진으로 바꾸려면 클릭하거나 끌어다 놓으세요</div>
+          {onClear && (
+            <button
+              type="button"
+              title="선택한 사진 취소"
+              onClick={(e) => {
+                e.stopPropagation();
+                onClear();
+              }}
+              style={{
+                position: "absolute",
+                top: 4,
+                right: 4,
+                width: 18,
+                height: 18,
+                lineHeight: "16px",
+                padding: 0,
+                border: `1px solid ${C.line}`,
+                borderRadius: "50%",
+                background: C.panel,
+                color: C.muted,
+                fontSize: 11,
+                cursor: "pointer",
+              }}
+            >
+              ✕
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ fontSize: 11.5, color: C.muted }}>
@@ -5325,9 +5356,20 @@ function PhotoLibraryTab() {
   const [urlById, setUrlById] = useState({});
   const [newName, setNewName] = useState("");
   const [newSpec, setNewSpec] = useState("");
+  // "규격 옆에 색상 넣는 칸을 하나 만들어서... 나중에 견적서 상의 색상하고도 매칭되게 해보자" 요청 —
+  // 우선 색상을 입력·저장·수정할 수 있게 칸을 추가해뒀다. 견적서 쪽 색상과 자동으로 매칭하는 로직은
+  // "나중에"라고 하셔서 아직은 안 붙였고, 이 색상 칼럼(color)을 나중에 그대로 활용하면 된다.
+  const [newColor, setNewColor] = useState("");
   const [newFile, setNewFile] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  // "등록이 됐을 때 이름을 수정할 수 있는 기능" 요청 — 카드마다 "이름 수정" 버튼을 누르면 그 카드만
+  // 품목명·규격·색상을 입력칸으로 바꿔 고칠 수 있게 했다. 한 번에 하나만 수정 모드로 열리게 editingId로 관리.
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [editSpec, setEditSpec] = useState("");
+  const [editColor, setEditColor] = useState("");
+  const [renaming, setRenaming] = useState(false);
 
   async function fetchPhotos() {
     setLoading(true);
@@ -5403,18 +5445,59 @@ function PhotoLibraryTab() {
     const { error: insertError } = await supabase.from("item_photos").insert({
       item_name: newName.trim(),
       spec: newSpec.trim() || null,
+      color: newColor.trim() || null,
       image_path: path,
     });
     setSaving(false);
     if (insertError) {
+      // color 컬럼이 아직 없는 예전 Supabase 테이블일 수 있다 — item_photos_setup.sql을 다시 실행하면
+      // color 컬럼이 추가된다.
       alert(
-        "등록에 실패했어요: " + insertError.message + " (Supabase에 item_photos 테이블이 아직 없다면 관리자에게 설정을 요청해주세요.)"
+        "등록에 실패했어요: " +
+          insertError.message +
+          (insertError.message.includes("color")
+            ? " (Supabase의 item_photos 테이블에 color 컬럼이 아직 없을 수 있어요. item_photos_setup.sql을 다시 실행해주세요.)"
+            : " (Supabase에 item_photos 테이블이 아직 없다면 관리자에게 설정을 요청해주세요.)")
       );
       return;
     }
     setNewName("");
     setNewSpec("");
+    setNewColor("");
     setNewFile(null);
+    fetchPhotos();
+  }
+
+  function startEdit(p) {
+    setEditingId(p.id);
+    setEditName(p.item_name || "");
+    setEditSpec(p.spec || "");
+    setEditColor(p.color || "");
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditName("");
+    setEditSpec("");
+    setEditColor("");
+  }
+
+  async function saveEdit(p) {
+    if (!editName.trim()) {
+      alert("품목명을 입력해주세요.");
+      return;
+    }
+    setRenaming(true);
+    const { error } = await supabase
+      .from("item_photos")
+      .update({ item_name: editName.trim(), spec: editSpec.trim() || null, color: editColor.trim() || null })
+      .eq("id", p.id);
+    setRenaming(false);
+    if (error) {
+      alert("수정에 실패했어요: " + error.message);
+      return;
+    }
+    setEditingId(null);
     fetchPhotos();
   }
 
@@ -5439,7 +5522,7 @@ function PhotoLibraryTab() {
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>제품사진 라이브러리</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         사무집기 사진을 품목명과 함께 등록해두면, 견적서 업로드 화면의 "사진 출력물 보기"에서 품목명이 비슷한 사진을 자동으로
-        찾아 붙여줘요. 규격까지 적어두면 더 정확하게 매칭돼요(선택 입력).
+        찾아 붙여줘요. 규격까지 적어두면 더 정확하게 매칭돼요(선택 입력). 색상은 우선 기록만 해두는 칸이에요(선택 입력).
       </div>
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginBottom: 20, display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
@@ -5452,8 +5535,12 @@ function PhotoLibraryTab() {
           <input style={{ ...smallInputStyle, width: 160 }} value={newSpec} onChange={(e) => setNewSpec(e.target.value)} placeholder="예: 1400×700" />
         </div>
         <div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>색상 (선택)</div>
+          <input style={{ ...smallInputStyle, width: 120 }} value={newColor} onChange={(e) => setNewColor(e.target.value)} placeholder="예: 메이플" />
+        </div>
+        <div>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>사진 파일 *</div>
-          <PhotoDropZone onFile={setNewFile} fileName={newFile?.name} />
+          <PhotoDropZone onFile={setNewFile} fileName={newFile?.name} onClear={() => setNewFile(null)} />
         </div>
         <button type="button" onClick={handleAdd} disabled={saving} style={primaryBtnStyle2}>
           {saving ? "등록 중…" : "+ 등록"}
@@ -5477,16 +5564,66 @@ function PhotoLibraryTab() {
                   <span style={{ fontSize: 11, color: C.muted }}>불러오는 중…</span>
                 )}
               </div>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{p.item_name}</div>
-              {p.spec && <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 8 }}>{p.spec}</div>}
-              <button
-                type="button"
-                onClick={() => handleDelete(p)}
-                disabled={deletingId === p.id}
-                style={{ ...ghostBtnStyle, width: "100%", fontSize: 12 }}
-              >
-                {deletingId === p.id ? "삭제 중…" : "삭제"}
-              </button>
+              {editingId === p.id ? (
+                <div style={{ marginBottom: 8 }}>
+                  <input
+                    style={{ ...smallInputStyle, width: "100%", marginBottom: 6, boxSizing: "border-box" }}
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder="품목명"
+                  />
+                  <input
+                    style={{ ...smallInputStyle, width: "100%", marginBottom: 6, boxSizing: "border-box" }}
+                    value={editSpec}
+                    onChange={(e) => setEditSpec(e.target.value)}
+                    placeholder="규격 (선택)"
+                  />
+                  <input
+                    style={{ ...smallInputStyle, width: "100%", boxSizing: "border-box" }}
+                    value={editColor}
+                    onChange={(e) => setEditColor(e.target.value)}
+                    placeholder="색상 (선택)"
+                  />
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{p.item_name}</div>
+                  {(p.spec || p.color) && (
+                    <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 8 }}>
+                      {[p.spec, p.color].filter(Boolean).join(" · ")}
+                    </div>
+                  )}
+                </>
+              )}
+              {editingId === p.id ? (
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => saveEdit(p)}
+                    disabled={renaming}
+                    style={{ ...primaryBtnStyle2, flex: 1, fontSize: 12, padding: "6px 0" }}
+                  >
+                    {renaming ? "저장 중…" : "저장"}
+                  </button>
+                  <button type="button" onClick={cancelEdit} disabled={renaming} style={{ ...ghostBtnStyle, flex: 1, fontSize: 12 }}>
+                    취소
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button type="button" onClick={() => startEdit(p)} style={{ ...ghostBtnStyle, flex: 1, fontSize: 12 }}>
+                    수정
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(p)}
+                    disabled={deletingId === p.id}
+                    style={{ ...ghostBtnStyle, flex: 1, fontSize: 12 }}
+                  >
+                    {deletingId === p.id ? "삭제 중…" : "삭제"}
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>
