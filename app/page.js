@@ -33,10 +33,10 @@ const C = {
   purple: "#5B4FE5",
   purpleDark: "#4638C2",
   purpleBg: "#EEECFF",
-  // 사이드바·모바일 메뉴 서랍의 배경. 예전 C.ink(남색)를 그대로 재사용했더니 "남색" 느낌이 강했는데,
-  // 이제 채도를 낮춘 거의 검정에 가까운 그래파이트 톤으로 바꿔서 포인트 컬러(purple)가 더 또렷하게 도드라진다.
-  surfaceDark: "#14151C",
-  surfaceDarkSoft: "#1E1F29",
+  // 사이드바·모바일 메뉴 서랍의 배경. 처음엔 차가운 검정 계열로 바꿨었는데 "검정 배경 별로다, 고급지게
+  // 브라운 톤으로" 피드백(2026-09-30 3차 수정)으로, 채도를 낮춘 고급스러운 에스프레소 브라운으로 다시 바꿨다.
+  surfaceDark: "#2B2019",
+  surfaceDarkSoft: "#3B2C22",
   mutedBg: "#EEEEEC",
   muted: "#6B7280",
 };
@@ -2110,7 +2110,12 @@ function Dashboard({ profile, onLogout }) {
           한눈에 각인되도록 했다(예전엔 옅은 회색 줄 하나뿐이었다). (2026-09-30 재수정) 톤을 더 또렷한
           인디고 바이올렛으로 바꾸고, 바 아래에 은은한 포인트 컬러 그림자를 살짝 깔아서 입체감을 더했다. */}
       <div style={{ borderBottom: `3px solid ${C.purple}`, background: C.panel, boxShadow: "0 1px 0 rgba(28,43,58,0.06), 0 10px 24px -16px rgba(91,79,229,0.45)" }}>
-        <div style={{ maxWidth: 1600, margin: "0 auto", padding: isMobile ? "12px 14px" : "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+        {/* (2026-09-30 미세조정) "왼쪽으로 공간이 더 있으니 왼쪽으로 이동시켜달라"는 요청으로, 가운데
+            정렬(margin: 0 auto)을 없애고 왼쪽에 바짝 붙였다. maxWidth도 1600→1900으로 넓혀서 오른쪽
+            본문 영역(화면 폭이 넓은 표 등)이 더 시원하게 쓸 수 있게 했다. 아래 본문 줄(사이드바+본문)도
+            이 줄과 정확히 같은 maxWidth·정렬·좌우 패딩(24px)을 쓰기 때문에, 이 제목 글씨의 시작점과
+            사이드바 메뉴판의 왼쪽 끝이 항상 같은 x좌표에서 시작한다. */}
+        <div style={{ maxWidth: 1900, margin: 0, padding: isMobile ? "12px 14px" : "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
             {isMobile && (
               <button
@@ -2121,7 +2126,23 @@ function Dashboard({ profile, onLogout }) {
                 ☰
               </button>
             )}
-            <div style={{ fontFamily: serif, fontSize: isMobile ? 17.5 : 21.5, fontWeight: 800, letterSpacing: "-0.02em", color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {/* "제목 글씨를 약간만 더 섹시하게" 요청으로, 단색 대신 잉크색→포인트 컬러로 은은하게
+                번지는 그러데이션 글자색을 줬다(과하지 않게 살짝만). */}
+            <div
+              style={{
+                fontFamily: serif,
+                fontSize: isMobile ? 17.5 : 22,
+                fontWeight: 800,
+                letterSpacing: "-0.02em",
+                background: `linear-gradient(115deg, ${C.ink} 35%, ${C.purple} 115%)`,
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+                backgroundClip: "text",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
               리마켓 영업관리 시스템
             </div>
           </div>
@@ -2148,13 +2169,19 @@ function Dashboard({ profile, onLogout }) {
         </div>
       </div>
 
-      <div style={{ maxWidth: 1600, margin: "0 auto", padding: isMobile ? "14px 12px 50px" : "28px 24px 60px", display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 10 : 24, alignItems: "flex-start" }}>
+      {/* (2026-09-30 미세조정) 위 헤더 줄과 똑같이 maxWidth 1900 + margin 0(왼쪽 고정)으로 맞췄다.
+          예전엔 둘 다 "margin: 0 auto"로 가운데 정렬돼 있었는데, 그러면 화면 세로 스크롤바가 생겼다
+          없어졌다 할 때마다(탭을 옮겨다닐 때 본문 높이가 바뀌면서) 가운데 정렬 기준점 자체가 미세하게
+          움직여서 사이드바 전체가 옆으로 몇 픽셀씩 "덜컹"거리며 흔들려 보이는 원인이 됐다("메뉴판이 버튼
+          누를 때마다 약간씩 이동한다"는 신고). 왼쪽에 고정하면 스크롤바 유무와 무관하게 이 블록의 왼쪽
+          끝은 항상 같은 자리라 더 이상 흔들리지 않는다. */}
+      <div style={{ maxWidth: 1900, margin: 0, padding: isMobile ? "14px 12px 50px" : "28px 24px 60px", display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 10 : 24, alignItems: "flex-start" }}>
         {!isMobile && (
           // "과감하게 리디자인" 요청(2026-09-30)으로 왼쪽 메뉴를 어두운 사이드바로 바꿨다(예전엔
           // 본문과 똑같은 흰 배경이라 경계가 흐릿했는데, 이제 한눈에 "탐색 영역"으로 구분된다). 실제
-          // 화면 내용(본문 카드들)은 손대지 않고 그대로다. (2026-09-30 재수정) "남색/보라색이 별로다"
-          // 피드백으로, 배경을 남색(C.ink) 대신 채도를 낮춘 거의 검정에 가까운 그래파이트(surfaceDark)로
-          // 바꿔서 더 고급스럽게, 그리고 선택된 메뉴의 인디고 바이올렛 그라데이션이 더 또렷하게 보이도록 했다.
+          // 화면 내용(본문 카드들)은 손대지 않고 그대로다. (2026-09-30 재수정) 배경을 브랜드 브라운
+          // 톤(surfaceDark)으로 바꿔서 고급스럽게, 그리고 선택된 메뉴의 인디고 바이올렛 그라데이션이
+          // 더 또렷하게 보이도록 했다.
           <aside
             style={{
               width: 232,
@@ -14439,10 +14466,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           filter: drop-shadow(0 0 4px rgba(91, 79, 229, 0.6)) drop-shadow(0 3px 6px rgba(28, 43, 58, 0.3)) !important;
         }
       `}</style>
+      {/* (2026-09-30 미세조정) "글씨도 많고 디자인이 중구난방"이라는 피드백으로, 안내문구를 화면에
+          항상 길게 펼쳐두는 대신 한 줄로 줄이고, 자세한 설명은 옆 ⓘ 아이콘에 마우스를 올리면(title)
+          그대로 볼 수 있게 옮겼다 — 정보는 그대로 남기되 화면이 덜 복잡해 보이게 했다. */}
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>가구배치(시뮬레이션)</div>
-      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
-        현장 공간 크기를 입력하고, 왼쪽 모형 목록에서 원하는 걸 끌어다 놓아보세요. 처음 쓰는 모형은 가로·세로 크기(cm)를
-        한 번 등록해두면 다음부터 목록에 계속 남아있어요. 배치가 마음에 들면 이름을 붙여 저장해두고 나중에 다시 불러올 수 있어요.
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16, display: "flex", alignItems: "center", gap: 5 }}>
+        <span>공간 크기를 입력하고 왼쪽 모형 목록에서 끌어다 놓아보세요.</span>
+        <span
+          title="처음 쓰는 모형은 가로·세로 크기(cm)를 한 번 등록해두면 다음부터 목록에 계속 남아있어요. 배치가 마음에 들면 이름을 붙여 저장해두고 나중에 다시 불러올 수 있어요."
+          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", border: `1px solid ${C.line}`, color: C.muted, fontSize: 10, cursor: "help", flexShrink: 0 }}
+        >
+          ⓘ
+        </span>
       </div>
 
       <div className="layoutsim-no-print" style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 14, flexWrap: "wrap" }}>
@@ -14466,7 +14501,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
             onChange={(e) => setDepthInput(e.target.value)}
           />
         </Field>
-        <button onClick={handleCreateSpace} style={primaryBtnStyle2}>배치판 만들기</button>
+        {/* (2026-09-30 미세조정) "공간가로·공간세로 바로 옆에 같은 높이로 배치판 만들기가 있어야 한다"는
+            요청 — 이 줄은 Field(라벨+입력창, 아래쪽에 marginBottom:16 여백 포함)와 버튼들을 alignItems:
+            "flex-end"로 나란히 맞추고 있는데, 버튼은 그 16px 여백이 없다 보니 Field보다 16px 아래로
+            처져 보였다(정렬 기준이 "바깥 테두리"라, Field 쪽만 여백만큼 더 내려가 있던 것). 버튼들을
+            Field와 똑같은 marginBottom:16짜리 div로 한 번 감싸서, 실제 버튼과 입력창의 아랫변이 정확히
+            같은 줄에 맞도록 했다(버튼 자체 크기·기능은 그대로). */}
+        <div style={{ marginBottom: 16 }}>
+          <button onClick={handleCreateSpace} style={primaryBtnStyle2}>배치판 만들기</button>
+        </div>
         <div style={{ flex: 1, minWidth: 8 }} />
         <Field label="배치 이름">
           <input
@@ -14476,13 +14519,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
             placeholder="예: 쌍령공원 2단지"
           />
         </Field>
-        <button onClick={handleSaveBoard} disabled={savingBoard} style={miniBtnStylePrimary}>
-          {savingBoard ? "저장 중…" : currentBoardId ? "배치 저장(덮어쓰기)" : "배치 저장"}
-        </button>
-        <button onClick={handleClearBoard} style={ghostBtnStyle}>새로 만들기</button>
-        <button onClick={() => window.print()} style={ghostBtnStyle} title="배치판만 인쇄하거나 PDF로 저장해요(인쇄 대화상자에서 '대상'을 PDF로 저장으로 바꾸면 됩니다)">
-          PDF로 출력
-        </button>
+        <div style={{ marginBottom: 16, display: "flex", gap: 8 }}>
+          <button onClick={handleSaveBoard} disabled={savingBoard} style={miniBtnStylePrimary}>
+            {savingBoard ? "저장 중…" : currentBoardId ? "배치 저장(덮어쓰기)" : "배치 저장"}
+          </button>
+          <button onClick={handleClearBoard} style={ghostBtnStyle}>새로 만들기</button>
+          <button onClick={() => window.print()} style={ghostBtnStyle} title="배치판만 인쇄하거나 PDF로 저장해요(인쇄 대화상자에서 '대상'을 PDF로 저장으로 바꾸면 됩니다)">
+            PDF로 출력
+          </button>
+        </div>
       </div>
 
       {boards.length > 0 && (
@@ -14782,8 +14827,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               (필요하면 문구 자체가 내부에서 줄바꿈) 흡수하게 하고, 버튼 칸은 flexShrink:0으로 항상 제 크기를
               유지하게 해서 이 줄 자체가 두 줄로 접히는 일이 없도록 한다. */}
           <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
-            <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0 }}>
-              공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요(Ctrl+끌면 기존 선택에 더하기). 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게, Ctrl+방향키는 0.1cm 단위로 아주 정밀하게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요. 마우스 휠로 확대·축소할 수 있고, Shift를 누른 채 끌면 화면을 자유롭게 이동할 수 있어요.
+            {/* (2026-09-30 미세조정) "글씨도 많고 중구난방" 피드백으로, 조작법 전체를 항상 펼쳐두는 대신
+                한 줄(공간 크기)만 보여주고 자세한 조작법은 옆 ⓘ에 마우스를 올리면 그대로 볼 수 있게
+                옮겼다. 바깥 div의 flex:"1 1 auto"+minWidth:0은 위 주석의 이유(줄자 버튼 글자가 길어져도
+                이 줄이 두 줄로 안 접히게 하는 것) 그대로 유지한다. */}
+            <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 5 }}>
+              <span>공간 {spaceWidthM}m × {spaceDepthM}m</span>
+              <span
+                title="모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요(Ctrl+끌면 기존 선택에 더하기). 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게, Ctrl+방향키는 0.1cm 단위로 아주 정밀하게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요. 마우스 휠로 확대·축소할 수 있고, Shift를 누른 채 끌면 화면을 자유롭게 이동할 수 있어요."
+                style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", border: `1px solid ${C.lineSoft}`, color: C.muted, fontSize: 10, cursor: "help", flexShrink: 0 }}
+              >
+                ⓘ
+              </span>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
               <button
