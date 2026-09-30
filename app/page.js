@@ -39,9 +39,15 @@ const C = {
   // 그래서 별도 색을 만들지 않고 본문과 완전히 같은 C.bg를 그대로 쓰고, 테두리(C.line, 카드 등 앱 전체가
   // 쓰는 바로 그 테두리색)로만 구분한다 — 이러면 사이드바가 "다른 색 블록"이 아니라 같은 배경 위에 테두리로
   // 살짝 구획된 영역으로 자연스럽게 녹아든다. hover는 포인트 컬러의 아주 옅은 배경(C.purpleBg)을 재사용해서
-  // 새 색을 추가하지 않았다. (2026-09-30 7차 수정) "테두리만 고급지게 브라운으로" 요청으로, 이 테두리색만
-  // 딱 하나 따뜻한 브라운(sidebarBorder)으로 골라 넣었다 — 배경은 계속 본문과 같은 C.bg 그대로다.
-  sidebarBorder: "#8C6A42",
+  // 새 색을 추가하지 않았다. (2026-09-30 7차 수정) "테두리만 고급지게 브라운으로" 요청으로, 이 테두리색을
+  // 딱 하나 따뜻한 브라운(brownAccent)으로 골라 넣었다 — 배경은 계속 본문과 같은 C.bg 그대로다. 이후
+  // (2026-09-30 8차 수정) "가구배치 화면의 가구 테두리도 세련된 브라운으로" 요청으로, 사이드바 전용이던
+  // 이 브라운을 이름을 더 일반적으로 바꿔(sidebarBorder → brownAccent) 가구 모형의 테두리·채우기에도
+  // 그대로 재사용한다 — 같은 브라운 한 톤이 앱 여러 군데(사이드바 테두리, 가구 테두리)에 통일되게 쓰인다.
+  brownAccent: "#8C6A42",
+  // 가구 모형 안쪽 채우기 색. 예전엔 옅은 라벤더(purpleBg)였는데, 브라운 테두리와 어울리게 나무 느낌이
+  // 나는 따뜻한 크림 톤으로 바꿨다.
+  furnitureBg: "#F3EAD9",
   mutedBg: "#EEEEEC",
   muted: "#6B7280",
 };
@@ -2193,7 +2199,7 @@ function Dashboard({ profile, onLogout }) {
             style={{
               width: 232,
               flexShrink: 0,
-              border: `1.5px solid ${C.sidebarBorder}`,
+              border: `1.5px solid ${C.brownAccent}`,
               borderRadius: 10,
               background: C.bg,
               padding: 6,
@@ -2224,7 +2230,7 @@ function Dashboard({ profile, onLogout }) {
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              style={{ width: "80vw", maxWidth: 300, height: "100%", background: C.bg, borderRight: `1.5px solid ${C.sidebarBorder}`, padding: 6, overflowY: "auto", boxShadow: "2px 0 14px rgba(28,43,58,0.18)" }}
+              style={{ width: "80vw", maxWidth: 300, height: "100%", background: C.bg, borderRight: `1.5px solid ${C.brownAccent}`, padding: 6, overflowY: "auto", boxShadow: "2px 0 14px rgba(28,43,58,0.18)" }}
             >
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 8px 8px 12px" }}>
                 <div style={{ fontSize: 10.5, color: C.muted, letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
@@ -12700,39 +12706,39 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       >
         {isPoly ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
-            <polygon points={previewPoints} fill={C.purpleBg} stroke={C.purple} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
+            <polygon points={previewPoints} fill={C.furnitureBg} stroke={C.brownAccent} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
           </svg>
         ) : isCircle ? (
           <svg width={14} height={14} style={{ flexShrink: 0 }}>
-            <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={C.purpleBg} stroke={C.purple} strokeWidth={1} />
+            <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={C.furnitureBg} stroke={C.brownAccent} strokeWidth={1} />
           </svg>
         ) : isRoundEnd ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
-            <path d={roundEndTablePathD(s.width_cm, s.depth_cm)} fill={C.purpleBg} stroke={C.purple} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
+            <path d={roundEndTablePathD(s.width_cm, s.depth_cm)} fill={C.furnitureBg} stroke={C.brownAccent} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
           </svg>
         ) : isCurvedL ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
             <path
               d={curvedLDeskPathD(s.width_cm, s.depth_cm, s.notch_width_cm, s.notch_depth_cm)}
-              fill={C.purpleBg}
-              stroke={C.purple}
+              fill={C.furnitureBg}
+              stroke={C.brownAccent}
               strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12}
             />
           </svg>
         ) : isChair ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
-            <ChairTopIcon w={s.width_cm} d={s.depth_cm} fill={C.purpleBg} stroke={C.purple} />
+            <ChairTopIcon w={s.width_cm} d={s.depth_cm} fill={C.furnitureBg} stroke={C.brownAccent} />
           </svg>
         ) : isMeetingChair ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
-            <MeetingChairTopIcon w={s.width_cm} d={s.depth_cm} fill={C.purpleBg} stroke={C.purple} />
+            <MeetingChairTopIcon w={s.width_cm} d={s.depth_cm} fill={C.furnitureBg} stroke={C.brownAccent} />
           </svg>
         ) : isSofa ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
-            <SofaTopIcon w={s.width_cm} d={s.depth_cm} fill={C.purpleBg} stroke={C.purple} />
+            <SofaTopIcon w={s.width_cm} d={s.depth_cm} fill={C.furnitureBg} stroke={C.brownAccent} />
           </svg>
         ) : (
-          <div style={{ width: 14, height: 14, background: C.purpleBg, border: `1px solid ${C.purple}`, borderRadius: 2, flexShrink: 0 }} />
+          <div style={{ width: 14, height: 14, background: C.furnitureBg, border: `1px solid ${C.brownAccent}`, borderRadius: 2, flexShrink: 0 }} />
         )}
         {isEditingName ? (
           <input
@@ -15378,8 +15384,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
                         <polygon
                           points={polyPoints}
-                          fill={C.purpleBg}
-                          stroke={C.purple}
+                          fill={C.furnitureBg}
+                          stroke={C.brownAccent}
                           strokeWidth={shapeStrokeWidth}
                           strokeDasharray={shapeStrokeDasharray}
                           strokeLinejoin={shapeStrokeJoin}
@@ -15393,8 +15399,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                           cy="50%"
                           rx="50%"
                           ry="50%"
-                          fill={C.purpleBg}
-                          stroke={C.purple}
+                          fill={C.furnitureBg}
+                          stroke={C.brownAccent}
                           strokeWidth={shapeStrokeWidth}
                           strokeDasharray={shapeStrokeDasharray}
                           strokeLinejoin={shapeStrokeJoin}
@@ -15404,8 +15410,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
                         <path
                           d={roundEndTablePathD(it.widthCm, it.depthCm)}
-                          fill={C.purpleBg}
-                          stroke={C.purple}
+                          fill={C.furnitureBg}
+                          stroke={C.brownAccent}
                           strokeWidth={shapeStrokeWidth}
                           strokeDasharray={shapeStrokeDasharray}
                           strokeLinejoin={shapeStrokeJoin}
@@ -15416,8 +15422,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
                         <path
                           d={curvedLDeskPathD(it.widthCm, it.depthCm, it.notchWidthCm, it.notchDepthCm)}
-                          fill={C.purpleBg}
-                          stroke={C.purple}
+                          fill={C.furnitureBg}
+                          stroke={C.brownAccent}
                           strokeWidth={shapeStrokeWidth}
                           strokeDasharray={shapeStrokeDasharray}
                           strokeLinejoin={shapeStrokeJoin}
@@ -15426,22 +15432,22 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       </svg>
                     ) : isChair ? (
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
-                        <ChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
+                        <ChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.furnitureBg} stroke={C.brownAccent} />
                       </svg>
                     ) : isMeetingChair ? (
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
-                        <MeetingChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
+                        <MeetingChairTopIcon w={it.widthCm} d={it.depthCm} fill={C.furnitureBg} stroke={C.brownAccent} />
                       </svg>
                     ) : isSofa ? (
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
-                        <SofaTopIcon w={it.widthCm} d={it.depthCm} fill={C.purpleBg} stroke={C.purple} />
+                        <SofaTopIcon w={it.widthCm} d={it.depthCm} fill={C.furnitureBg} stroke={C.brownAccent} />
                       </svg>
                     ) : (
                       // (위 요청 계속) 사각형은 선택 강조를 이 안쪽 테두리가 아니라 바깥 wrapper의
                       // outline·그림자가 이미 맡고 있어서(위쪽 style의 outline/boxShadow 참고), 여기
                       // 안쪽 테두리는 selection 여부와 무관하게 다른 모양들의 "평소" 굵기(1.4px)에
                       // 맞춰 통일감만 준다 — 선택했을 때 outline과 겹쳐 두꺼워 보이는 일이 없도록.
-                      <div style={{ width: "100%", height: "100%", background: C.purpleBg, border: `1.4px solid ${C.purple}`, borderRadius: 3, boxSizing: "border-box" }} />
+                      <div style={{ width: "100%", height: "100%", background: C.furnitureBg, border: `1.4px solid ${C.brownAccent}`, borderRadius: 3, boxSizing: "border-box" }} />
                     )}
                   </div>
                   {/* "가구 이름이 지저분하게 나오니까 깔끔하게" 요청 — 이름 대신 규격(가로×세로)만
