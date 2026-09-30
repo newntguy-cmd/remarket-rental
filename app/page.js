@@ -5526,13 +5526,30 @@ function PhotoLibraryTab() {
       return;
     }
     setRenaming(true);
-    const { error } = await supabase
+    // (버그 수정) "수정 후 저장을 해도 반영이 안되네" 신고 — Supabase에 item_photos "수정(update)" 권한
+    // 규칙이 빠져있으면, 오류 없이 조용히 그냥 반영만 안 되는 경우가 있다(등록·삭제와 달리 이 문제는
+    // 화면에 아무 표시가 안 나서 알아채기 어려웠다). .select()를 붙여 실제로 몇 건이 바뀌었는지
+    // 확인해서, 0건이면 권한 규칙 문제라는 걸 명확히 알려준다.
+    const { data, error } = await supabase
       .from("item_photos")
       .update({ item_name: editName.trim(), spec: editSpec.trim() || null, color: editColor.trim() || null })
-      .eq("id", p.id);
+      .eq("id", p.id)
+      .select();
     setRenaming(false);
     if (error) {
-      alert("수정에 실패했어요: " + error.message);
+      alert(
+        "수정에 실패했어요: " +
+          error.message +
+          (error.message.includes("color")
+            ? " (Supabase의 item_photos 테이블에 color 컬럼이 아직 없을 수 있어요. item_photos_setup.sql을 다시 실행해주세요.)"
+            : "")
+      );
+      return;
+    }
+    if (!data || data.length === 0) {
+      alert(
+        "수정 내용이 저장되지 않았어요. Supabase에 item_photos \"수정(update)\" 권한 규칙이 아직 없을 수 있어요. item_photos_setup.sql을 Supabase SQL Editor에서 다시 실행해주세요."
+      );
       return;
     }
     setEditingId(null);
