@@ -33,14 +33,15 @@ const C = {
   purple: "#5B4FE5",
   purpleDark: "#4638C2",
   purpleBg: "#EEECFF",
-  // 사이드바·모바일 메뉴 서랍의 배경. 검정 → 에스프레소 브라운 → 밝은 브라운까지 계속 "구리다"는
-  // 피드백이 이어져서(2026-09-30 5차 수정), 어두운 배경 자체를 그만두고 "아이보리로 깔끔하게" 요청대로
-  // 본문과 같은 밝은 톤으로 바꿨다. 배경이 흰 본문과 비슷한 밝기라 안 섞이도록, 테두리(sidebarBorder)로만
-  // 영역을 구분한다(무거운 그림자 대신 무난하게). 글자색도 밝은 배경에 맞게 C.inkSoft/C.muted 등 앱
-  // 전체에서 이미 쓰는 어두운 잉크 계열을 그대로 재사용한다(별도 밝은 글자색 토큰은 더 이상 필요 없음).
-  sidebarBg: "#F7F2E6",
-  sidebarBgHover: "#EEE3CC",
-  sidebarBorder: "#E6DCC3",
+  // 사이드바·모바일 메뉴 서랍의 배경. 검정 → 브라운 → 독자적인 아이보리까지 계속 "구리다"는 피드백이
+  // 이어졌는데(2026-09-30 6차 수정), "옆(본문 배경)이랑 색을 맞춰라"는 지적을 듣고 보니 원인은 사이드바만
+  // 따로 정한 색(#F7F2E6)이 바로 옆 본문 배경(C.bg)과 미묘하게 달라서 서로 안 어울려 보였던 것이었다.
+  // 그래서 별도 색을 만들지 않고 본문과 완전히 같은 C.bg를 그대로 쓰고, 테두리(C.line, 카드 등 앱 전체가
+  // 쓰는 바로 그 테두리색)로만 구분한다 — 이러면 사이드바가 "다른 색 블록"이 아니라 같은 배경 위에 테두리로
+  // 살짝 구획된 영역으로 자연스럽게 녹아든다. hover는 포인트 컬러의 아주 옅은 배경(C.purpleBg)을 재사용해서
+  // 새 색을 추가하지 않았다. (2026-09-30 7차 수정) "테두리만 고급지게 브라운으로" 요청으로, 이 테두리색만
+  // 딱 하나 따뜻한 브라운(sidebarBorder)으로 골라 넣었다 — 배경은 계속 본문과 같은 C.bg 그대로다.
+  sidebarBorder: "#8C6A42",
   mutedBg: "#EEEEEC",
   muted: "#6B7280",
 };
@@ -2073,7 +2074,7 @@ function Dashboard({ profile, onLogout }) {
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: sans, color: C.ink }}>
       <style>{`
         .rm-menu-btn { transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease; }
-        .rm-menu-btn.is-inactive:hover { background: ${C.sidebarBgHover} !important; color: ${C.ink} !important; }
+        .rm-menu-btn.is-inactive:hover { background: ${C.purpleBg} !important; color: ${C.ink} !important; }
         .rm-logout-btn:hover { background: ${C.bg}; border-color: ${C.ink}; color: ${C.ink}; }
         .col-resize-bar { background: #C7CDD6; transition: background 0.12s ease, width 0.12s ease; }
         .col-resize-handle:hover .col-resize-bar { background: ${C.ink}; width: 4px; }
@@ -2183,17 +2184,18 @@ function Dashboard({ profile, onLogout }) {
           끝은 항상 같은 자리라 더 이상 흔들리지 않는다. */}
       <div style={{ maxWidth: 1900, margin: 0, padding: isMobile ? "14px 12px 50px" : "28px 24px 60px", display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 10 : 24, alignItems: "flex-start" }}>
         {!isMobile && (
-          // 왼쪽 메뉴를 본문과 구분되는 별도 "탐색 영역"으로 보이게 한다. 검정→브라운 계열을 여러 차례
-          // 시도했지만 계속 "구리다"는 반응이라(2026-09-30 5차 수정) "아이보리로 깔끔하게" 요청대로
-          // 어두운 배경을 그만두고, 본문과 같은 밝은 톤 + 테두리(sidebarBorder)로만 무난하게 구분한다.
-          // 무거운 그림자 대신 아주 옅은 그림자만 살짝 남겨 붕 뜨지 않고 자연스럽게 붙어 보이게 했다.
+          // 왼쪽 메뉴를 본문과 구분되는 별도 "탐색 영역"으로 보이게 한다. 검정→브라운→독자 아이보리까지
+          // 계속 "구리다"는 반응이었는데(2026-09-30 6~7차 수정) "옆 본문 배경이랑 색을 맞춰라" +
+          // "테두리만 고급지게 브라운으로" 요청대로, 배경은 본문과 완전히 같은 C.bg를 쓰고 테두리 한
+          // 줄만 고급스러운 브라운(sidebarBorder)으로 골라 넣었다. 무거운 그림자 대신 아주 옅은 그림자만
+          // 살짝 남겨 붕 뜨지 않고 자연스럽게 붙어 보이게 했다.
           <aside
             style={{
               width: 232,
               flexShrink: 0,
-              border: `1px solid ${C.sidebarBorder}`,
+              border: `1.5px solid ${C.sidebarBorder}`,
               borderRadius: 10,
-              background: C.sidebarBg,
+              background: C.bg,
               padding: 6,
               position: "sticky",
               top: 20,
@@ -2222,7 +2224,7 @@ function Dashboard({ profile, onLogout }) {
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              style={{ width: "80vw", maxWidth: 300, height: "100%", background: C.sidebarBg, padding: 6, overflowY: "auto", boxShadow: "2px 0 14px rgba(28,43,58,0.18)" }}
+              style={{ width: "80vw", maxWidth: 300, height: "100%", background: C.bg, borderRight: `1.5px solid ${C.sidebarBorder}`, padding: 6, overflowY: "auto", boxShadow: "2px 0 14px rgba(28,43,58,0.18)" }}
             >
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 8px 8px 12px" }}>
                 <div style={{ fontSize: 10.5, color: C.muted, letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
