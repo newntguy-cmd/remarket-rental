@@ -10484,6 +10484,43 @@ function fmtAsDate(v) {
   return (v || "").slice(0, 10);
 }
 
+// A/S관리대장·렌탈회수관리에서 쓰는 상태별 필터 버튼줄("전체/접수/재방문/…" 조절바).
+// (2026-09-30) "오른쪽(최근에 추가된) 조절바가 구리고 통일성 없다"는 피드백으로, 버튼 하나하나가
+// 따로 테두리를 가진 모양 대신 연한 회색 트랙 하나 안에 선택된 항목만 흰 배경+그림자로 떠 보이게
+// 바꿨다(세그먼트 컨트롤 느낌). 두 화면(A/S관리대장·렌탈회수관리)이 똑같은 컴포넌트를 같이 쓰도록
+// 해서 앞으로도 두 화면이 서로 어긋나지 않고 계속 통일되게 했다.
+function StatusFilterTabs({ tabs, activeKey, counts, onChange }) {
+  return (
+    <div style={{ display: "inline-flex", flexWrap: "wrap", gap: 2, padding: 3, background: C.mutedBg, borderRadius: 10 }}>
+      {tabs.map((t) => {
+        const isActive = activeKey === t.key;
+        return (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => onChange(t.key)}
+            style={{
+              padding: "6px 13px",
+              background: isActive ? C.panel : "transparent",
+              color: isActive ? C.ink : C.inkSoft,
+              border: "none",
+              borderRadius: 8,
+              fontSize: 12.5,
+              fontWeight: isActive ? 700 : 500,
+              fontFamily: sans,
+              cursor: "pointer",
+              boxShadow: isActive ? "0 1px 3px rgba(28,43,58,0.16)" : "none",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {t.label} <span style={{ opacity: 0.6 }}>({counts[t.key] ?? 0})</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function AsBoardTab({ isAdmin, managerName }) {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -10748,20 +10785,7 @@ function AsBoardTab({ isAdmin, managerName }) {
       )}
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setStatusFilter(t.key)}
-            style={{
-              ...miniBtnStyle,
-              background: statusFilter === t.key ? C.ink : "transparent",
-              color: statusFilter === t.key ? "#fff" : C.inkSoft,
-              borderColor: statusFilter === t.key ? C.ink : C.line,
-            }}
-          >
-            {t.label} ({counts[t.key] ?? 0})
-          </button>
-        ))}
+        <StatusFilterTabs tabs={tabs} activeKey={statusFilter} counts={counts} onChange={setStatusFilter} />
         <div style={{ flex: 1 }} />
         <input
           placeholder="관리번호, 고객명, 주소, A/S내용, 작성자 검색"
@@ -11368,20 +11392,7 @@ function CollectionBoardTab({ isAdmin, managerName }) {
       )}
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setStatusFilter(t.key)}
-            style={{
-              ...miniBtnStyle,
-              background: statusFilter === t.key ? C.ink : "transparent",
-              color: statusFilter === t.key ? "#fff" : C.inkSoft,
-              borderColor: statusFilter === t.key ? C.ink : C.line,
-            }}
-          >
-            {t.label} ({counts[t.key] ?? 0})
-          </button>
-        ))}
+        <StatusFilterTabs tabs={tabs} activeKey={statusFilter} counts={counts} onChange={setStatusFilter} />
         <div style={{ flex: 1 }} />
         <input
           placeholder="관리번호, 전표번호, 고객명, 주소, 회수품목 검색"
