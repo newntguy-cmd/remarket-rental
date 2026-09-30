@@ -1987,8 +1987,8 @@ function Dashboard({ profile, onLogout }) {
   const menuItems = [
     ...(isStaff ? [{ key: "quickcalc", label: "품목별데이터/톤수/배송비" }] : []),
     ...(isStaff ? [{ key: "layoutSim", label: "가구배치(시뮬레이션)" }] : []),
-    ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
     ...(isStaff ? [{ key: "photoLibrary", label: "제품사진 라이브러리" }] : []),
+    ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
     ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
     ...(isStaff ? [{ key: "purchases", label: "구매내역" }] : []),
     ...(isStaff ? [{ key: "shares", label: "지분관리" }] : []),
