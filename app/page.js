@@ -137,27 +137,32 @@ const STATUS_META = {
   purchase: { label: "구매완료", fg: C.purple, bg: C.purpleBg },
 };
 
+// "좀 더 프로페셔널하고 전문적인 모던 SaaS 느낌으로" 요청(2026-09-30)에 따라 버튼·입력창의 기본
+// 값(둥근 정도·그림자·입력창 배경)을 전체적으로 다듬었다. 화면 레이아웃 자체는 그대로 두고, 이
+// 값들을 쓰는 모든 화면(견적서 업로드·렌탈내역·가구배치 등)에 자동으로 함께 반영되도록 공용
+// 상수만 손봤다. 호버·포커스 때 반응하는 부분(버튼 눌림 효과, 입력창 포커스 링)은 아래 전역
+// <style> 블록에서 한 곳에 모아 처리한다(개별 화면 코드는 손대지 않아도 전체에 적용됨).
 const inputStyle = {
   width: "100%",
   boxSizing: "border-box",
   padding: "10px 12px",
   fontSize: 14.5,
   border: `1px solid ${C.line}`,
-  borderRadius: 6,
-  background: C.bg,
+  borderRadius: 8,
+  background: C.panel, // 예전엔 페이지 배경(C.bg)과 같은 색이라 입력창이 밋밋하게 묻혀 보였는데, 흰색으로 또렷하게 구분되게 했다.
   color: C.ink,
   outline: "none",
   fontFamily: sans,
   transition: "border-color 0.15s ease, box-shadow 0.15s ease",
 };
-const smallInputStyle = { ...inputStyle, padding: "6px 8px", fontSize: 13, borderRadius: 5 };
+const smallInputStyle = { ...inputStyle, padding: "6px 8px", fontSize: 13, borderRadius: 7 };
 const primaryBtnStyle = {
   width: "100%",
   padding: "11px 0",
   background: C.ink,
   color: "#fff",
   border: "none",
-  borderRadius: 7,
+  borderRadius: 9,
   fontSize: 14.5,
   fontWeight: 600,
   letterSpacing: 0.1,
@@ -171,14 +176,14 @@ const ghostBtnStyle = {
   padding: "8px 14px",
   background: "transparent",
   border: `1px solid ${C.line}`,
-  borderRadius: 7,
+  borderRadius: 9,
   color: C.inkSoft,
   fontSize: 13,
   cursor: "pointer",
   fontFamily: sans,
   transition: "background 0.15s ease, border-color 0.15s ease, color 0.15s ease",
 };
-const miniBtnStyle = { ...ghostBtnStyle, padding: "5px 10px", fontSize: 12, borderRadius: 6 };
+const miniBtnStyle = { ...ghostBtnStyle, padding: "5px 10px", fontSize: 12, borderRadius: 7 };
 // 품목 표(RentalDetailPanel)의 행별 "+ / ↑ / ↓" 버튼처럼 아주 작은 아이콘 버튼용.
 const rowActionBtnStyle = {
   width: 20,
@@ -192,7 +197,7 @@ const rowActionBtnStyle = {
   color: C.inkSoft,
   fontSize: 12,
   lineHeight: 1,
-  borderRadius: 4,
+  borderRadius: 5,
   cursor: "pointer",
 };
 const miniBtnStylePrimary = {
@@ -2027,9 +2032,12 @@ function Dashboard({ profile, onLogout }) {
           textAlign: "left",
           padding: "13px 12px",
           marginBottom: 2,
-          borderRadius: 5,
+          borderRadius: 7,
           background: active ? C.ink : "transparent",
           border: "none",
+          // 활성 메뉴에 보라색 포인트 바를 왼쪽에 살짝 넣어서, 이 색이 화면 곳곳(입력창 포커스·체크박스 등)의
+          // 포인트 컬러와 같은 계열이라는 걸 자연스럽게 느끼게 했다(전체적인 색상 통일감 개선).
+          boxShadow: active ? `inset 3px 0 0 ${C.purple}` : "none",
           color: active ? "#fff" : C.inkSoft,
           fontSize: 14,
           fontWeight: active ? 600 : 500,
@@ -2050,11 +2058,36 @@ function Dashboard({ profile, onLogout }) {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: sans, color: C.ink }}>
       <style>{`
-        .rm-menu-btn { transition: background 0.14s ease, color 0.14s ease; }
+        .rm-menu-btn { transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease; }
         .rm-menu-btn.is-inactive:hover { background: ${C.bg} !important; color: ${C.ink} !important; }
         .rm-logout-btn:hover { background: ${C.bg}; border-color: ${C.ink}; color: ${C.ink}; }
         .col-resize-bar { background: #C7CDD6; transition: background 0.12s ease, width 0.12s ease; }
         .col-resize-handle:hover .col-resize-bar { background: ${C.ink}; width: 4px; }
+        /* "좀 더 프로페셔널하고 전문적인 모던 SaaS 느낌으로" 요청(2026-09-30)에 맞춰, 버튼을 누를 수
+           있다는 반응과 입력창에 지금 포커스가 가 있다는 표시를 화면 전체에 한 번에 통일해서 넣었다.
+           개별 버튼·입력창 하나하나를 고친 게 아니라 여기 전역 규칙 하나로 모든 화면에 똑같이 적용되게
+           했고, 이미 자기만의 hover 효과가 따로 정의된 버튼(로그아웃·왼쪽 메뉴 등)은 그쪽이 우선 적용돼
+           그대로 유지된다. */
+        button:not(.rm-menu-btn):not(:disabled) {
+          transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease, filter 0.12s ease;
+        }
+        button:not(.rm-menu-btn):not(:disabled):hover {
+          transform: translateY(-1px);
+          filter: brightness(1.05);
+          box-shadow: 0 4px 10px rgba(28,43,58,0.14);
+          border-color: ${C.purple}; /* border가 none인 버튼(진한 남색 버튼 등)은 안 보이는 값이라 영향 없음 */
+        }
+        button:not(.rm-menu-btn):not(:disabled):active {
+          transform: translateY(0);
+          filter: brightness(0.97);
+        }
+        input:not([type="checkbox"]):not([type="radio"]):focus,
+        select:focus,
+        textarea:focus {
+          border-color: ${C.purple} !important;
+          box-shadow: 0 0 0 3px ${C.purpleBg} !important;
+        }
+        input[type="checkbox"], input[type="radio"] { accent-color: ${C.purple}; }
         /* 핸드폰(768px 이하)에서 입력칸 글씨가 16px보다 작으면 아이폰 사파리가 탭할 때마다 화면을
            자동으로 확대해버려서 계속 다시 축소해야 하는 게 제일 불편했던 부분이라, 여기서만 강제로 16px로 키운다.
            나머지 화면은 원래 디자인 그대로 유지된다. */
