@@ -2841,10 +2841,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           filter: drop-shadow(0 0 4px rgba(91, 79, 229, 0.6)) drop-shadow(0 3px 6px rgba(28, 43, 58, 0.3)) !important;
         }
       `}</style>
+      {/* (2026-09-30 미세조정) "글씨도 많고 디자인이 중구난방"이라는 피드백으로, 안내문구를 화면에
+          항상 길게 펼쳐두는 대신 한 줄로 줄이고, 자세한 설명은 옆 ⓘ 아이콘에 마우스를 올리면(title)
+          그대로 볼 수 있게 옮겼다 — 정보는 그대로 남기되 화면이 덜 복잡해 보이게 했다. */}
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>가구배치(시뮬레이션)</div>
-      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
-        현장 공간 크기를 입력하고, 왼쪽 모형 목록에서 원하는 걸 끌어다 놓아보세요. 처음 쓰는 모형은 가로·세로 크기(cm)를
-        한 번 등록해두면 다음부터 목록에 계속 남아있어요. 배치가 마음에 들면 이름을 붙여 저장해두고 나중에 다시 불러올 수 있어요.
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16, display: "flex", alignItems: "center", gap: 5 }}>
+        <span>공간 크기를 입력하고 왼쪽 모형 목록에서 끌어다 놓아보세요.</span>
+        <span
+          title="처음 쓰는 모형은 가로·세로 크기(cm)를 한 번 등록해두면 다음부터 목록에 계속 남아있어요. 배치가 마음에 들면 이름을 붙여 저장해두고 나중에 다시 불러올 수 있어요."
+          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", border: `1px solid ${C.line}`, color: C.muted, fontSize: 10, cursor: "help", flexShrink: 0 }}
+        >
+          ⓘ
+        </span>
       </div>
 
       <div className="layoutsim-no-print" style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 14, flexWrap: "wrap" }}>
@@ -2868,7 +2876,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
             onChange={(e) => setDepthInput(e.target.value)}
           />
         </Field>
-        <button onClick={handleCreateSpace} style={primaryBtnStyle2}>배치판 만들기</button>
+        {/* (2026-09-30 미세조정) "공간가로·공간세로 바로 옆에 같은 높이로 배치판 만들기가 있어야 한다"는
+            요청 — 이 줄은 Field(라벨+입력창, 아래쪽에 marginBottom:16 여백 포함)와 버튼들을 alignItems:
+            "flex-end"로 나란히 맞추고 있는데, 버튼은 그 16px 여백이 없다 보니 Field보다 16px 아래로
+            처져 보였다(정렬 기준이 "바깥 테두리"라, Field 쪽만 여백만큼 더 내려가 있던 것). 버튼들을
+            Field와 똑같은 marginBottom:16짜리 div로 한 번 감싸서, 실제 버튼과 입력창의 아랫변이 정확히
+            같은 줄에 맞도록 했다(버튼 자체 크기·기능은 그대로). */}
+        <div style={{ marginBottom: 16 }}>
+          <button onClick={handleCreateSpace} style={primaryBtnStyle2}>배치판 만들기</button>
+        </div>
         <div style={{ flex: 1, minWidth: 8 }} />
         <Field label="배치 이름">
           <input
@@ -2878,13 +2894,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
             placeholder="예: 쌍령공원 2단지"
           />
         </Field>
-        <button onClick={handleSaveBoard} disabled={savingBoard} style={miniBtnStylePrimary}>
-          {savingBoard ? "저장 중…" : currentBoardId ? "배치 저장(덮어쓰기)" : "배치 저장"}
-        </button>
-        <button onClick={handleClearBoard} style={ghostBtnStyle}>새로 만들기</button>
-        <button onClick={() => window.print()} style={ghostBtnStyle} title="배치판만 인쇄하거나 PDF로 저장해요(인쇄 대화상자에서 '대상'을 PDF로 저장으로 바꾸면 됩니다)">
-          PDF로 출력
-        </button>
+        <div style={{ marginBottom: 16, display: "flex", gap: 8 }}>
+          <button onClick={handleSaveBoard} disabled={savingBoard} style={miniBtnStylePrimary}>
+            {savingBoard ? "저장 중…" : currentBoardId ? "배치 저장(덮어쓰기)" : "배치 저장"}
+          </button>
+          <button onClick={handleClearBoard} style={ghostBtnStyle}>새로 만들기</button>
+          <button onClick={() => window.print()} style={ghostBtnStyle} title="배치판만 인쇄하거나 PDF로 저장해요(인쇄 대화상자에서 '대상'을 PDF로 저장으로 바꾸면 됩니다)">
+            PDF로 출력
+          </button>
+        </div>
       </div>
 
       {boards.length > 0 && (
@@ -3184,8 +3202,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               (필요하면 문구 자체가 내부에서 줄바꿈) 흡수하게 하고, 버튼 칸은 flexShrink:0으로 항상 제 크기를
               유지하게 해서 이 줄 자체가 두 줄로 접히는 일이 없도록 한다. */}
           <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
-            <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0 }}>
-              공간 {spaceWidthM}m × {spaceDepthM}m — 모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요(Ctrl+끌면 기존 선택에 더하기). 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게, Ctrl+방향키는 0.1cm 단위로 아주 정밀하게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요. 마우스 휠로 확대·축소할 수 있고, Shift를 누른 채 끌면 화면을 자유롭게 이동할 수 있어요.
+            {/* (2026-09-30 미세조정) "글씨도 많고 중구난방" 피드백으로, 조작법 전체를 항상 펼쳐두는 대신
+                한 줄(공간 크기)만 보여주고 자세한 조작법은 옆 ⓘ에 마우스를 올리면 그대로 볼 수 있게
+                옮겼다. 바깥 div의 flex:"1 1 auto"+minWidth:0은 위 주석의 이유(줄자 버튼 글자가 길어져도
+                이 줄이 두 줄로 안 접히게 하는 것) 그대로 유지한다. */}
+            <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 5 }}>
+              <span>공간 {spaceWidthM}m × {spaceDepthM}m</span>
+              <span
+                title="모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요(Ctrl+끌면 기존 선택에 더하기). 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게, Ctrl+방향키는 0.1cm 단위로 아주 정밀하게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요. 마우스 휠로 확대·축소할 수 있고, Shift를 누른 채 끌면 화면을 자유롭게 이동할 수 있어요."
+                style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", border: `1px solid ${C.lineSoft}`, color: C.muted, fontSize: 10, cursor: "help", flexShrink: 0 }}
+              >
+                ⓘ
+              </span>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
               <button
