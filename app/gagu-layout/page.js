@@ -42,27 +42,30 @@ const sans = "'Pretendard','Apple SD Gothic Neo','Malgun Gothic',system-ui,sans-
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
+// "좀 더 프로페셔널하고 전문적인 모던 SaaS 느낌으로" 요청(2026-09-30)에 맞춰 메인 시스템(app/page.js)과
+// 똑같이 버튼·입력창 기본값을 다듬었다(둥근 정도·입력창 배경·호버 반응). 메인 시스템과 똑같은 공용
+// 값을 쓰는 파일이라 여기도 같이 맞춰야 두 화면이 계속 같은 느낌을 유지한다.
 const inputStyle = {
   width: "100%",
   boxSizing: "border-box",
   padding: "10px 12px",
   fontSize: 14.5,
   border: `1px solid ${C.line}`,
-  borderRadius: 6,
-  background: C.bg,
+  borderRadius: 8,
+  background: C.panel, // 예전엔 페이지 배경(C.bg)과 같은 색이라 입력창이 밋밋하게 묻혀 보였는데, 흰색으로 또렷하게 구분되게 했다.
   color: C.ink,
   outline: "none",
   fontFamily: sans,
   transition: "border-color 0.15s ease, box-shadow 0.15s ease",
 };
-const smallInputStyle = { ...inputStyle, padding: "6px 8px", fontSize: 13, borderRadius: 5 };
+const smallInputStyle = { ...inputStyle, padding: "6px 8px", fontSize: 13, borderRadius: 7 };
 const primaryBtnStyle = {
   width: "100%",
   padding: "11px 0",
   background: C.ink,
   color: "#fff",
   border: "none",
-  borderRadius: 7,
+  borderRadius: 9,
   fontSize: 14.5,
   fontWeight: 600,
   letterSpacing: 0.1,
@@ -76,14 +79,14 @@ const ghostBtnStyle = {
   padding: "8px 14px",
   background: "transparent",
   border: `1px solid ${C.line}`,
-  borderRadius: 7,
+  borderRadius: 9,
   color: C.inkSoft,
   fontSize: 13,
   cursor: "pointer",
   fontFamily: sans,
   transition: "background 0.15s ease, border-color 0.15s ease, color 0.15s ease",
 };
-const miniBtnStyle = { ...ghostBtnStyle, padding: "5px 10px", fontSize: 12, borderRadius: 6 };
+const miniBtnStyle = { ...ghostBtnStyle, padding: "5px 10px", fontSize: 12, borderRadius: 7 };
 const miniBtnStylePrimary = {
   ...miniBtnStyle,
   background: C.green,
@@ -4254,6 +4257,29 @@ export default function Page() {
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: sans }}>
+      <style>{`
+        /* 메인 시스템(app/page.js)과 똑같은 버튼 눌림 반응·입력창 포커스 링을 여기도 그대로 넣었다. */
+        button:not(:disabled) {
+          transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease, filter 0.12s ease;
+        }
+        button:not(:disabled):hover {
+          transform: translateY(-1px);
+          filter: brightness(1.05);
+          box-shadow: 0 4px 10px rgba(28,43,58,0.14);
+          border-color: ${C.purple};
+        }
+        button:not(:disabled):active {
+          transform: translateY(0);
+          filter: brightness(0.97);
+        }
+        input:not([type="checkbox"]):not([type="radio"]):focus,
+        select:focus,
+        textarea:focus {
+          border-color: ${C.purple} !important;
+          box-shadow: 0 0 0 3px ${C.purpleBg} !important;
+        }
+        input[type="checkbox"], input[type="radio"] { accent-color: ${C.purple}; }
+      `}</style>
       <div
         style={{
           borderBottom: `1px solid ${C.line}`,
