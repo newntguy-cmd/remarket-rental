@@ -33,16 +33,14 @@ const C = {
   purple: "#5B4FE5",
   purpleDark: "#4638C2",
   purpleBg: "#EEECFF",
-  // 사이드바·모바일 메뉴 서랍의 배경. 처음엔 차가운 검정 계열 → 에스프레소 브라운으로 바꿨는데 "브라운이
-  // 좀 둔탁하다, 조금 더 세련되고 밝게" 피드백(2026-09-30 4차 수정)으로, 톤을 한 단계 밝고 따뜻한
-  // 월넛(호두나무) 브라운으로 다시 조정했다. 글자색(아래 surfaceInk*)도 예전 남색 사이드바 시절에 쓰던
-  // 차가운 청회색 그대로 남아있었던 게 브라운과 안 어울려 둔해 보이던 원인 중 하나라, 브라운 톤과
-  // 어울리는 따뜻한 베이지 계열로 같이 바꿨다.
-  surfaceDark: "#4A3826",
-  surfaceDarkSoft: "#5C4630",
-  // 사이드바 안 글자색(비활성 메뉴 글자, MENU 라벨 등)을 브라운 배경에 어울리는 따뜻한 베이지 톤으로 통일.
-  surfaceInkSoft: "#D8C4AE",
-  surfaceInkFaint: "rgba(230,210,190,0.55)",
+  // 사이드바·모바일 메뉴 서랍의 배경. 검정 → 에스프레소 브라운 → 밝은 브라운까지 계속 "구리다"는
+  // 피드백이 이어져서(2026-09-30 5차 수정), 어두운 배경 자체를 그만두고 "아이보리로 깔끔하게" 요청대로
+  // 본문과 같은 밝은 톤으로 바꿨다. 배경이 흰 본문과 비슷한 밝기라 안 섞이도록, 테두리(sidebarBorder)로만
+  // 영역을 구분한다(무거운 그림자 대신 무난하게). 글자색도 밝은 배경에 맞게 C.inkSoft/C.muted 등 앱
+  // 전체에서 이미 쓰는 어두운 잉크 계열을 그대로 재사용한다(별도 밝은 글자색 토큰은 더 이상 필요 없음).
+  sidebarBg: "#F7F2E6",
+  sidebarBgHover: "#EEE3CC",
+  sidebarBorder: "#E6DCC3",
   mutedBg: "#EEEEEC",
   muted: "#6B7280",
 };
@@ -2049,13 +2047,12 @@ function Dashboard({ profile, onLogout }) {
           marginBottom: 2,
           borderRadius: 8,
           // (2026-09-30 재수정) "메뉴바 남색/보라색이 별로다, 더 섹시하고 세련되게" 피드백으로, 선택된
-          // 메뉴를 밋밋한 단색 대신 그라데이션 + 은은한 글로우로 채워서 입체감을 줬다. 사이드바 배경도
-          // 더 이상 남색이 아니라 채도를 낮춘 거의 검정에 가까운 그래파이트(surfaceDark)라, 포인트 컬러
-          // 그라데이션이 훨씬 또렷하게 도드라진다.
+          // 메뉴를 밋밋한 단색 대신 그라데이션 + 은은한 글로우로 채워서 입체감을 줬다(사이드바가 아이보리
+          // 밝은 톤으로 바뀐 뒤에도 선택된 메뉴는 이 보라색 알약 모양으로 또렷하게 도드라진다).
           background: active ? `linear-gradient(135deg, ${C.purple}, ${C.purpleDark})` : "transparent",
           border: "none",
           boxShadow: active ? "0 4px 16px rgba(91, 79, 229,0.45)" : "none",
-          color: active ? "#fff" : C.surfaceInkSoft,
+          color: active ? "#fff" : C.inkSoft,
           fontSize: 14,
           fontWeight: active ? 600 : 500,
           cursor: "pointer",
@@ -2076,7 +2073,7 @@ function Dashboard({ profile, onLogout }) {
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: sans, color: C.ink }}>
       <style>{`
         .rm-menu-btn { transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease; }
-        .rm-menu-btn.is-inactive:hover { background: ${C.surfaceDarkSoft} !important; color: #fff !important; }
+        .rm-menu-btn.is-inactive:hover { background: ${C.sidebarBgHover} !important; color: ${C.ink} !important; }
         .rm-logout-btn:hover { background: ${C.bg}; border-color: ${C.ink}; color: ${C.ink}; }
         .col-resize-bar { background: #C7CDD6; transition: background 0.12s ease, width 0.12s ease; }
         .col-resize-handle:hover .col-resize-bar { background: ${C.ink}; width: 4px; }
@@ -2186,25 +2183,24 @@ function Dashboard({ profile, onLogout }) {
           끝은 항상 같은 자리라 더 이상 흔들리지 않는다. */}
       <div style={{ maxWidth: 1900, margin: 0, padding: isMobile ? "14px 12px 50px" : "28px 24px 60px", display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 10 : 24, alignItems: "flex-start" }}>
         {!isMobile && (
-          // "과감하게 리디자인" 요청(2026-09-30)으로 왼쪽 메뉴를 어두운 사이드바로 바꿨다(예전엔
-          // 본문과 똑같은 흰 배경이라 경계가 흐릿했는데, 이제 한눈에 "탐색 영역"으로 구분된다). 실제
-          // 화면 내용(본문 카드들)은 손대지 않고 그대로다. (2026-09-30 재수정) 배경을 브랜드 브라운
-          // 톤(surfaceDark)으로 바꿔서 고급스럽게, 그리고 선택된 메뉴의 인디고 바이올렛 그라데이션이
-          // 더 또렷하게 보이도록 했다.
+          // 왼쪽 메뉴를 본문과 구분되는 별도 "탐색 영역"으로 보이게 한다. 검정→브라운 계열을 여러 차례
+          // 시도했지만 계속 "구리다"는 반응이라(2026-09-30 5차 수정) "아이보리로 깔끔하게" 요청대로
+          // 어두운 배경을 그만두고, 본문과 같은 밝은 톤 + 테두리(sidebarBorder)로만 무난하게 구분한다.
+          // 무거운 그림자 대신 아주 옅은 그림자만 살짝 남겨 붕 뜨지 않고 자연스럽게 붙어 보이게 했다.
           <aside
             style={{
               width: 232,
               flexShrink: 0,
-              border: "none",
+              border: `1px solid ${C.sidebarBorder}`,
               borderRadius: 10,
-              background: C.surfaceDark,
+              background: C.sidebarBg,
               padding: 6,
               position: "sticky",
               top: 20,
-              boxShadow: "0 6px 24px rgba(0,0,0,0.35)",
+              boxShadow: "0 2px 10px rgba(28,43,58,0.06)",
             }}
           >
-            <div style={{ padding: "10px 12px 8px", fontSize: 10.5, color: C.surfaceInkFaint, letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
+            <div style={{ padding: "10px 12px 8px", fontSize: 10.5, color: C.muted, letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
             {menuButtonsJsx}
           </aside>
         )}
@@ -2226,14 +2222,14 @@ function Dashboard({ profile, onLogout }) {
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              style={{ width: "80vw", maxWidth: 300, height: "100%", background: C.surfaceDark, padding: 6, overflowY: "auto", boxShadow: "2px 0 14px rgba(0,0,0,0.28)" }}
+              style={{ width: "80vw", maxWidth: 300, height: "100%", background: C.sidebarBg, padding: 6, overflowY: "auto", boxShadow: "2px 0 14px rgba(28,43,58,0.18)" }}
             >
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 8px 8px 12px" }}>
-                <div style={{ fontSize: 10.5, color: C.surfaceInkFaint, letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
+                <div style={{ fontSize: 10.5, color: C.muted, letterSpacing: 1.2, fontWeight: 600 }}>MENU</div>
                 <button
                   onClick={() => setMobileMenuOpen(false)}
                   aria-label="메뉴 닫기"
-                  style={{ border: "none", background: "transparent", fontSize: 22, lineHeight: 1, color: C.surfaceInkSoft, cursor: "pointer", padding: 4 }}
+                  style={{ border: "none", background: "transparent", fontSize: 22, lineHeight: 1, color: C.inkSoft, cursor: "pointer", padding: 4 }}
                 >
                   ×
                 </button>
