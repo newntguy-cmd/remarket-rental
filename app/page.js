@@ -5101,10 +5101,43 @@ function photoMatchDiceCoefficient(a, b) {
   });
   return (2 * common) / (A.size + B.size);
 }
+// "우리는 이렇게 색상을 입력해" — 실제 A/S 문서를 보내주셔서 확인한 표기 방식 두 가지를 그대로
+// 인식해서 뽑아낸다.
+// 1) "접의자(밤색)"처럼 품목명 바로 뒤 괄호 안에 색상이 오는 경우
+// 2) "탑책상, W1400*D800, 연체리 2ea"처럼 콤마로 나열한 마지막 항목이 "색상 수량"으로 오는 경우
+//    (규격 자리는 W1400*D800처럼 숫자·W·D·*가 섞여있어 색상과 구분된다)
+function extractColorFromItemText(text) {
+  if (!text) return null;
+  const s = String(text);
+  // 1) 괄호 패턴 — 맨 뒤 괄호부터 본다. 안쪽이 숫자·규격 기호뿐이면(모델번호 등) 색상이 아니라고 보고 건너뜀.
+  const parenMatches = [...s.matchAll(/\(([^()]+)\)/g)];
+  for (let i = parenMatches.length - 1; i >= 0; i--) {
+    const inner = parenMatches[i][1].trim();
+    if (inner && !/^[\d.\s*x×WDwd]+$/.test(inner)) return inner;
+  }
+  // 2) 콤마로 나열된 마지막 항목 — 끝에 붙은 수량 표시(2ea, 3개 등)를 떼어내고, 남은 게 숫자나 규격
+  //    기호(W/D/*/x) 없이 짧은 낱말이면 색상으로 본다.
+  const parts = s
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length >= 2) {
+    const last = parts[parts.length - 1];
+    const stripped = last.replace(/\d+\s*(ea|EA|Ea|개)\s*$/, "").trim();
+    if (stripped && stripped.length <= 8 && !/[\d*x×]/i.test(stripped) && !/^[WDwd]\d/.test(stripped)) {
+      return stripped;
+    }
+  }
+  return null;
+}
+
 function matchItemPhoto(itemName, spec, photos) {
   const ni = normalizeForPhotoMatch(itemName);
   if (!ni || !photos || photos.length === 0) return null;
   const ns = normalizeForPhotoMatch(spec);
+  // 품목명·규격 어느 쪽에 적혀있든(위 두 표기 방식 다 대응) 색상을 뽑아 매칭 점수에 보탠다 —
+  // 색상 정보가 없거나 사진에 색상이 등록 안 돼있어도 기존 이름·규격 매칭은 그대로 동작한다.
+  const nColor = normalizeForPhotoMatch(extractColorFromItemText(itemName) || extractColorFromItemText(spec));
   let best = null;
   let bestScore = 0;
   for (const p of photos) {
@@ -5124,6 +5157,11 @@ function matchItemPhoto(itemName, spec, photos) {
     if (ns && ps) {
       if (ps === ns) score += 0.15;
       else if (ps.includes(ns) || ns.includes(ps)) score += 0.07;
+    }
+    const pColor = normalizeForPhotoMatch(p.color);
+    if (nColor && pColor) {
+      if (pColor === nColor) score += 0.2;
+      else if (pColor.includes(nColor) || nColor.includes(pColor)) score += 0.1;
     }
     if (score > bestScore) {
       bestScore = score;
@@ -5522,7 +5560,8 @@ function PhotoLibraryTab() {
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>제품사진 라이브러리</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         사무집기 사진을 품목명과 함께 등록해두면, 견적서 업로드 화면의 "사진 출력물 보기"에서 품목명이 비슷한 사진을 자동으로
-        찾아 붙여줘요. 규격까지 적어두면 더 정확하게 매칭돼요(선택 입력). 색상은 우선 기록만 해두는 칸이에요(선택 입력).
+        찾아 붙여줘요. 규격·색상까지 적어두면 더 정확하게 매칭돼요(둘 다 선택 입력) — 품목명 뒤 괄호 안 색상("접의자(밤색)")이나
+        콤마로 나열한 마지막 색상("탑책상, W1400*D800, 연체리")도 자동으로 읽어서 비교해요.
       </div>
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginBottom: 20, display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
