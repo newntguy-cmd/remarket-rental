@@ -9218,6 +9218,7 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
           handleUnmergeVoucherGroup(selectedMergedGroup.key);
           setSelectedMergedKey(null);
         }}
+        onExcludeIds={handleExcludeRentalIds}
       />
     );
   }
@@ -9337,6 +9338,31 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
       return next;
     });
     setCheckedIds(new Set());
+  }
+
+  // 병합된 전표 상세화면(MergedVoucherDetailPanel) 안에서 "선택 삭제"를 눌렀을 때도 똑같이 숨김
+  // 목록(ledger_auto_hidden_rentals)에 추가하는 방식 — rental_id를 직접 받아 처리한다는 점만 다르다.
+  // true/false를 돌려줘서, 상세화면 쪽에서 성공했을 때만 체크박스 선택을 풀 수 있게 한다.
+  async function handleExcludeRentalIds(ids) {
+    if (!ids || ids.length === 0) return false;
+    if (
+      !confirm(
+        `선택한 품목 ${ids.length}건을 이 목록에서 제외할까요?\n렌탈내역 원본 데이터는 지워지지 않고 그대로 남아있고, 이 화면에서만 안 보이게 됩니다.`
+      )
+    )
+      return false;
+    const rows = ids.map((id) => ({ rental_id: id }));
+    const { error } = await supabase.from("ledger_auto_hidden_rentals").upsert(rows, { onConflict: "rental_id" });
+    if (error) {
+      alert("처리 중 오류가 발생했어요: " + error.message);
+      return false;
+    }
+    setHiddenIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      return next;
+    });
+    return true;
   }
 
   async function handleRestoreHidden(id) {
@@ -9625,7 +9651,7 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
 // RentalDetailPanel은 전표 "하나"를 전제로 직접 수정·삭제까지 하는 무거운 편집 화면이라, 여러 전표를
 // 합쳐 보여주는 이 화면에 그대로 끼워 쓰지 않고 따로 만들었다 — 렌탈내역 원본은 전혀 건드리지 않고,
 // 품목을 "어떤 이름으로 묶어 보여줄지"만 ledger_auto_item_merges에 따로 기록하는 보기 전용 화면이다.
-function MergedVoucherDetailPanel({ mergedGroup, onClose, onUnmerge }) {
+function MergedVoucherDetailPanel({ mergedGroup, onClose, onUnmerge, onExcludeIds }) {
   const { key: groupKey, repVoucherNo, memberVoucherNos, head, rows } = mergedGroup;
   const [itemMergeMap, setItemMergeMap] = useState(() => new Map()); // rental_id -> {display_item, display_spec}
 
@@ -9658,18 +9684,6 @@ function MergedVoucherDetailPanel({ mergedGroup, onClose, onUnmerge }) {
     [rows, itemMergeMap]
   );
 
-  const summaryRows = useMemo(() => {
-    const map = new Map();
-    for (const r of effectiveRows) {
-      const k = `${r._dispItem}|${r._dispSpec}`;
-      if (!map.has(k)) map.set(k, { item: r._dispItem, spec: r._dispSpec, qty: 0, amount: 0 });
-      const s = map.get(k);
-      s.qty += Number(r.qty) || 0;
-      s.amount += Number(r.amount) || 0;
-    }
-    return Array.from(map.values()).sort((a, b) => (a.item || "").localeCompare(b.item || "", "ko"));
-  }, [effectiveRows]);
-
   const [checkedRawIds, setCheckedRawIds] = useState(() => new Set());
   const toggleRaw = (id) =>
     setCheckedRawIds((prev) => {
@@ -9682,6 +9696,42 @@ function MergedVoucherDetailPanel({ mergedGroup, onClose, onUnmerge }) {
   const [rawMergeKeepId, setRawMergeKeepId] = useState(null);
   const [savingRawMerge, setSavingRawMerge] = useState(false);
   const [unmergingRawId, setUnmergingRawId] = useState(null);
+  const [excludingRaw, setExcludingRaw] = useState(false);
+
+  // 다른 목록 화면들(렌탈내역/구매내역/자동등록 등)과 똑같이 열 너비는 드래그로, 정렬은 열 제목을
+  // 눌러서 하는 방식을 그대로 가져왔다 — "간격조절·소팅은 기본중의 기본" 요청.
+  const [colWidths, startResize] = useResizableColumns([100, 220, 160, 70, 110, 170]);
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc");
+  const sortAccessors = {
+    전표번호: (r) => r.voucher_no || "",
+    품목: (r) => r._dispItem || "",
+    규격: (r) => r._dispSpec || "",
+    수량: (r) => Number(r.qty) || 0,
+    금액: (r) => Number(r.amount) || 0,
+    비고: (r) => r.note || "",
+  };
+  const handleSortClick = (label) => {
+    if (!sortAccessors[label]) return;
+    if (sortKey === label) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(label);
+      setSortDir("asc");
+    }
+  };
+  const sortedRows = useMemo(() => {
+    if (!sortKey || !sortAccessors[sortKey]) return effectiveRows;
+    const acc = sortAccessors[sortKey];
+    const list = [...effectiveRows];
+    list.sort((a, b) => {
+      const va = acc(a);
+      const vb = acc(b);
+      const cmp = typeof va === "number" || typeof vb === "number" ? (Number(va) || 0) - (Number(vb) || 0) : String(va).localeCompare(String(vb), "ko");
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveRows, sortKey, sortDir]);
 
   // "같은 품목일 수 있잖아 그것도 체크해서 병합" 요청의 실제 구현. 라디오로 고른 행의 지금 표시 이름을
   // 그대로 "정답"으로 삼아, 나머지 체크한 행들이 그 이름으로 보이게(ledger_auto_item_merges에) 기록한다.
@@ -9722,9 +9772,38 @@ function MergedVoucherDetailPanel({ mergedGroup, onClose, onUnmerge }) {
     fetchItemMerges();
   }
 
-  const totalQty = summaryRows.reduce((s, r) => s + r.qty, 0);
-  const totalAmount = summaryRows.reduce((s, r) => s + r.amount, 0);
-  const detailGrid = "28px 100px 1fr 140px 90px 110px 160px 90px";
+  // "체크박스 선택삭제는 기본중의 기본" 요청 — 여기서도 렌탈내역 원본은 지우지 않고, 자동등록 목록의
+  // "선택 제외"와 똑같이 숨김 목록(ledger_auto_hidden_rentals)에 추가하는 방식을 그대로 쓴다(부모의
+  // onExcludeIds를 그대로 호출). 숨기고 나면 이 화면도 부모 목록에서 다시 계산돼 바로 반영된다.
+  async function handleExcludeChecked() {
+    const ids = Array.from(checkedRawIds);
+    if (ids.length === 0 || !onExcludeIds) return;
+    setExcludingRaw(true);
+    const ok = await onExcludeIds(ids);
+    setExcludingRaw(false);
+    if (ok) setCheckedRawIds(new Set());
+  }
+
+  const visibleIds = sortedRows.map((r) => r.id);
+  const allChecked = visibleIds.length > 0 && visibleIds.every((id) => checkedRawIds.has(id));
+  const someChecked = visibleIds.some((id) => checkedRawIds.has(id));
+  const selectAllRef = useRef(null);
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someChecked && !allChecked;
+  }, [someChecked, allChecked]);
+  const toggleCheckedAll = () => {
+    setCheckedRawIds((prev) => {
+      const next = new Set(prev);
+      if (allChecked) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+
+  const totalQty = effectiveRows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  const totalAmount = effectiveRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const gridTemplate = "28px " + colWidths.map((w) => `${w}px`).join(" ") + " 90px";
+  const sortableLabels = ["전표번호", "품목", "규격", "수량", "금액", "비고"];
 
   return (
     <div>
@@ -9739,52 +9818,33 @@ function MergedVoucherDetailPanel({ mergedGroup, onClose, onUnmerge }) {
         렌탈전표 원본은 전혀 바뀌지 않아요 — 이 화면에서 "같은 품목으로 묶어 보여주기"만 기록돼요.
       </div>
 
-      <div style={{ marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+        <div style={{ fontSize: 12.5, color: C.inkSoft }}>
+          원본 품목 {effectiveRows.length}건 · 수량 합계 {totalQty.toLocaleString("ko-KR")}개 · 금액 합계 {fmtWon(totalAmount)}
+        </div>
         <button onClick={onUnmerge} style={{ ...ghostBtnStyle, borderColor: C.brick, color: C.brick }}>전표 병합 풀기</button>
       </div>
 
-      <div style={{ fontFamily: serif, fontSize: 14, marginBottom: 8 }}>품목별 합계</div>
-      <div style={{ border: `1px solid ${C.line}`, background: C.panel, marginBottom: 24 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 100px 130px", gap: 8, padding: "8px 12px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}` }}>
-          <div>품목</div>
-          <div>규격</div>
-          <div>수량</div>
-          <div>금액</div>
-        </div>
-        {summaryRows.map((r, i) => (
-          <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 160px 100px 130px", gap: 8, padding: "8px 12px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}` }}>
-            <div>{r.item}</div>
-            <div>{r.spec || "-"}</div>
-            <div>{r.qty.toLocaleString("ko-KR")}</div>
-            <div>{fmtWon(r.amount)}</div>
-          </div>
-        ))}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 100px 130px", gap: 8, padding: "8px 12px", fontSize: 13, fontWeight: 600 }}>
-          <div>합계</div>
-          <div />
-          <div>{totalQty.toLocaleString("ko-KR")}</div>
-          <div>{fmtWon(totalAmount)}</div>
-        </div>
-      </div>
-
-      <div style={{ fontFamily: serif, fontSize: 14, marginBottom: 8 }}>
-        원본 품목 내역 — 이름이 달라도 같은 품목이면 체크해서 병합할 수 있어요
-      </div>
       {checkedRawIds.size > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 12.5, color: C.inkSoft }}>{checkedRawIds.size}개 선택됨</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: C.amberBg, fontSize: 12.5 }}>
+            <div>{checkedRawIds.size}건 선택됨</div>
             {checkedRawIds.size >= 2 && (
               <button
                 onClick={() => {
                   setRawMergeKeepId(Array.from(checkedRawIds)[0]);
                   setMergingRaw(true);
                 }}
-                style={{ ...ghostBtnStyle, padding: "5px 10px", fontSize: 12.5 }}
+                style={miniBtnStyle}
               >
                 선택 항목 병합
               </button>
             )}
+            <button onClick={handleExcludeChecked} disabled={excludingRaw} style={{ ...miniBtnStyle, borderColor: C.brick, color: C.brick }}>
+              {excludingRaw ? "제외 처리 중…" : "선택 삭제"}
+            </button>
+            <button onClick={() => { setCheckedRawIds(new Set()); setMergingRaw(false); }} style={miniBtnStyle}>선택 해제</button>
+            <div style={{ fontSize: 11.5, color: C.muted }}>"선택 삭제"는 이 화면에서만 안 보이게 돼요 — 렌탈내역 원본은 지워지지 않아요</div>
           </div>
           {mergingRaw && (
             <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, background: C.mutedBg, display: "flex", flexDirection: "column", gap: 6, maxWidth: 480 }}>
@@ -9823,30 +9883,53 @@ function MergedVoucherDetailPanel({ mergedGroup, onClose, onUnmerge }) {
         </div>
       )}
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
-        <div style={{ display: "grid", gridTemplateColumns: detailGrid, gap: 8, padding: "8px 12px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 900 }}>
-          <div />
-          <div>전표번호</div>
-          <div>품목(표시명)</div>
-          <div>규격</div>
-          <div>수량</div>
-          <div>금액</div>
-          <div>원래 이름</div>
-          <div />
+        <div style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 10, padding: "10px 14px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 980, alignItems: "center" }}>
+          <div>
+            <input ref={selectAllRef} type="checkbox" checked={allChecked} onChange={toggleCheckedAll} />
+          </div>
+          {sortableLabels.map((label, i) => (
+            <div key={label} style={{ position: "relative" }}>
+              <button
+                onClick={() => handleSortClick(label)}
+                title="눌러서 정렬"
+                style={{
+                  all: "unset",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 2,
+                  fontSize: 11.5,
+                  color: sortKey === label ? C.ink : C.muted,
+                  fontWeight: sortKey === label ? 700 : 400,
+                }}
+              >
+                {label}
+                <span style={{ fontSize: 9, opacity: sortKey === label ? 1 : 0.35 }}>{sortKey === label ? (sortDir === "asc" ? "▲" : "▼") : "▲"}</span>
+              </button>
+              <ColResizeHandle onMouseDown={startResize(i)} />
+            </div>
+          ))}
+          <div>관리</div>
         </div>
-        {effectiveRows.map((r) => (
+        {sortedRows.map((r) => (
           <div
             key={r.id}
-            style={{ display: "grid", gridTemplateColumns: detailGrid, gap: 8, padding: "8px 12px", fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center", minWidth: 900 }}
+            style={{ display: "grid", gridTemplateColumns: gridTemplate, gap: 10, padding: "10px 14px", fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center", minWidth: 980 }}
           >
             <div>
               <input type="checkbox" checked={checkedRawIds.has(r.id)} onChange={() => toggleRaw(r.id)} />
             </div>
-            <div style={{ color: C.inkSoft }}>{r.voucher_no}</div>
-            <div>{r._dispItem}</div>
-            <div>{r._dispSpec || "-"}</div>
+            <div style={{ color: C.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.voucher_no || ""}>{r.voucher_no || "-"}</div>
+            <div
+              style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              title={r._merged ? `${r._dispItem} (원래 이름: ${r.item}${r.spec ? " · " + r.spec : ""})` : r._dispItem}
+            >
+              {r._dispItem}
+            </div>
+            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r._dispSpec || ""}>{r._dispSpec || "-"}</div>
             <div>{(Number(r.qty) || 0).toLocaleString("ko-KR")}</div>
             <div>{fmtWon(r.amount)}</div>
-            <div style={{ fontSize: 11, color: C.muted }}>{r._merged ? `${r.item}${r.spec ? ` · ${r.spec}` : ""}` : "-"}</div>
+            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.inkSoft }} title={r.note || ""}>{r.note || "-"}</div>
             <div>
               {r._merged && (
                 <button
