@@ -2116,10 +2116,14 @@ function Dashboard({ profile, onLogout }) {
           input, select, textarea { font-size: 16px !important; }
         }
       `}</style>
-      {/* "과감하게" 요청으로 제목 아래 보라색 브랜드 바를 넣어서, 어느 화면을 열어도 "리마켓" 제품임이
+      {/* "과감하게" 요청으로 제목 아래 브랜드 바를 넣어서, 어느 화면을 열어도 "리마켓" 제품임이
           한눈에 각인되도록 했다(예전엔 옅은 회색 줄 하나뿐이었다). (2026-09-30 재수정) 톤을 더 또렷한
-          인디고 바이올렛으로 바꾸고, 바 아래에 은은한 포인트 컬러 그림자를 살짝 깔아서 입체감을 더했다. */}
-      <div style={{ borderBottom: `3px solid ${C.purple}`, background: C.panel, boxShadow: "0 1px 0 rgba(28,43,58,0.06), 0 10px 24px -16px rgba(91,79,229,0.45)" }}>
+          인디고 바이올렛으로 바꾸고, 바 아래에 은은한 포인트 컬러 그림자를 살짝 깔아서 입체감을 더했다.
+          (2026-10-01 재수정) "보라색 줄을 섹시한 브라운으로" 요청에 따라, 이 머리글 밑줄을 비롯해 아래
+          카드들 위쪽에 깔린 같은 보라색 포인트 줄(3px 굵기 accent bar)을 전부 brownAccent로 바꿨다 —
+          버튼 hover·입력창 focus처럼 "지금 반응 중"임을 알려주는 보라색은 그대로 남겨, 평소에 늘 보이는
+          장식용 줄만 브라운으로 통일했다. */}
+      <div style={{ borderBottom: `3px solid ${C.brownAccent}`, background: C.panel, boxShadow: "0 1px 0 rgba(28,43,58,0.06), 0 10px 24px -16px rgba(140,106,66,0.35)" }}>
         {/* (2026-09-30 미세조정) "왼쪽으로 공간이 더 있으니 왼쪽으로 이동시켜달라"는 요청으로, 가운데
             정렬(margin: 0 auto)을 없애고 왼쪽에 바짝 붙였다. maxWidth도 1600→1900으로 넓혀서 오른쪽
             본문 영역(화면 폭이 넓은 표 등)이 더 시원하게 쓸 수 있게 했다. 아래 본문 줄(사이드바+본문)도
@@ -2406,7 +2410,7 @@ function QuoteDropZone({ onFile, hasData }) {
         flex: "1 1 320px",
         minWidth: 260,
         border: `1px solid ${dragOver ? C.purple : C.line}`,
-        borderTop: `3px solid ${C.purple}`,
+        borderTop: `3px solid ${C.brownAccent}`,
         background: C.panel,
         padding: 16,
       }}
@@ -2514,7 +2518,7 @@ function AsUploadDropZone({ onFile, hasData }) {
         flex: "1 1 320px",
         minWidth: 260,
         border: `1px solid ${dragOver ? C.purple : C.line}`,
-        borderTop: `3px solid ${C.purple}`,
+        borderTop: `3px solid ${C.brownAccent}`,
         background: C.panel,
         padding: 16,
       }}
@@ -2622,7 +2626,7 @@ function CollectionUploadDropZone({ onFile, hasData }) {
         flex: "1 1 320px",
         minWidth: 260,
         border: `1px solid ${dragOver ? C.purple : C.line}`,
-        borderTop: `3px solid ${C.purple}`,
+        borderTop: `3px solid ${C.brownAccent}`,
         background: C.panel,
         padding: 16,
       }}
@@ -4622,7 +4626,7 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
           )}
 
           {/* 카드① 품목별 데이터 — 현장에 흩어진 수량을 품목·규격별로 합쳐서 총 개수만 보여준다(요금성 품목은 자동 제외) */}
-          <div style={{ border: `1px solid ${C.line}`, borderTop: `3px solid ${C.purple}`, background: C.panel, padding: 18, marginBottom: 14 }}>
+          <div style={{ border: `1px solid ${C.line}`, borderTop: `3px solid ${C.brownAccent}`, background: C.panel, padding: 18, marginBottom: 14 }}>
             <InputCardHeader
               title="① 품목별 데이터"
               desc="같은 품목·규격끼리 수량을 합쳐서 총 몇 개인지 한눈에 보여줘요 (배송비·설치비 등 요금성 항목은 자동으로 빠져요)"
