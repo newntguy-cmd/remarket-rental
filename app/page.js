@@ -9021,6 +9021,28 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
     fetchHiddenIds();
   }, []);
 
+  // "같은 현장은 잔량 병합할 수 있는 기능" 요청 — 여러 전표(voucher)를 한 줄로 합쳐서 보여주는 기능.
+  // 렌탈내역 원본(rentals)은 전혀 건드리지 않고, "어떤 전표들을 하나로 묶어 보여줄지"만
+  // ledger_auto_voucher_merges에 따로 기록한다(voucher_no → 대표로 삼을 전표의 key). 대표 전표 자신은
+  // 이 표에 없어도(자기 자신을 가리키는 걸로 취급) 되므로, 대표가 아닌 멤버들만 기록해두면 된다.
+  const [voucherMergeMap, setVoucherMergeMap] = useState(() => new Map());
+  const fetchVoucherMerges = () =>
+    supabase
+      .from("ledger_auto_voucher_merges")
+      .select("voucher_no, group_voucher_no")
+      .then(({ data }) => setVoucherMergeMap(new Map((data || []).map((r) => [r.voucher_no, r.group_voucher_no]))));
+  useEffect(() => {
+    fetchVoucherMerges();
+  }, []);
+  const [checkedMergeError, setCheckedMergeError] = useState(null);
+  const [mergingVouchers, setMergingVouchers] = useState(false);
+  const [voucherMergeKeepKey, setVoucherMergeKeepKey] = useState(null);
+  const [savingVoucherMerge, setSavingVoucherMerge] = useState(false);
+  const [unmergingKey, setUnmergingKey] = useState(null);
+  // 병합된 전표를 눌러 들어간 상세화면(아래 selectedKey와 별개 — 병합 안 된 전표는 그대로
+  // RentalDetailPanel을 그대로 쓰고, 병합된 전표만 이 새 상세화면을 쓴다).
+  const [selectedMergedKey, setSelectedMergedKey] = useState(null);
+
   // 렌탈전표만(구매 제외) 모으고, 이 화면에서 "제외" 처리된 건은 뺀다. transaction_type이 비어있는 옛 데이터는 렌탈로 취급한다(다른 화면들과 동일한 규칙).
   const rentalRows = useMemo(
     () => (rentals || []).filter((r) => (r.transaction_type || "rental") !== "purchase" && !hiddenIds.has(r.id)),
@@ -9032,6 +9054,46 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
 
   // 화면에는 전표 단위로 묶어서 한 줄씩만 보여준다(렌탈내역/구매내역과 같은 방식).
   const allGroups = useMemo(() => groupRentalsByVoucher(rentalRows), [rentalRows]);
+
+  // 상태(정상/반납임박/연체/회수완료)는 급한 순서대로 — 병합된 전표는 멤버 중 가장 급한 상태를 대표로
+  // 보여준다(하나라도 연체면 "연체"로 보여야 놓치지 않는다).
+  const STATUS_URGENCY = ["overdue", "soon", "normal", "collected", "purchase"];
+
+  // 위 전표 단위 그룹(allGroups)을 voucherMergeMap에 따라 한 번 더 묶는다. 병합된 적 없는 전표는 그대로
+  // 혼자(멤버 1개)인 자기 자신의 그룹이 된다 — 그래서 "병합"은 기존 화면 동작에 아무 영향을 주지 않고,
+  // 병합을 실제로 걸어둔 전표들에만 적용된다. g.key(voucher_no가 없는 옛 데이터를 위한 합성 키도 포함)를
+  // 기준으로 묶어서, voucher_no가 비어있는 행들이 서로 잘못 뭉치는 일이 없게 한다.
+  const allMergedGroups = useMemo(() => {
+    const byEffectiveKey = new Map();
+    for (const g of allGroups) {
+      const effectiveKey = voucherMergeMap.get(g.key) || g.key;
+      if (!byEffectiveKey.has(effectiveKey)) byEffectiveKey.set(effectiveKey, []);
+      byEffectiveKey.get(effectiveKey).push(g);
+    }
+    return Array.from(byEffectiveKey.entries()).map(([effectiveKey, members]) => {
+      // 대표 전표 자신이 지금은 화면에서 필터링돼 안 보이는 드문 경우를 대비해, members 중 key가
+      // effectiveKey와 같은 걸 대표로 우선 찾고 없으면 그냥 첫 멤버를 대표로 취급한다.
+      const repMember = members.find((m) => m.key === effectiveKey) || members[0];
+      const memberStatuses = members.map((m) =>
+        getStatus({ transaction_type: m.head.transaction_type, collected: m.rows.every((r) => r.collected), due_date: m.head.due_date })
+      );
+      memberStatuses.sort((a, b) => STATUS_URGENCY.indexOf(a) - STATUS_URGENCY.indexOf(b));
+      const isMerged = members.length > 1;
+      return {
+        key: effectiveKey,
+        voucherNo: isMerged ? `${repMember.voucherNo || "(번호없음)"} 외 ${members.length - 1}건` : repMember.voucherNo,
+        repVoucherNo: repMember.voucherNo,
+        memberVoucherNos: members.map((m) => m.voucherNo),
+        memberKeys: members.map((m) => m.key),
+        members,
+        head: repMember.head,
+        rows: members.flatMap((m) => m.rows),
+        amount: members.reduce((s, m) => s + m.amount, 0),
+        isMerged,
+        _status: memberStatuses[0],
+      };
+    });
+  }, [allGroups, voucherMergeMap]);
 
   const filteredRows = useMemo(() => {
     const cq = customerQuery.trim().toLowerCase();
@@ -9046,22 +9108,27 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
     });
   }, [rentalRows, customerQuery, voucherQuery, fromDate, toDate]);
 
+  // (2026-10-01 변경) 병합된 전표는 멤버 중 하나라도 검색 조건(거래처/전표번호/배송일자)에 걸리면 그
+  // 병합 그룹 전체(모든 멤버 합산)를 보여준다 — 검색 때문에 병합된 전표가 반쪽만 보이면 합계가 틀려
+  // 보이므로, "걸리면 통째로" 방식으로 통일했다.
+  const RENTAL_LIST_STATUS_RANK = { overdue: 0, soon: 1, normal: 2, collected: 3, purchase: 4 };
   const filteredGroupsBase = useMemo(() => {
     const cq = customerQuery.trim().toLowerCase();
     const vq = voucherQuery.trim().toLowerCase();
-    return allGroups.filter((g) => {
-      const d = (g.head.out_date || "").slice(0, 10);
-      if (fromDate && (!d || d < fromDate)) return false;
-      if (toDate && (!d || d > toDate)) return false;
-      if (cq && !(g.head.customer || "").toLowerCase().includes(cq)) return false;
-      if (vq && !(g.voucherNo || "").toLowerCase().includes(vq)) return false;
-      return true;
-    });
-  }, [allGroups, customerQuery, voucherQuery, fromDate, toDate]);
+    return allMergedGroups.filter((mg) =>
+      mg.members.some((g) => {
+        const d = (g.head.out_date || "").slice(0, 10);
+        if (fromDate && (!d || d < fromDate)) return false;
+        if (toDate && (!d || d > toDate)) return false;
+        if (cq && !(g.head.customer || "").toLowerCase().includes(cq)) return false;
+        if (vq && !(g.voucherNo || "").toLowerCase().includes(vq)) return false;
+        return true;
+      })
+    );
+  }, [allMergedGroups, customerQuery, voucherQuery, fromDate, toDate]);
 
-  const RENTAL_LIST_STATUS_RANK = { overdue: 0, soon: 1, normal: 2, collected: 3, purchase: 4 };
   const sortAccessors = {
-    전표번호: (g) => g.voucherNo || "",
+    전표번호: (g) => g.repVoucherNo || g.voucherNo || "",
     거래처: (g) => g.head.customer || "",
     현장명: (g) => g.head.site_name || "",
     담당자: (g) => g.head.manager || "",
@@ -9069,10 +9136,7 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
     렌탈종료일자: (g) => g.head.due_date || "",
     수량: (g) => g.rows.reduce((s, r) => s + (Number(r.qty) || 0), 0),
     금액: (g) => g.amount,
-    상태: (g) => {
-      const s = getStatus({ transaction_type: g.head.transaction_type, collected: g.rows.every((r) => r.collected), due_date: g.head.due_date });
-      return RENTAL_LIST_STATUS_RANK[s] ?? 9;
-    },
+    상태: (g) => RENTAL_LIST_STATUS_RANK[g._status] ?? 9,
   };
   const handleSortClick = (label) => {
     if (!sortAccessors[label]) return;
@@ -9141,6 +9205,22 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
   // 이 위까지 모든 훅(useState/useMemo/useRef/useEffect)을 먼저 다 호출한 다음에만 조건부로 화면을 바꿔야
   // 한다(그렇지 않으면 "전표번호 클릭 시 오류" 같은 훅 순서 오류가 남 — 렌탈내역/판매현황과 동일한 패턴).
   const selectedGroup = allGroups.find((g) => g.key === selectedKey) || null;
+  // "전표번호 누르고 들어가면 2개 전표의 품명/규격이 상이해도 같은 품목일 수 있으니 체크해서 병합" 요청
+  // — 병합된 전표만 이 새 상세화면(MergedVoucherDetailPanel)을 쓰고, 병합 안 된 전표는 예전 그대로
+  // RentalDetailPanel을 그대로 쓴다(기존 전표 수정·삭제 등 다른 기능은 전혀 안 건드림).
+  const selectedMergedGroup = selectedMergedKey ? allMergedGroups.find((mg) => mg.key === selectedMergedKey) || null : null;
+  if (selectedMergedGroup) {
+    return (
+      <MergedVoucherDetailPanel
+        mergedGroup={selectedMergedGroup}
+        onClose={() => setSelectedMergedKey(null)}
+        onUnmerge={() => {
+          handleUnmergeVoucherGroup(selectedMergedGroup.key);
+          setSelectedMergedKey(null);
+        }}
+      />
+    );
+  }
   if (selectedGroup) {
     return (
       <RentalDetailPanel
@@ -9158,6 +9238,62 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
         hideInsteadOfDelete
       />
     );
+  }
+
+  // "같은 현장은 잔량 병합" 요청 — 체크한 전표들이 전부 같은 현장인지 먼저 확인하고, 맞으면 대표로
+  // 보여줄 전표를 고르는 패널을 연다. 하나라도 현장이 다르면 병합하지 않고 안내만 보여준다.
+  function handleStartMergeVouchers() {
+    const checked = filteredGroups.filter((g) => checkedIds.has(g.key));
+    const siteNames = new Set(checked.map((g) => (g.head.site_name || "").trim()));
+    if (siteNames.size !== 1 || [...siteNames][0] === "") {
+      setCheckedMergeError("선택한 전표들의 현장명이 서로 달라요(또는 비어있어요). 같은 현장끼리만 병합할 수 있어요.");
+      setVoucherMergeKeepKey(null);
+    } else {
+      setCheckedMergeError(null);
+      setVoucherMergeKeepKey(checked[0]?.key || null);
+    }
+    setMergingVouchers(true);
+  }
+
+  // 대표로 고른 전표(voucherMergeKeepKey) 아래로, 선택한 전표들(이미 병합돼 있던 전표면 그 멤버 전부
+  // 포함)의 나머지를 전부 새로 가리키게 한다 — 이미 병합된 그룹끼리 다시 병합해도(체인) 항상 한 단계로
+  // 정리된다.
+  async function handleConfirmMergeVouchers() {
+    if (!voucherMergeKeepKey) return;
+    const checked = filteredGroups.filter((g) => checkedIds.has(g.key));
+    const repGroup = checked.find((g) => g.key === voucherMergeKeepKey);
+    if (!repGroup) return;
+    const representative = repGroup.key;
+    const memberKeys = Array.from(new Set(checked.flatMap((g) => g.memberKeys)));
+    const rowsToUpsert = memberKeys.filter((k) => k !== representative).map((k) => ({ voucher_no: k, group_voucher_no: representative }));
+    if (rowsToUpsert.length === 0) {
+      setMergingVouchers(false);
+      setVoucherMergeKeepKey(null);
+      return;
+    }
+    setSavingVoucherMerge(true);
+    const { error } = await supabase.from("ledger_auto_voucher_merges").upsert(rowsToUpsert, { onConflict: "voucher_no" });
+    setSavingVoucherMerge(false);
+    if (error) {
+      alert("병합 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setMergingVouchers(false);
+    setVoucherMergeKeepKey(null);
+    setCheckedIds(new Set());
+    fetchVoucherMerges();
+  }
+
+  async function handleUnmergeVoucherGroup(groupKey) {
+    if (!confirm("이 전표 병합을 풀까요? 다시 각각 따로 보여요(전표 원본에는 영향 없어요).")) return;
+    setUnmergingKey(groupKey);
+    const { error } = await supabase.from("ledger_auto_voucher_merges").delete().eq("group_voucher_no", groupKey);
+    setUnmergingKey(null);
+    if (error) {
+      alert("병합 해제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    fetchVoucherMerges();
   }
 
   const toggleChecked = (key) => {
@@ -9287,13 +9423,67 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
       </div>
 
       {checkedIds.size > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 12px", background: C.amberBg, fontSize: 12.5 }}>
-          <div>{checkedIds.size}건 선택됨</div>
-          <button onClick={handleDeleteSelected} disabled={deletingSelected} style={{ ...miniBtnStyle, borderColor: C.brick, color: C.brick }}>
-            {deletingSelected ? "제외 처리 중…" : "선택 제외"}
-          </button>
-          <button onClick={() => setCheckedIds(new Set())} style={miniBtnStyle}>선택 해제</button>
-          <div style={{ fontSize: 11.5, color: C.muted }}>렌탈내역 원본은 지워지지 않아요 — 이 화면에서만 안 보이게 됩니다</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: C.amberBg, fontSize: 12.5 }}>
+            <div>{checkedIds.size}건 선택됨</div>
+            {checkedIds.size >= 2 && (
+              <button onClick={handleStartMergeVouchers} style={miniBtnStyle}>선택 병합</button>
+            )}
+            <button onClick={handleDeleteSelected} disabled={deletingSelected} style={{ ...miniBtnStyle, borderColor: C.brick, color: C.brick }}>
+              {deletingSelected ? "제외 처리 중…" : "선택 제외"}
+            </button>
+            <button onClick={() => { setCheckedIds(new Set()); setMergingVouchers(false); }} style={miniBtnStyle}>선택 해제</button>
+            <div style={{ fontSize: 11.5, color: C.muted }}>렌탈내역 원본은 지워지지 않아요 — 이 화면에서만 안 보이게 됩니다</div>
+          </div>
+          {/* "같은 현장은 잔량 병합할 수 있는 기능" 요청 — 체크한 전표들을 한 줄로 합쳐서 보여준다(전표
+              번호는 대표전표번호 외 N건으로 표시됨). 같은 품목인데 등록할 때 이름이 서로 다르게 적힌
+              경우를 합치는 LedgerBookDetail의 "선택한 품목 병합"(라디오로 남길 이름 고르기)과 같은
+              방식을 그대로 따랐다. */}
+          {mergingVouchers && (
+            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, background: C.mutedBg, display: "flex", flexDirection: "column", gap: 6, maxWidth: 560 }}>
+              {checkedMergeError ? (
+                <div style={{ fontSize: 12.5, color: C.brick }}>{checkedMergeError}</div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 12, color: C.inkSoft }}>
+                    같은 현장의 전표 {checkedIds.size}건을 하나로 합쳐서 보여줘요(렌탈전표 원본은 그대로 남아있고, 이 화면에서만 한 줄로
+                    묶여 보여요 — 전표번호는 "대표전표번호 외 N건"으로 표시돼요). 대표로 보여줄 전표를 골라주세요.
+                  </div>
+                  {filteredGroups
+                    .filter((g) => checkedIds.has(g.key))
+                    .map((g) => (
+                      <label key={g.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                        <input type="radio" name="voucherMergeKeep" checked={voucherMergeKeepKey === g.key} onChange={() => setVoucherMergeKeepKey(g.key)} />
+                        <span>
+                          {g.voucherNo} · {g.head.customer || "-"} · 수량 {g.rows.reduce((s, r) => s + (Number(r.qty) || 0), 0).toLocaleString("ko-KR")}개
+                        </span>
+                      </label>
+                    ))}
+                </>
+              )}
+              <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                {!checkedMergeError && (
+                  <button
+                    onClick={handleConfirmMergeVouchers}
+                    disabled={savingVoucherMerge || !voucherMergeKeepKey}
+                    style={{ ...primaryBtnStyle2, padding: "5px 10px", fontSize: 12.5 }}
+                  >
+                    {savingVoucherMerge ? "병합 중…" : "이 전표를 대표로 병합하기"}
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setMergingVouchers(false);
+                    setVoucherMergeKeepKey(null);
+                    setCheckedMergeError(null);
+                  }}
+                  style={{ ...ghostBtnStyle, padding: "5px 10px", fontSize: 12.5 }}
+                >
+                  취소
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -9374,8 +9564,7 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
           )}
         </div>
         {filteredGroups.map((g) => {
-          const status = getStatus({ transaction_type: g.head.transaction_type, collected: g.rows.every((r) => r.collected), due_date: g.head.due_date });
-          const meta = STATUS_META[status];
+          const meta = STATUS_META[g._status];
           const first = g.rows[0];
           const extra = g.rows.length - 1;
           const qtySum = g.rows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
@@ -9387,12 +9576,24 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
               <div>
                 <input type="checkbox" checked={checkedIds.has(g.key)} onChange={() => toggleChecked(g.key)} />
               </div>
-              <button
-                onClick={() => setSelectedKey(g.key)}
-                style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
-              >
-                {g.voucherNo || "(번호없음)"}
-              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => (g.isMerged ? setSelectedMergedKey(g.key) : setSelectedKey(g.key))}
+                  style={{ background: "none", border: "none", padding: 0, color: "#2563A8", textDecoration: "underline", cursor: "pointer", fontSize: 13, textAlign: "left" }}
+                >
+                  {g.voucherNo || "(번호없음)"}
+                </button>
+                {g.isMerged && (
+                  <button
+                    onClick={() => handleUnmergeVoucherGroup(g.key)}
+                    disabled={unmergingKey === g.key}
+                    title="전표 병합 풀기(원본은 그대로예요)"
+                    style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 11, padding: 0, textDecoration: "underline" }}
+                  >
+                    {unmergingKey === g.key ? "해제 중…" : "병합 해제"}
+                  </button>
+                )}
+              </div>
               <div>{g.head.customer || "-"}</div>
               <div style={{ color: C.inkSoft, fontSize: 12.5 }}>{g.head.site_name || "-"}</div>
               <div>{g.head.manager || "-"}</div>
@@ -9413,6 +9614,252 @@ function LedgerAutoSummaryTab({ rentals, onRefresh, isAdmin = true, managerName 
         {filteredGroups.length === 0 && (
           <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>조건에 맞는 렌탈전표가 없어요.</div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- 병합된 전표 상세보기 (현장별 렌탈잔량 자동등록) ----------
+// "전표번호는 대표전표번호 외로 구현이 되겠지... 전표번호 누르고 들어가면 2개 전표의 품명/규격 등이
+// 상이하더라도 같은 품목일 수 있잖아 그것도 체크해서 병합할 수 있게" 요청으로 만들었다. 기존
+// RentalDetailPanel은 전표 "하나"를 전제로 직접 수정·삭제까지 하는 무거운 편집 화면이라, 여러 전표를
+// 합쳐 보여주는 이 화면에 그대로 끼워 쓰지 않고 따로 만들었다 — 렌탈내역 원본은 전혀 건드리지 않고,
+// 품목을 "어떤 이름으로 묶어 보여줄지"만 ledger_auto_item_merges에 따로 기록하는 보기 전용 화면이다.
+function MergedVoucherDetailPanel({ mergedGroup, onClose, onUnmerge }) {
+  const { key: groupKey, repVoucherNo, memberVoucherNos, head, rows } = mergedGroup;
+  const [itemMergeMap, setItemMergeMap] = useState(() => new Map()); // rental_id -> {display_item, display_spec}
+
+  const fetchItemMerges = () =>
+    supabase
+      .from("ledger_auto_item_merges")
+      .select("rental_id, display_item, display_spec")
+      .eq("group_voucher_no", groupKey)
+      .then(({ data }) =>
+        setItemMergeMap(new Map((data || []).map((r) => [r.rental_id, { display_item: r.display_item, display_spec: r.display_spec }])))
+      );
+
+  useEffect(() => {
+    fetchItemMerges();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupKey]);
+
+  // 각 원본 행에 품목 병합 기록이 있으면 그 이름으로, 없으면 원래 이름 그대로 "화면에 보여줄 이름"을 정한다.
+  const effectiveRows = useMemo(
+    () =>
+      rows.map((r) => {
+        const ov = itemMergeMap.get(r.id);
+        return {
+          ...r,
+          _dispItem: ov ? ov.display_item : r.item,
+          _dispSpec: ov ? ov.display_spec || "" : r.spec || "",
+          _merged: !!ov,
+        };
+      }),
+    [rows, itemMergeMap]
+  );
+
+  const summaryRows = useMemo(() => {
+    const map = new Map();
+    for (const r of effectiveRows) {
+      const k = `${r._dispItem}|${r._dispSpec}`;
+      if (!map.has(k)) map.set(k, { item: r._dispItem, spec: r._dispSpec, qty: 0, amount: 0 });
+      const s = map.get(k);
+      s.qty += Number(r.qty) || 0;
+      s.amount += Number(r.amount) || 0;
+    }
+    return Array.from(map.values()).sort((a, b) => (a.item || "").localeCompare(b.item || "", "ko"));
+  }, [effectiveRows]);
+
+  const [checkedRawIds, setCheckedRawIds] = useState(() => new Set());
+  const toggleRaw = (id) =>
+    setCheckedRawIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const [mergingRaw, setMergingRaw] = useState(false);
+  const [rawMergeKeepId, setRawMergeKeepId] = useState(null);
+  const [savingRawMerge, setSavingRawMerge] = useState(false);
+  const [unmergingRawId, setUnmergingRawId] = useState(null);
+
+  // "같은 품목일 수 있잖아 그것도 체크해서 병합" 요청의 실제 구현. 라디오로 고른 행의 지금 표시 이름을
+  // 그대로 "정답"으로 삼아, 나머지 체크한 행들이 그 이름으로 보이게(ledger_auto_item_merges에) 기록한다.
+  // 원본 rentals.item/spec은 전혀 바뀌지 않는다.
+  async function handleConfirmRawMerge() {
+    if (!rawMergeKeepId || checkedRawIds.size < 2) return;
+    const keepRow = effectiveRows.find((r) => r.id === rawMergeKeepId);
+    if (!keepRow) return;
+    const otherIds = Array.from(checkedRawIds).filter((id) => id !== rawMergeKeepId);
+    if (otherIds.length === 0) return;
+    setSavingRawMerge(true);
+    const rowsToUpsert = otherIds.map((id) => ({
+      rental_id: id,
+      group_voucher_no: groupKey,
+      display_item: keepRow._dispItem,
+      display_spec: keepRow._dispSpec || null,
+    }));
+    const { error } = await supabase.from("ledger_auto_item_merges").upsert(rowsToUpsert, { onConflict: "rental_id" });
+    setSavingRawMerge(false);
+    if (error) {
+      alert("품목 병합 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    setMergingRaw(false);
+    setRawMergeKeepId(null);
+    setCheckedRawIds(new Set());
+    fetchItemMerges();
+  }
+
+  async function handleUnmergeRaw(id) {
+    setUnmergingRawId(id);
+    const { error } = await supabase.from("ledger_auto_item_merges").delete().eq("rental_id", id);
+    setUnmergingRawId(null);
+    if (error) {
+      alert("병합 해제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    fetchItemMerges();
+  }
+
+  const totalQty = summaryRows.reduce((s, r) => s + r.qty, 0);
+  const totalAmount = summaryRows.reduce((s, r) => s + r.amount, 0);
+  const detailGrid = "28px 100px 1fr 140px 90px 110px 160px 90px";
+
+  return (
+    <div>
+      <button onClick={onClose} style={{ ...ghostBtnStyle, marginBottom: 14 }}>← 목록으로</button>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>
+        대표전표 {repVoucherNo || "(번호없음)"} 외 {memberVoucherNos.length - 1}건 — 병합 보기
+      </div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 6 }}>
+        {head.customer || "-"} · {head.site_name || "-"} · 묶인 전표: {memberVoucherNos.join(", ")}
+      </div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
+        렌탈전표 원본은 전혀 바뀌지 않아요 — 이 화면에서 "같은 품목으로 묶어 보여주기"만 기록돼요.
+      </div>
+
+      <div style={{ marginBottom: 20 }}>
+        <button onClick={onUnmerge} style={{ ...ghostBtnStyle, borderColor: C.brick, color: C.brick }}>전표 병합 풀기</button>
+      </div>
+
+      <div style={{ fontFamily: serif, fontSize: 14, marginBottom: 8 }}>품목별 합계</div>
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, marginBottom: 24 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 100px 130px", gap: 8, padding: "8px 12px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}` }}>
+          <div>품목</div>
+          <div>규격</div>
+          <div>수량</div>
+          <div>금액</div>
+        </div>
+        {summaryRows.map((r, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 160px 100px 130px", gap: 8, padding: "8px 12px", fontSize: 13, borderBottom: `1px solid ${C.lineSoft}` }}>
+            <div>{r.item}</div>
+            <div>{r.spec || "-"}</div>
+            <div>{r.qty.toLocaleString("ko-KR")}</div>
+            <div>{fmtWon(r.amount)}</div>
+          </div>
+        ))}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 100px 130px", gap: 8, padding: "8px 12px", fontSize: 13, fontWeight: 600 }}>
+          <div>합계</div>
+          <div />
+          <div>{totalQty.toLocaleString("ko-KR")}</div>
+          <div>{fmtWon(totalAmount)}</div>
+        </div>
+      </div>
+
+      <div style={{ fontFamily: serif, fontSize: 14, marginBottom: 8 }}>
+        원본 품목 내역 — 이름이 달라도 같은 품목이면 체크해서 병합할 수 있어요
+      </div>
+      {checkedRawIds.size > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 12.5, color: C.inkSoft }}>{checkedRawIds.size}개 선택됨</span>
+            {checkedRawIds.size >= 2 && (
+              <button
+                onClick={() => {
+                  setRawMergeKeepId(Array.from(checkedRawIds)[0]);
+                  setMergingRaw(true);
+                }}
+                style={{ ...ghostBtnStyle, padding: "5px 10px", fontSize: 12.5 }}
+              >
+                선택 항목 병합
+              </button>
+            )}
+          </div>
+          {mergingRaw && (
+            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, background: C.mutedBg, display: "flex", flexDirection: "column", gap: 6, maxWidth: 480 }}>
+              <div style={{ fontSize: 12, color: C.inkSoft }}>
+                품명·규격이 서로 다르게 등록돼 있어도 같은 품목이면 하나로 묶어 보여줄 수 있어요. 어떤 이름으로 보여줄지 골라주세요 —
+                원본 데이터는 바뀌지 않아요.
+              </div>
+              {Array.from(checkedRawIds).map((id) => {
+                const r = effectiveRows.find((x) => x.id === id);
+                if (!r) return null;
+                return (
+                  <label key={id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                    <input type="radio" name="rawMergeKeep" checked={rawMergeKeepId === id} onChange={() => setRawMergeKeepId(id)} />
+                    <span>
+                      {r._dispItem} · {r._dispSpec || "-"} (전표 {r.voucher_no})
+                    </span>
+                  </label>
+                );
+              })}
+              <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                <button onClick={handleConfirmRawMerge} disabled={savingRawMerge} style={{ ...primaryBtnStyle2, padding: "5px 10px", fontSize: 12.5 }}>
+                  {savingRawMerge ? "병합 중…" : "이 이름으로 병합하기"}
+                </button>
+                <button
+                  onClick={() => {
+                    setMergingRaw(false);
+                    setRawMergeKeepId(null);
+                  }}
+                  style={{ ...ghostBtnStyle, padding: "5px 10px", fontSize: 12.5 }}
+                >
+                  취소
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      <div style={{ border: `1px solid ${C.line}`, background: C.panel, overflowX: "auto" }}>
+        <div style={{ display: "grid", gridTemplateColumns: detailGrid, gap: 8, padding: "8px 12px", fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.line}`, minWidth: 900 }}>
+          <div />
+          <div>전표번호</div>
+          <div>품목(표시명)</div>
+          <div>규격</div>
+          <div>수량</div>
+          <div>금액</div>
+          <div>원래 이름</div>
+          <div />
+        </div>
+        {effectiveRows.map((r) => (
+          <div
+            key={r.id}
+            style={{ display: "grid", gridTemplateColumns: detailGrid, gap: 8, padding: "8px 12px", fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}`, alignItems: "center", minWidth: 900 }}
+          >
+            <div>
+              <input type="checkbox" checked={checkedRawIds.has(r.id)} onChange={() => toggleRaw(r.id)} />
+            </div>
+            <div style={{ color: C.inkSoft }}>{r.voucher_no}</div>
+            <div>{r._dispItem}</div>
+            <div>{r._dispSpec || "-"}</div>
+            <div>{(Number(r.qty) || 0).toLocaleString("ko-KR")}</div>
+            <div>{fmtWon(r.amount)}</div>
+            <div style={{ fontSize: 11, color: C.muted }}>{r._merged ? `${r.item}${r.spec ? ` · ${r.spec}` : ""}` : "-"}</div>
+            <div>
+              {r._merged && (
+                <button
+                  onClick={() => handleUnmergeRaw(r.id)}
+                  disabled={unmergingRawId === r.id}
+                  style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 11, textDecoration: "underline" }}
+                >
+                  {unmergingRawId === r.id ? "해제 중…" : "병합 해제"}
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
