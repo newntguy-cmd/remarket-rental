@@ -2496,6 +2496,27 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   //     이제 그 버튼은 파티션을 "토글(붙이기/떼기)"하는 게 아니라, 그 책상 옆에 알맞은 길이로
   //     새 파티션 모형 하나를 "만들어 놓아주는" 역할만 한다 — 그 다음부터는 책상과 완전히 별개로
   //     자유롭게 움직일 수 있다.
+  // "북쪽 파티션은 항상 좌우 파티션까지 고려해서 크기를 설정해줘" 요청(2026-10-01 4차) — 파티션이
+  // 독립된 모형이 된 뒤에도, 앞쪽(북쪽) 파티션을 새로 "만들 때"만큼은 그 책상의 왼쪽·오른쪽 자리에
+  // 이미(기본 위치 그대로) 놓여있는 파티션이 있는지 찾아보고, 있으면 그 두께(4.5cm)만큼 북쪽 파티션의
+  // 시작점·길이를 늘려서 처음부터 구석(모서리)까지 맞물리게 만들어준다 — 예전(책상에 "붙어있던" 시절)
+  // 구현했던 "퍼즐처럼 딱 맞는 모서리"와 같은 결과를, 이제는 만드는 "그 순간"에 한 번 계산해서 적용한다
+  // (파티션끼리 서로 독립이라 그 이후엔 각자 자유롭게 움직여도 된다 — "자유이동" 설계와 그대로 호환).
+  // 왼쪽/오른쪽 파티션이 책상의 기본 자리에서 이미 다른 곳으로 옮겨졌다면 못 찾을 수 있는데, 그건
+  // "독립된 모형이라 자유롭게 움직일 수 있다"는 설계상 자연스러운 한계로 받아들인다.
+  function findAdjacentPartition(desk, side, aabb) {
+    const expectedXCm = side === "left" ? desk.xCm - PARTITION_THICKNESS_CM : desk.xCm + aabb.w;
+    const expectedYCm = desk.yCm;
+    return (
+      placedItems.find(
+        (p) =>
+          p.shapeType === "partition" &&
+          Math.abs(p.xCm - expectedXCm) < 0.5 &&
+          Math.abs(p.yCm - expectedYCm) < 0.5
+      ) || null
+    );
+  }
+
   function handleAddPartitionItem(side) {
     if (!selectedSingleItem) return;
     if (selectedSingleItem.category !== "책상류") return;
@@ -2526,6 +2547,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       depthCm = PARTITION_THICKNESS_CM;
       xCm = desk.xCm;
       yCm = desk.yCm - PARTITION_THICKNESS_CM;
+      // 왼쪽·오른쪽 파티션이 이미 책상 기본 자리에 있으면, 그 두께만큼 북쪽 파티션의 시작점을
+      // 왼쪽으로 밀고 길이를 늘려서 구석까지 맞물리게 한다(둘 다 있으면 양쪽 다 늘어남).
+      if (findAdjacentPartition(desk, "left", aabb)) {
+        widthCm += PARTITION_THICKNESS_CM;
+        xCm -= PARTITION_THICKNESS_CM;
+      }
+      if (findAdjacentPartition(desk, "right", aabb)) {
+        widthCm += PARTITION_THICKNESS_CM;
+      }
     }
     xCm = Math.max(0, xCm);
     yCm = Math.max(0, yCm);
@@ -3166,8 +3196,13 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       {/* (2026-09-30 미세조정) "글씨도 많고 디자인이 중구난방"이라는 피드백으로, 안내문구를 화면에
           항상 길게 펼쳐두는 대신 한 줄로 줄이고, 자세한 설명은 옆 ⓘ 아이콘에 마우스를 올리면(title)
           그대로 볼 수 있게 옮겼다 — 정보는 그대로 남기되 화면이 덜 복잡해 보이게 했다. */}
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>가구배치(시뮬레이션)</div>
-      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16, display: "flex", alignItems: "center", gap: 5 }}>
+      {/* "시뮬레이션 할때 오른쪽 스크롤 안생기게 한 화면에 들어가게... 상단 메뉴를 좀 축소화 하더라도
+          같이 위로 좀 올리고 싶은데" 요청(2026-10-01) — 제목·안내문구·아래 입력 줄·선택 도구모음
+          자리처럼 "모형 목록"·"대지" 위에 쌓여 있던 여백들을 하나하나 줄여서, 기능은 그대로 둔 채
+          전체 높이만 줄였다(이 아래 여러 군데에 나눠 적용, 각 지점 주석 참고). 이 제목은 글자 크기는
+          그대로 두되(너무 작아지면 안 보이므로) 아래 여백만 4px→2px로 줄였다. */}
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 2 }}>가구배치(시뮬레이션)</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}>
         <span>공간 크기를 입력하고 왼쪽 모형 목록에서 끌어다 놓아보세요.</span>
         <span
           title="처음 쓰는 모형은 가로·세로 크기(cm)를 한 번 등록해두면 다음부터 목록에 계속 남아있어요. 배치가 마음에 들면 이름을 붙여 저장해두고 나중에 다시 불러올 수 있어요."
@@ -3177,7 +3212,11 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         </span>
       </div>
 
-      <div className="layoutsim-no-print" style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 14, flexWrap: "wrap" }}>
+      {/* (위 요청 계속, 2026-10-01) 이 줄 아래 여백도 14px→8px로 줄였다 — Field(공용 컴포넌트, 라벨+
+          입력창)가 자체적으로 16px 아래 여백을 이미 갖고 있어서 그건 건드리지 않았다(다른 화면들도
+          같이 쓰는 공용 부품이라, 거길 줄이면 이 페이지 말고 다른 화면들까지 전부 영향을 받는다 —
+          "기능상 지금까지 셋팅된거 건들지 말고" 요청과 어긋나므로 그대로 뒀다). */}
+      <div className="layoutsim-no-print" style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 8, flexWrap: "wrap" }}>
         <Field label="공간 가로(m)">
           <input
             type="number"
@@ -3278,8 +3317,12 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           모형을 "새로 만들어 놓아주는" 버튼이다(자세한 설계 이유는 handleAddPartitionItem 선언부
           주석 참고). 만들어진 뒤에는 책상과 완전히 별개로 자유롭게 끌어서 옮기거나 회전·삭제할 수
           있고, 길이는 선택했을 때 아래 "도형수정" 줄의 공용 가로 입력칸(Enter 또는 적용 버튼)으로
-          조절한다 — 전용 길이 입력칸은 더 이상 없다. */}
-      <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, minHeight: 40, flexWrap: "nowrap", overflowX: "auto" }}>
+          조절한다 — 전용 길이 입력칸은 더 이상 없다.
+          (2026-10-01 4차) "오른쪽 스크롤 안생기게 한 화면에 들어가게... 상단 메뉴를 좀 축소화 하더라도"
+          요청으로, 높이가 고정된 이 줄의 minHeight를 40px→32px로 줄였다 — 안의 버튼(miniBtnStyle)
+          높이는 26px 안팎이라 32px로도 여전히 여유 있게 들어간다. 줄 높이를 고정해서 "모형 목록"·
+          "대지"가 흔들리지 않는다는 원래 목적은 그대로 유지된다(숫자만 더 작게 고정될 뿐). */}
+      <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, minHeight: 32, flexWrap: "nowrap", overflowX: "auto" }}>
         {selectedSingleItem && selectedSingleItem.category === "책상류" && (
           <>
             <span style={{ fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>🚧 파티션 추가:</span>
@@ -3306,8 +3349,12 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           고정하고(선택 도구모음이 뜨고 사라져도 줄 높이가 늘었다 줄었다 하지 않도록) 안쪽 내용이
           옆으로 늘어나도 줄바꿈 대신 가로 스크롤만 생기게 해서(flexWrap: "nowrap" + overflowX: "auto")
           도형을 선택하거나 해제해도 이 줄의 높이 자체가 전혀 안 바뀐다 — 그 결과 바로 아래 "모형 목록"
-          패널과 "대지"는 선택 여부와 무관하게 항상 같은 자리에 고정된다. */}
-      <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "nowrap", gap: 8, marginBottom: 6, minHeight: 44 }}>
+          패널과 "대지"는 선택 여부와 무관하게 항상 같은 자리에 고정된다.
+          (2026-10-01 4차) "오른쪽 스크롤 안생기게 한 화면에 들어가게... 상단 메뉴를 좀 축소화
+          하더라도" 요청으로, minHeight를 44px→32px로 줄였다(바로 위 파티션 줄과 같은 높이로 통일) —
+          안의 줄자·도면업로드·격자·확대축소·전체보기 버튼(miniBtnStyle)도 높이 26px 안팎이라 32px로
+          충분히 들어간다. "줄 높이가 고정돼 모형 목록·대지가 안 흔들린다"는 원래 목적은 그대로다. */}
+      <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "nowrap", gap: 8, marginBottom: 4, minHeight: 32 }}>
         <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "nowrap", overflowX: "auto" }}>
           {selectedPlacedIds.size > 0 && (
             <div
@@ -4241,25 +4288,34 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                   {/* "가구 이름이 지저분하게 나오니까 깔끔하게" 요청 — 이름 대신 규격(가로×세로)만
                       짧게 보여주기로 함(사용자 선택: "규격만 깔끔하게"). 이름이 길어도 늘 짧고 정돈된
                       한 줄로 보이고, 전체 이름은 위 title 속성(마우스 올리면 뜨는 말풍선)에서 그대로
-                      볼 수 있다. */}
-                  <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 11,
-                      fontWeight: 600,
-                      color: C.ink,
-                      textAlign: "center",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      pointerEvents: "none",
-                    }}
-                  >
-                    {it.widthCm}×{it.depthCm}
-                  </div>
+                      볼 수 있다.
+                      (2026-10-01 4차) "이상한 좌표번호 안생기게 글씨같은거 파티션 안에 없애줘" 신고 —
+                      파티션은 두께 4.5cm짜리 아주 얇은 막대라 이 규격 글자가 들어갈 자리가 없고,
+                      손잡이로 모서리를 끌어 크기를 바꾸면(가로·세로 모두 자유롭게 늘어나는 공용
+                      기능이라 파티션의 "두께"까지 함께 바뀔 수 있음) 149.46778774067565×4.069646011787471
+                      처럼 소수점이 긴 숫자가 나와, 얇은 막대 바깥으로 글자가 삐져나와 마치 알 수 없는
+                      좌표가 떠 있는 것처럼 보였다. 파티션(isPartition)은 이 규격 글자 자체를 아예
+                      보여주지 않도록 했다 — 다른 모형(책상·의자 등)은 기존 그대로 보인다(회귀 없음). */}
+                  {!isPartition && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: C.ink,
+                        textAlign: "center",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        pointerEvents: "none",
+                      }}
+                    >
+                      {it.widthCm}×{it.depthCm}
+                    </div>
+                  )}
                   {/* ㄱ자·U자·곡선ㄱ자만 좌우반전(퍼즐책상 좌향/우향)이 의미가 있어서, 사각형에는 안 보여준다.
                       버튼 클릭이 캔버스까지 올라가서 줄자 클릭으로 잘못 잡히지 않도록 stopPropagation. */}
                   {(isPoly || isCurvedL) && (
