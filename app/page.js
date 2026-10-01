@@ -13258,6 +13258,24 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 서로의 상대적인 위치(간격)를 그대로 유지해서 붙여넣을 수 있도록 원래 좌표를 그대로 저장해둔다.
   const clipboardRef = useRef([]);
 
+  // "바로전으로 돌아가는 기능(컨트롤+Z)" 요청 — 배치판에 놓인 모형을 바꾸는 동작(옮기기·크기조절·
+  // 회전·삭제·붙여넣기·그룹화·정렬 등) 직전의 placedItems를 여기에 쌓아두고, Ctrl+Z(맥은 Cmd+Z)를
+  // 누르면 가장 최근 것부터 하나씩 꺼내 되돌린다. 최대 50단계까지만 쌓아서(그 전 건 자동으로 버림)
+  // 메모리가 끝없이 늘어나지 않게 한다. 연속으로 끌거나(드래그) 손잡이로 계속 움직이는 동작은 "시작하기
+  // 직전" 상태 한 번만 쌓도록, 각 동작의 "시작하는 지점"에서만 pushHistory를 부른다(끄는 도중 매
+  // 프레임마다 쌓으면 Ctrl+Z 한 번에 거의 안 움직인 것처럼 느껴지므로).
+  const historyRef = useRef([]);
+  function pushHistory() {
+    historyRef.current = [...historyRef.current.slice(-49), placedItems];
+  }
+  function handleUndo() {
+    if (historyRef.current.length === 0) return;
+    const prev = historyRef.current[historyRef.current.length - 1];
+    historyRef.current = historyRef.current.slice(0, -1);
+    setPlacedItems(prev);
+    setSelectedPlacedIds(new Set());
+  }
+
   const [boards, setBoards] = useState([]);
   const [currentBoardId, setCurrentBoardId] = useState(null);
   const [boardName, setBoardName] = useState("");
@@ -14273,6 +14291,21 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     const offsetXCm = (e.clientX - rect.left) / renderScale;
     const offsetYCm = (e.clientY - rect.top) / renderScale;
     e.dataTransfer.setData("text/plain", JSON.stringify({ type: "placed", placedId: placed.id, offsetXCm, offsetYCm }));
+    // "의자를 복사해서 드래그하면 이상한 글씨들이 따라다니는 버그" 신고 — 끌 때 브라우저가 기본으로
+    // 보여주는 "드래그 고스트" 이미지는 끌리는 div 전체를 그대로 캡처한다. 그런데 이 모형 div 안에는
+    // "60×56" 규격 글자, 회전·삭제 작은 버튼(⟳ ×), 선택했을 때만 나오는 회전 손잡이(박스 바깥 위쪽
+    // -14px 지점까지 튀어나와 있음)까지 전부 겹쳐 있어서, 브라우저가 그 전체를 스냅샷으로 찍다 보니
+    // 글자·버튼이 캔버스 바깥으로 삐져나오거나 겹쳐 보여 "이상한 글씨가 따라다니는" 것처럼 보였다.
+    // 특히 복사(Ctrl+C/V) 직후에는 붙여넣은 모형이 바로 선택된 상태라 회전 손잡이까지 항상 끼어있어서
+    // 더 두드러졌다. setDragImage에 빈(1×1 투명) 이미지를 줘서 브라우저 기본 고스트 자체를 꺼버리면,
+    // 끄는 동안은 커서만 움직이고 마우스를 놓는 순간 모형이 새 자리로 바로 나타난다(원래도 끄는 중에
+    // 실시간으로 따라 움직이는 미리보기는 없었고, 놓을 때 한 번에 자리가 정해지는 방식이었으므로 이
+    // 동작 자체는 그대로다 — 눈에 거슬리던 고스트 이미지만 없앴다).
+    if (e.dataTransfer.setDragImage) {
+      const img = new Image();
+      img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+      e.dataTransfer.setDragImage(img, 0, 0);
+    }
   }
 
   // 모형을 새로 놓거나 옮길 때, 근처(화면 기준 15px 이내)에 이미 놓인 모형의 변이 있으면 자석처럼
@@ -14411,9 +14444,20 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     return { xCm: x, yCm: y };
   }
 
-  // 자석 스냅 → 그래도 겹치면 밀어내기, 순서로 적용한다(최대 4번 반복해서 여러 모형에 연달아
-  // 걸리는 경우도 웬만큼 처리한다). 마지막엔 배치판(공간) 밖으로 절대 넘어가지 않도록 가로·세로
-  // 범위를 벽 안쪽으로 딱 고정한다(모형이 방보다 큰 극단적인 경우만 왼쪽·위쪽 벽에 맞춰둔다).
+  // 자석 스냅 → 그래도 겹치면 밀어내기, 순서로 적용한다. 마지막엔 배치판(공간) 밖으로 절대 넘어가지
+  // 않도록 가로·세로 범위를 벽 안쪽으로 딱 고정한다(모형이 방보다 큰 극단적인 경우만 왼쪽·위쪽 벽에
+  // 맞춰둔다).
+  // (버그 수정) "밑에 의자가 있으니까 책상이 한번 움직이면 원래 자리에 넣으려고 해도 정신을 못차리네"
+  // 신고 — resolveOverlap은 placedItems를 순서대로 훑으면서 겹치는 상대를 "하나씩" 밀어내는데, 뒤쪽
+  // 상대를 밀어내다가 앞서 이미 처리했던 상대와 다시 겹치게 되는 경우가 있다(스크린샷처럼 의자 하나에
+  // 책상이 양옆·위아래로 셋 이상 빽빽하게 붙어있는 자리가 전형적인 예 — 의자를 피해 밀려나면 바로
+  // 옆 책상과 겹치고, 그걸 피해 밀려나면 다시 의자와 겹치는 식). 바깥 반복(아래 for문)이 이런 경우를
+  // 다시 처리해주긴 하지만, 예전엔 "최대 4번"까지만 반복하고 그 안에 완전히 안 겹치는 자리로 수렴하지
+  // 못하면(빽빽한 자리일수록 여러 번 왔다갔다해야 함) 중간의 애매한 자리에서 그냥 멈춰버렸다 — 그래서
+  // 같은 자리에 다시 놓으려 해도 매번 살짝 다른, 예측 못 할 자리에 떨어지는 것처럼 보였다. 겹침이 이미
+  // 다 풀렸으면(resolved 좌표가 그대로면) 아래 break로 어차피 더 돌지 않고 바로 멈추니, 반복 횟수를
+  // 넉넉히 24번으로 늘려도 원래 4번 안에 풀리던 경우의 동작·속도는 전혀 달라지지 않고, 이렇게 여러
+  // 상대에 둘러싸여 더 많이 왔다갔다해야 풀리는 빽빽한 자리만 끝까지 수렴할 기회를 더 준다.
   // (버그 수정에 맞춰 시그니처 변경) "회의용 의자를 돌려서 원형테이블에 딱 붙이려는데 안 붙는다" 신고를
   // 고치면서, resolveOverlap이 옮기는 모형 자신의 회전까지 정확히 반영하려면 회전 전 원래 가로·세로
   // (widthCm/depthCm)와 회전값(rotation)이 그대로 필요해졌다 — 그래서 예전엔 호출하는 쪽에서 미리
@@ -14424,7 +14468,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     const myRotDeg = isCircle ? 0 : Number(rotation) || 0;
     const { w: wCm, h: hCm } = rotatedAabbSize(widthCm, depthCm, myRotDeg);
     let { xCm: x, yCm: y } = snapPlacement(xCm, yCm, wCm, hCm, excludeId);
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 24; i++) {
       const resolved = resolveOverlap(x, y, widthCm, depthCm, rotation, isCircle, excludeId);
       if (resolved.xCm === x && resolved.yCm === y) break;
       x = resolved.xCm;
@@ -14544,6 +14588,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       const rawX = Math.max(0, cmX - widthCm / 2);
       const rawY = Math.max(0, cmY - depthCm / 2);
       const placed = placeWithSnap(rawX, rawY, widthCm, depthCm, 0, (shape.shape_type || "rect") === "circle", null);
+      pushHistory();
       setPlacedItems((prev) => [
         ...prev,
         {
@@ -14576,15 +14621,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         const dx = rawX - moving.xCm;
         const dy = rawY - moving.yCm;
         const { dx: cdx, dy: cdy } = clampGroupDelta(moveGroupIds, dx, dy);
+        pushHistory();
         setPlacedItems((prev) => prev.map((it) => (moveGroupIds.includes(it.id) ? { ...it, xCm: it.xCm + cdx, yCm: it.yCm + cdy } : it)));
       } else {
         const placed = placeWithSnap(rawX, rawY, moving.widthCm, moving.depthCm, rotation, moving.shapeType === "circle", moving.id);
+        pushHistory();
         setPlacedItems((prev) => prev.map((it) => (it.id === payload.placedId ? { ...it, xCm: placed.xCm, yCm: placed.yCm } : it)));
       }
     }
   }
 
   function handleRemovePlaced(id) {
+    pushHistory();
     setPlacedItems((prev) => prev.filter((it) => it.id !== id));
     setSelectedPlacedIds((prev) => {
       if (!prev.has(id)) return prev;
@@ -14597,6 +14645,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 여러 개를 골라둔 채로 한꺼번에 지우기(선택 도구모음의 "삭제" 버튼).
   function handleRemoveSelected() {
     if (selectedPlacedIds.size === 0) return;
+    pushHistory();
     setPlacedItems((prev) => prev.filter((it) => !selectedPlacedIds.has(it.id)));
     setSelectedPlacedIds(new Set());
   }
@@ -14605,6 +14654,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 전체가 같이 선택되고, 하나를 끌면 전체가 같이 움직인다.
   function handleGroupSelected() {
     if (selectedPlacedIds.size < 2) return;
+    pushHistory();
     const gid = `g${Date.now()}`;
     setPlacedItems((prev) => prev.map((it) => (selectedPlacedIds.has(it.id) ? { ...it, groupId: gid } : it)));
   }
@@ -14616,6 +14666,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       if (selectedPlacedIds.has(it.id) && it.groupId) groupIdsToClear.add(it.groupId);
     }
     if (groupIdsToClear.size === 0) return;
+    pushHistory();
     setPlacedItems((prev) => prev.map((it) => (it.groupId && groupIdsToClear.has(it.groupId) ? { ...it, groupId: null } : it)));
   }
 
@@ -14651,6 +14702,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       cursor += (horizontal ? e.w : e.h) + gap;
     }
     if (updates.size === 0) return;
+    pushHistory();
     setPlacedItems((prev) =>
       prev.map((it) => {
         if (!updates.has(it.id)) return it;
@@ -14667,6 +14719,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 위치(xCm/yCm)는 그대로 두면 커진 쪽 끝이 배치판 벽 밖으로 삐져나갈 수 있어서(하단·우측 침범),
   // 회전 직후 새로 보이는 가로·세로 기준으로 위치를 벽 안쪽으로 다시 맞춰준다.
   function handleRotatePlaced(id) {
+    pushHistory();
     setPlacedItems((prev) =>
       prev.map((it) => {
         if (it.id !== id) return it;
@@ -14697,6 +14750,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // (돌리기만 하면 파인 모서리 위치는 바뀌어도 "꺾인 방향" 자체는 안 바뀜) 좌우 반전을 따로 둔다.
   // 사각형은 반전해도 모양이 똑같아서 버튼을 아예 안 보여준다.
   function handleFlipPlaced(id) {
+    pushHistory();
     setPlacedItems((prev) => prev.map((it) => (it.id === id ? { ...it, flipped: !it.flipped } : it)));
   }
 
@@ -14749,6 +14803,9 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     return (e) => {
       e.preventDefault();
       e.stopPropagation();
+      // (Ctrl+Z 되돌리기) 손잡이를 끄는 동안(onResizeMove) 매 프레임 쌓지 않고, 끌기 시작하는 이
+      // 시점에 "끌기 전" 상태 한 번만 쌓는다 — 그래야 Ctrl+Z 한 번으로 이번 크기조절 전체가 통째로 되돌아간다.
+      pushHistory();
       resizeDragRef.current = { id: it.id, startX: e.clientX, startY: e.clientY, startWidthCm: it.widthCm, startDepthCm: it.depthCm, xCm: it.xCm, yCm: it.yCm, swapped };
     };
   }
@@ -14797,6 +14854,9 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     return (e) => {
       e.preventDefault();
       e.stopPropagation();
+      // (Ctrl+Z 되돌리기) 손잡이를 끄는 동안(onRotateMove) 매 프레임 쌓지 않고, 끌기 시작하는 이
+      // 시점에 "끌기 전" 상태 한 번만 쌓는다 — 그래야 Ctrl+Z 한 번으로 이번 회전 전체가 통째로 되돌아간다.
+      pushHistory();
       const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
       const aabb = rotatedAabbSize(it.widthCm, it.depthCm, rotation);
       rotateDragRef.current = {
@@ -14816,6 +14876,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   const selectedSingleItem = selectedPlacedIds.size === 1 ? placedItems.find((it) => selectedPlacedIds.has(it.id)) || null : null;
   const [manualWidthInput, setManualWidthInput] = useState("");
   const [manualDepthInput, setManualDepthInput] = useState("");
+  // "제품 클릭해서 좌표값 넣어주는 기능 — 제일 정확하지" 요청으로 추가. 가로·세로 숫자 입력과 똑같은
+  // 자리·방식으로, 모형의 왼쪽위 모서리 좌표(xCm, yCm)를 숫자로 직접 입력해서 끌지 않고도 정확한 자리에
+  // 둘 수 있게 한다. 위 가로·세로 입력과 마찬가지로 하나만 선택했을 때만 의미가 있다.
+  const [manualXInput, setManualXInput] = useState("");
+  const [manualYInput, setManualYInput] = useState("");
+  // "제품 선택하면 각도 넣어줘 — 회전기능은 그대로 두고 각도 넣으면 조정되게" 요청. 90도 버튼(⟳)과
+  // 선택했을 때 나오는 동그라미 손잡이(자유 회전)는 그대로 두고, 숫자로 각도를 직접 입력하는 방법을
+  // 하나 더 추가한다.
+  const [manualAngleInput, setManualAngleInput] = useState("");
   // "도형 클릭 후 이름 수정할 수 있게 해주고" 요청으로 추가. 배치판 위 이름표에는 규격(가로×세로)만
   // 짧게 보이지만(윗 주석 참고), 모형 하나하나마다 자기만의 이름(예: "박대표 책상", "3층 회의실 A")을
   // 붙여두면 title(마우스 올리면 뜨는 말풍선)·저장된 배치 데이터에서 구분하기 편하다.
@@ -14829,6 +14898,10 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       setManualWidthInput(String(selectedSingleItem.widthCm));
       setManualDepthInput(String(selectedSingleItem.depthCm));
       setManualNameInput(selectedSingleItem.name || "");
+      setManualXInput(String(selectedSingleItem.xCm));
+      setManualYInput(String(selectedSingleItem.yCm));
+      const curRotation = selectedSingleItem.rotation != null ? selectedSingleItem.rotation : selectedSingleItem.rotated ? 90 : 0;
+      setManualAngleInput(String(Math.round(curRotation)));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSingleItemId]);
@@ -14840,6 +14913,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     const it = selectedSingleItem;
     const trimmed = manualNameInput.trim();
     const newName = trimmed || it.name;
+    pushHistory();
     setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, name: newName } : p)));
     setManualNameInput(newName);
   }
@@ -14867,9 +14941,70 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       newWidthCm = Math.min(newWidthCm, maxOnScreenW);
       newDepthCm = Math.min(newDepthCm, maxOnScreenH);
     }
+    pushHistory();
     setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, widthCm: newWidthCm, depthCm: newDepthCm } : p)));
     setManualWidthInput(String(newWidthCm));
     setManualDepthInput(String(newDepthCm));
+  }
+
+  // "제품 클릭해서 좌표값 넣어주는 기능 — 제일 정확하지" 요청. 끌어서 옮기는 대신 왼쪽위 모서리
+  // 좌표(xCm, yCm)를 숫자로 직접 입력해서 정확히 맞춘다. 0도 엄연히 유효한 좌표(벽에 딱 붙임)라서,
+  // 위 가로·세로 입력처럼 "입력값이 없으면(falsy) 원래 값으로" 방식을 쓰지 않고, 숫자로 읽히면(0
+  // 포함) 그 값을, 못 읽으면만 원래 좌표를 쓴다. 화면에 보이는(회전 반영) 크기 기준으로 배치판 밖을
+  // 벗어나지 않게 제한하는 것은 마우스로 끌 때·가로세로 직접입력 때와 같은 규칙이다.
+  function handleApplyManualPosition() {
+    if (!selectedSingleItem) return;
+    const it = selectedSingleItem;
+    const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
+    const aabb = rotatedAabbSize(it.widthCm, it.depthCm, rotation);
+    const maxX = Math.max(0, spaceWidthM * 100 - aabb.w);
+    const maxY = Math.max(0, spaceDepthM * 100 - aabb.h);
+    const parsedX = Number(manualXInput);
+    const parsedY = Number(manualYInput);
+    const rawX = Number.isFinite(parsedX) ? parsedX : it.xCm;
+    const rawY = Number.isFinite(parsedY) ? parsedY : it.yCm;
+    const newXCm = Math.min(Math.max(0, rawX), maxX);
+    const newYCm = Math.min(Math.max(0, rawY), maxY);
+    pushHistory();
+    setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, xCm: newXCm, yCm: newYCm } : p)));
+    setManualXInput(String(newXCm));
+    setManualYInput(String(newYCm));
+  }
+
+  // "제품 선택하면 각도 넣어줘 — 지금 회전기능은 그대로 두고 각도 넣으면 조정되게" 요청. 90도 버튼이나
+  // 동그라미 손잡이(자유 회전, startRotatePlaced/onRotateMove)는 손대지 않고 그대로 두고, 숫자로 각도를
+  // 직접 입력해서 맞추는 방법만 하나 더 추가한다. 손잡이로 돌릴 때와 똑같이 "중심을 축으로" 돈다 —
+  // 그래야 돌리는 동안 모서리가 방 밖으로 튀지 않고 자연스럽다(onRotateMove와 같은 계산 방식).
+  function handleApplyManualAngle() {
+    if (!selectedSingleItem) return;
+    const it = selectedSingleItem;
+    const currentRotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
+    const currentAabb = rotatedAabbSize(it.widthCm, it.depthCm, currentRotation);
+    const centerXCm = it.xCm + currentAabb.w / 2;
+    const centerYCm = it.yCm + currentAabb.h / 2;
+    const parsedDeg = Number(manualAngleInput);
+    let deg = Number.isFinite(parsedDeg) ? parsedDeg : currentRotation;
+    deg = ((deg % 360) + 360) % 360;
+    const aabb = rotatedAabbSize(it.widthCm, it.depthCm, deg);
+    const maxX = Math.max(0, spaceWidthM * 100 - aabb.w);
+    const maxY = Math.max(0, spaceDepthM * 100 - aabb.h);
+    const newXCm = Math.min(Math.max(0, centerXCm - aabb.w / 2), maxX);
+    const newYCm = Math.min(Math.max(0, centerYCm - aabb.h / 2), maxY);
+    pushHistory();
+    setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, rotation: deg, xCm: newXCm, yCm: newYCm } : p)));
+    setManualAngleInput(String(deg));
+  }
+
+  // "의자만 세개 클릭하고 상단맞추기" 요청 — 피그마·파워포인트의 "위쪽 맞춤"과 같은 기능. 2개 이상
+  // 선택한 상태에서 누르면, 선택한 모형들 중 가장 위(yCm이 가장 작은 값)에 맞춰 나머지 모형들의 세로
+  // 위치만 그 자리로 옮긴다(가로 위치·크기·회전은 그대로 둔다). yCm은 회전 여부와 상관없이 항상 화면에
+  // 보이는 바운딩박스의 맨 위 좌표라서(드래그·회전 때와 같은 규칙), 그대로 최솟값을 쓰면 된다.
+  function handleAlignTopSelected() {
+    if (selectedPlacedIds.size < 2) return;
+    pushHistory();
+    const selected = placedItems.filter((it) => selectedPlacedIds.has(it.id));
+    const minY = Math.min(...selected.map((it) => it.yCm));
+    setPlacedItems((prev) => prev.map((it) => (selectedPlacedIds.has(it.id) ? { ...it, yCm: minY } : it)));
   }
 
   // 키보드 화살표로 선택한 모형(들)을 옮긴다. 기본 5cm씩, Shift를 누르면 20cm씩 움직이고, 하나만
@@ -14886,6 +15021,14 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       const tag = document.activeElement && document.activeElement.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
 
+      // "바로전으로 돌아가는 기능도 지금도 먹히나 컨트롤 제트하면?" 질문으로 새로 추가. 이름 입력칸 등에
+      // 포커스가 가 있을 때는(맨 위 tag 검사로 이미 걸러짐) 그 칸 자체의 되돌리기(텍스트 입력 취소)를
+      // 건드리지 않도록 여기까지 오지 않는다.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
         if (selectedPlacedIds.size === 0) return;
         e.preventDefault();
@@ -14915,6 +15058,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
             yCm: Math.min(Math.max(0, src.yCm + offsetCm), maxY),
           };
         });
+        pushHistory();
         setPlacedItems((prev) => [...prev, ...newItems]);
         setSelectedPlacedIds(new Set(newIds));
         return;
@@ -14948,6 +15092,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         if (!it.groupId) {
           const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
           const placed = moveWithClamp(round1(it.xCm + dx), round1(it.yCm + dy), it.widthCm, it.depthCm, rotation, it.shapeType === "circle", it.id);
+          pushHistory();
           setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, xCm: round1(placed.xCm), yCm: round1(placed.yCm) } : p)));
           return;
         }
@@ -14956,6 +15101,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       if (!anyItem) return;
       const memberIds = getMoveGroupIds(anyItem);
       const { dx: cdx, dy: cdy } = clampGroupDelta(memberIds, dx, dy);
+      pushHistory();
       setPlacedItems((prev) => prev.map((p) => (memberIds.includes(p.id) ? { ...p, xCm: round1(p.xCm + cdx), yCm: round1(p.yCm + cdy) } : p)));
     }
     window.addEventListener("keydown", onKeyDown);
@@ -16096,6 +16242,51 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
                     />
                     <button onClick={handleApplyManualSize} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>적용</button>
+                    <span style={{ fontSize: 12, color: C.lineSoft }}>|</span>
+                    {/* "제품 클릭해서 좌표값 넣어주는 기능 — 제일 정확하지" 요청 — 끌지 않고도 왼쪽위
+                        모서리 좌표(x, y, cm)를 숫자로 직접 입력해서 정확한 자리에 둘 수 있다. */}
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={manualXInput}
+                      onChange={(e) => setManualXInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleApplyManualPosition();
+                      }}
+                      placeholder="X(cm)"
+                      title="왼쪽위 모서리 X좌표(cm)"
+                      style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
+                    />
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={manualYInput}
+                      onChange={(e) => setManualYInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleApplyManualPosition();
+                      }}
+                      placeholder="Y(cm)"
+                      title="왼쪽위 모서리 Y좌표(cm)"
+                      style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
+                    />
+                    <button onClick={handleApplyManualPosition} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>이동</button>
+                    <span style={{ fontSize: 12, color: C.lineSoft }}>|</span>
+                    {/* "제품 선택하면 각도 넣어줘 — 회전기능은 그대로 두고 각도 넣으면 조정되게" 요청 —
+                        90도 버튼(⟳)·동그라미 자유회전 손잡이는 그대로 둔 채, 숫자로 각도를 직접 입력하는
+                        방법만 하나 더 추가. */}
+                    <input
+                      type="number"
+                      step="1"
+                      value={manualAngleInput}
+                      onChange={(e) => setManualAngleInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleApplyManualAngle();
+                      }}
+                      placeholder="각도"
+                      title="회전 각도(도, 0~359)"
+                      style={{ ...smallInputStyle, width: 60, boxSizing: "border-box" }}
+                    />
+                    <button onClick={handleApplyManualAngle} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>각도 적용</button>
                   </>
                 )}
                 {selectedPlacedIds.size >= 2 && (
@@ -16103,6 +16294,9 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 )}
                 {placedItems.some((it) => selectedPlacedIds.has(it.id) && it.groupId) && (
                   <button onClick={handleUngroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>⛓️‍💥 그룹 해제</button>
+                )}
+                {selectedPlacedIds.size >= 2 && (
+                  <button onClick={handleAlignTopSelected} title="선택한 모형들을 가장 위에 있는 모형에 맞춰 위쪽 끝을 나란히 맞춰요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>⬆ 상단맞추기</button>
                 )}
                 {selectedPlacedIds.size >= 3 && (
                   <button onClick={handleDistributeSelected} title="양 끝 모형은 그대로 두고, 그 사이 모형들의 간격을 똑같이 맞춰요(가로로 나란하면 가로로, 세로로 나란하면 세로로 자동 판단)" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>↔ 간격 동일하게</button>
