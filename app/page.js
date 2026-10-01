@@ -14696,9 +14696,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
 
   async function handleDeleteBoard(id) {
     if (!confirm("이 배치안을 삭제할까요? 되돌릴 수 없어요.")) return;
-    const { error } = await supabase.from("layout_boards").delete().eq("id", id);
+    // (버그 수정) "저장된 배치안 삭제가 반영이 안 됨" 신고 — 사진 라이브러리 "수정" 때와 똑같은 원인
+    // (Supabase RLS)이었다. .delete()만 쓰면 삭제 권한 규칙이 막아도 오류 없이 조용히 0건만 지워지고
+    // 끝나버려서(에러가 안 나니 "성공"으로 착각), 지워진 줄 알고 다시 목록을 불러오면 그대로 남아있는
+    // 것처럼 보인다. .delete() 뒤에 .select()를 붙여 실제로 몇 건이 지워졌는지 확인하고, 0건이면
+    // 명확하게 알려준다.
+    const { data, error } = await supabase.from("layout_boards").delete().eq("id", id).select();
     if (error) {
       alert("삭제 중 오류가 발생했어요: " + error.message);
+      return;
+    }
+    if (!data || data.length === 0) {
+      alert("삭제가 반영되지 않았어요. Supabase에 layout_boards \"삭제(delete)\" 권한 규칙이 아직 없거나 다른 상태일 수 있어요. layout_sim_setup.sql을 Supabase SQL Editor에서 다시 실행해주세요.");
       return;
     }
     if (currentBoardId === id) {
@@ -14853,29 +14862,159 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
         </div>
       </div>
 
-      {boards.length > 0 && (
-        <div className="layoutsim-no-print" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
-          <div style={{ fontSize: 12, color: C.muted }}>저장된 배치안:</div>
-          {boards.map((b) => (
-            <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <button
-                onClick={() => handleLoadBoard(b.id)}
-                disabled={loadingBoardId === b.id}
-                style={{ ...miniBtnStyle, borderColor: currentBoardId === b.id ? C.ink : undefined }}
-              >
-                {loadingBoardId === b.id ? "불러오는 중…" : b.name}
-              </button>
-              <button
-                onClick={() => handleDeleteBoard(b.id)}
-                title="이 배치안 삭제"
-                style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 13 }}
-              >
-                ×
-              </button>
+      {/* (2026-10-01 변경) "공간활용이 아쉽다 — 대지(검은 테두리 배치판 포함) 부분이 전체적으로 더 위로
+          올라왔으면" 요청으로, 예전엔 따로따로 한 줄씩 차지하던 "저장된 배치안" 줄과(오른쪽 칸 맨 위에
+          있던) "공간 WxH + 줄자·도면업로드·격자·확대축소·전체보기" 도구모음 줄을 한 줄로 합쳤다 —
+          저장된 배치안이 없을 때 저 도구모음 줄 오른쪽 절반이 거의 비어있던 공간을 그대로 쓰는 것이다.
+          버튼의 기능·동작·순서는 전혀 바뀌지 않았고 화면에 그려지는 위치(한 줄 위로)만 바뀌었다 — 그
+          결과 오른쪽 칸(대지가 있는 곳)이 이 통합된 줄 바로 아래에서 곧장 시작해서, 왼쪽 "모형 목록"
+          패널 맨 위와 거의 같은 높이에서 시작한다. "저장된 배치안"이 하나도 없을 때도 도구모음은 항상
+          있어야 하므로, 이 줄 자체는 이제 boards.length 조건 없이 항상 그려진다(안엔 저장된 배치안이
+          있을 때만 그 chip들이 보인다). */}
+      <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+        <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {boards.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>저장된 배치안:</span>
+              {boards.map((b) => (
+                <span key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <button
+                    onClick={() => handleLoadBoard(b.id)}
+                    disabled={loadingBoardId === b.id}
+                    style={{ ...miniBtnStyle, borderColor: currentBoardId === b.id ? C.ink : undefined }}
+                  >
+                    {loadingBoardId === b.id ? "불러오는 중…" : b.name}
+                  </button>
+                  <button
+                    onClick={() => handleDeleteBoard(b.id)}
+                    title="이 배치안 삭제"
+                    style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 13 }}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
             </div>
-          ))}
+          )}
+          {/* (2026-09-30 미세조정) "글씨도 많고 중구난방" 피드백으로, 조작법 전체를 항상 펼쳐두는 대신
+              한 줄(공간 크기)만 보여주고 자세한 조작법은 옆 ⓘ에 마우스를 올리면 그대로 볼 수 있게
+              옮겼다. */}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <span>공간 {spaceWidthM}m × {spaceDepthM}m</span>
+            <span
+              title="모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요(Ctrl+끌면 기존 선택에 더하기). 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게, Ctrl+방향키는 0.1cm 단위로 아주 정밀하게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요. 마우스 휠로 확대·축소할 수 있고, Shift를 누른 채 끌면 화면을 자유롭게 이동할 수 있어요."
+              style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", border: `1px solid ${C.lineSoft}`, color: C.muted, fontSize: 10, cursor: "help", flexShrink: 0 }}
+            >
+              ⓘ
+            </span>
+          </span>
         </div>
-      )}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+          <button
+            onClick={() => setRulerMode((v) => !v)}
+            title="캔버스를 두 번 클릭하거나, 누른 채로 끌었다 놓아서 두 지점 사이 거리를 재보세요(실시간 미리보기)"
+            style={{
+              ...miniBtnStyle,
+              background: rulerMode ? C.ink : "transparent",
+              color: rulerMode ? "#fff" : C.inkSoft,
+              borderColor: rulerMode ? C.ink : C.lineSoft,
+              whiteSpace: "nowrap",
+            }}
+          >
+            📏 줄자{rulerMode ? " (켜짐)" : ""}
+          </button>
+          {rulerPoints.length > 0 && (
+            <button onClick={handleClearRuler} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>줄자 지우기</button>
+          )}
+          {/* (2026-09-30 미세조정) "줄자 옆에 좌표체킹 하는 부분 없애주고" 요청으로, 마우스 위치의
+              cm 좌표(→ 389.0cm, 130.7cm)를 실시간으로 보여주던 부분을 없앴다 — 실제로 잰 거리
+              자체는 캔버스 위 빨간 말풍선(📏 1.18m)에 그대로 나오니 정보 손실은 없다. 대신
+              "줄자 기능을 조금 더 실용적으로" 요청에 맞춰, 다 잰 거리를 한 번에 복사해서 메모·견적서
+              등에 바로 붙여넣을 수 있는 "복사" 버튼을 추가했다. */}
+          {rulerDistanceCm != null && (
+            <button
+              onClick={handleCopyRulerDistance}
+              title="방금 잰 거리를 복사해요(메모·견적서 등에 바로 붙여넣기)"
+              style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}
+            >
+              {rulerCopied ? "복사됨 ✓" : "📋 거리 복사"}
+            </button>
+          )}
+          {/* "이미지 임포트" 요청: 실제 도면(사진·스캔) 파일을 올려서 배경으로 깔아두고, 그 위에
+              정확한 축척으로 모형을 배치할 수 있다. 파일을 고르면 바로 올라가지 않고 먼저 축척
+              맞추기 모달(아래)이 뜬다. */}
+          <label
+            title="실제 도면(사진·스캔) 파일을 올려서 배경으로 깔아두고 축척을 맞춰보세요"
+            style={{ ...miniBtnStyle, whiteSpace: "nowrap", cursor: "pointer", display: "inline-block" }}
+          >
+            🖼 도면 업로드
+            <input type="file" accept="image/*" onChange={handleBgImageFileSelected} style={{ display: "none" }} />
+          </label>
+          {bgImageUrl && (
+            <button onClick={handleRemoveBgImage} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>도면 지우기</button>
+          )}
+          {/* "바둑판 없애기 넣기" 요청: 배치판의 눈금(격자) 배경을 껐다 켰다 할 수 있다. */}
+          <button
+            onClick={() => setShowGrid((v) => !v)}
+            title="배치판의 눈금(격자) 배경을 껐다 켰다 해요"
+            style={{
+              ...miniBtnStyle,
+              background: showGrid ? C.ink : "transparent",
+              color: showGrid ? "#fff" : C.inkSoft,
+              borderColor: showGrid ? C.ink : C.lineSoft,
+              whiteSpace: "nowrap",
+            }}
+          >
+            # 격자{showGrid ? " (켜짐)" : " (꺼짐)"}
+          </button>
+          {/* "마우스 휠로 줌인/줌아웃" 요청: 휠 말고도 버튼으로 확대·축소할 수 있게 하고, 지금
+              배율(%)을 숫자로도 보여준다. 방을 딱 맞춰 보는 상태(100%)가 아닐 때만 "화면 맞춤"
+              버튼이 나타나 언제든 원래 화면으로 되돌릴 수 있다. */}
+          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <button
+              onClick={() => handleZoomButton(1 / 1.25)}
+              disabled={zoomLevel <= ZOOM_MIN}
+              title="화면 축소"
+              style={{ ...miniBtnStyle, padding: "4px 9px", opacity: zoomLevel <= ZOOM_MIN ? 0.4 : 1 }}
+            >
+              −
+            </button>
+            <span style={{ fontSize: 11, color: C.inkSoft, minWidth: 36, textAlign: "center" }}>
+              {Math.round(zoomLevel * 100)}%
+            </span>
+            <button
+              onClick={() => handleZoomButton(1.25)}
+              disabled={zoomLevel >= ZOOM_MAX}
+              title="화면 확대"
+              style={{ ...miniBtnStyle, padding: "4px 9px", opacity: zoomLevel >= ZOOM_MAX ? 0.4 : 1 }}
+            >
+              ＋
+            </button>
+            {(zoomLevel !== 1 || viewPan.x !== 0 || viewPan.y !== 0) && (
+              <button onClick={handleResetView} title="방 전체가 다시 딱 보이도록 되돌려요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
+                화면 맞춤
+              </button>
+            )}
+            {/* "전체보기 버튼 만들어서 시야확보를 좋게해주고" 요청: 눌러서 켜면 위쪽 전체 메뉴·페이지
+                여백까지 걷어낸 전체 화면 오버레이로 배치판을 띄워, 배치판 자체를 더 크게 볼 수 있게
+                한다(위 MAX_CANVAS_W/H가 isFullView를 반영해 그만큼 더 크게 계산됨). Esc로도 닫힌다. */}
+            <button
+              onClick={() => setIsFullView((v) => !v)}
+              title={isFullView ? "전체보기를 끄고 원래 화면으로 돌아가요(Esc)" : "배치판을 화면 전체로 크게 봐요"}
+              className="layoutsim-no-print"
+              style={{
+                ...miniBtnStyle,
+                whiteSpace: "nowrap",
+                background: isFullView ? C.ink : "transparent",
+                color: isFullView ? "#fff" : C.inkSoft,
+                borderColor: isFullView ? C.ink : C.lineSoft,
+              }}
+            >
+              {isFullView ? "⤡ 전체보기 닫기" : "⤢ 전체보기"}
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* 모형 목록(왼쪽)과 배치판(오른쪽)을 나란히 두 칸으로 배치한다. "배치판이 오른쪽에 있어야
           배치가 되는데 아래로 내려가 있다"는 신고를 보고 확인해보니, 오른쪽 칸(#layoutsim-print-area)
@@ -15143,136 +15282,12 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           <div className="layoutsim-print-only" style={{ display: "none", fontFamily: serif, fontSize: 16, marginBottom: 8 }}>
             {boardName || "가구배치(시뮬레이션)"} — 공간 {spaceWidthM}m × {spaceDepthM}m ({todayISO()} 기준)
           </div>
-          {/* 줄자를 켜면 버튼 글자가 "줄자"→"줄자 (켜짐)"로 길어지고 "줄자 지우기" 버튼까지 새로 생기는데,
-              예전에는 이 안내문구 칸과 버튼 칸이 폭을 두고 빠듯하게 나눠 쓰고 있어서, 버튼 쪽이 길어지는
-              순간 이 줄 전체가 두 줄로 접히며(flexWrap) 그 아래 배치판(캔버스)이 한 줄만큼 아래로 밀려나
-              보였다. 안내문구 칸에 flex:1 + minWidth:0을 줘서, 버튼이 길어질 땐 안내문구 쪽이 먼저 줄어들며
-              (필요하면 문구 자체가 내부에서 줄바꿈) 흡수하게 하고, 버튼 칸은 flexShrink:0으로 항상 제 크기를
-              유지하게 해서 이 줄 자체가 두 줄로 접히는 일이 없도록 한다. */}
-          {/* "대지 테두리 위쪽 상단을 왼쪽 모형 목록 메뉴판 상단하고 일치시켜 달라(위로 좀 올렸으면)"는
-              요청으로, 이 안내문구+버튼 줄 아래 여백(marginBottom)을 없앴다 — 이 줄 자체(버튼들의 기능·
-              배치·크기)는 전혀 건드리지 않고, 그 아래 "대지" 박스와의 간격만 줄여 대지 테두리가 최대한
-              위로(왼쪽 모형 목록 패널의 맨 위와 같은 높이에 가깝게) 올라오도록 했다. */}
-          <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 0 }}>
-            {/* (2026-09-30 미세조정) "글씨도 많고 중구난방" 피드백으로, 조작법 전체를 항상 펼쳐두는 대신
-                한 줄(공간 크기)만 보여주고 자세한 조작법은 옆 ⓘ에 마우스를 올리면 그대로 볼 수 있게
-                옮겼다. 바깥 div의 flex:"1 1 auto"+minWidth:0은 위 주석의 이유(줄자 버튼 글자가 길어져도
-                이 줄이 두 줄로 안 접히게 하는 것) 그대로 유지한다. */}
-            <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 5 }}>
-              <span>공간 {spaceWidthM}m × {spaceDepthM}m</span>
-              <span
-                title="모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요(Ctrl+끌면 기존 선택에 더하기). 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게, Ctrl+방향키는 0.1cm 단위로 아주 정밀하게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요. 마우스 휠로 확대·축소할 수 있고, Shift를 누른 채 끌면 화면을 자유롭게 이동할 수 있어요."
-                style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", border: `1px solid ${C.lineSoft}`, color: C.muted, fontSize: 10, cursor: "help", flexShrink: 0 }}
-              >
-                ⓘ
-              </span>
-            </div>
-            <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
-              <button
-                onClick={() => setRulerMode((v) => !v)}
-                title="캔버스를 두 번 클릭하거나, 누른 채로 끌었다 놓아서 두 지점 사이 거리를 재보세요(실시간 미리보기)"
-                style={{
-                  ...miniBtnStyle,
-                  background: rulerMode ? C.ink : "transparent",
-                  color: rulerMode ? "#fff" : C.inkSoft,
-                  borderColor: rulerMode ? C.ink : C.lineSoft,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                📏 줄자{rulerMode ? " (켜짐)" : ""}
-              </button>
-              {rulerPoints.length > 0 && (
-                <button onClick={handleClearRuler} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>줄자 지우기</button>
-              )}
-              {/* (2026-09-30 미세조정) "줄자 옆에 좌표체킹 하는 부분 없애주고" 요청으로, 마우스 위치의
-                  cm 좌표(→ 389.0cm, 130.7cm)를 실시간으로 보여주던 부분을 없앴다 — 실제로 잰 거리
-                  자체는 캔버스 위 빨간 말풍선(📏 1.18m)에 그대로 나오니 정보 손실은 없다. 대신
-                  "줄자 기능을 조금 더 실용적으로" 요청에 맞춰, 다 잰 거리를 한 번에 복사해서 메모·견적서
-                  등에 바로 붙여넣을 수 있는 "복사" 버튼을 추가했다. */}
-              {rulerDistanceCm != null && (
-                <button
-                  onClick={handleCopyRulerDistance}
-                  title="방금 잰 거리를 복사해요(메모·견적서 등에 바로 붙여넣기)"
-                  style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}
-                >
-                  {rulerCopied ? "복사됨 ✓" : "📋 거리 복사"}
-                </button>
-              )}
-              {/* "이미지 임포트" 요청: 실제 도면(사진·스캔) 파일을 올려서 배경으로 깔아두고, 그 위에
-                  정확한 축척으로 모형을 배치할 수 있다. 파일을 고르면 바로 올라가지 않고 먼저 축척
-                  맞추기 모달(아래)이 뜬다. */}
-              <label
-                title="실제 도면(사진·스캔) 파일을 올려서 배경으로 깔아두고 축척을 맞춰보세요"
-                style={{ ...miniBtnStyle, whiteSpace: "nowrap", cursor: "pointer", display: "inline-block" }}
-              >
-                🖼 도면 업로드
-                <input type="file" accept="image/*" onChange={handleBgImageFileSelected} style={{ display: "none" }} />
-              </label>
-              {bgImageUrl && (
-                <button onClick={handleRemoveBgImage} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>도면 지우기</button>
-              )}
-              {/* "바둑판 없애기 넣기" 요청: 배치판의 눈금(격자) 배경을 껐다 켰다 할 수 있다. */}
-              <button
-                onClick={() => setShowGrid((v) => !v)}
-                title="배치판의 눈금(격자) 배경을 껐다 켰다 해요"
-                style={{
-                  ...miniBtnStyle,
-                  background: showGrid ? C.ink : "transparent",
-                  color: showGrid ? "#fff" : C.inkSoft,
-                  borderColor: showGrid ? C.ink : C.lineSoft,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                # 격자{showGrid ? " (켜짐)" : " (꺼짐)"}
-              </button>
-              {/* "마우스 휠로 줌인/줌아웃" 요청: 휠 말고도 버튼으로 확대·축소할 수 있게 하고, 지금
-                  배율(%)을 숫자로도 보여준다. 방을 딱 맞춰 보는 상태(100%)가 아닐 때만 "화면 맞춤"
-                  버튼이 나타나 언제든 원래 화면으로 되돌릴 수 있다. */}
-              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <button
-                  onClick={() => handleZoomButton(1 / 1.25)}
-                  disabled={zoomLevel <= ZOOM_MIN}
-                  title="화면 축소"
-                  style={{ ...miniBtnStyle, padding: "4px 9px", opacity: zoomLevel <= ZOOM_MIN ? 0.4 : 1 }}
-                >
-                  −
-                </button>
-                <span style={{ fontSize: 11, color: C.inkSoft, minWidth: 36, textAlign: "center" }}>
-                  {Math.round(zoomLevel * 100)}%
-                </span>
-                <button
-                  onClick={() => handleZoomButton(1.25)}
-                  disabled={zoomLevel >= ZOOM_MAX}
-                  title="화면 확대"
-                  style={{ ...miniBtnStyle, padding: "4px 9px", opacity: zoomLevel >= ZOOM_MAX ? 0.4 : 1 }}
-                >
-                  ＋
-                </button>
-                {(zoomLevel !== 1 || viewPan.x !== 0 || viewPan.y !== 0) && (
-                  <button onClick={handleResetView} title="방 전체가 다시 딱 보이도록 되돌려요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
-                    화면 맞춤
-                  </button>
-                )}
-                {/* "전체보기 버튼 만들어서 시야확보를 좋게해주고" 요청: 눌러서 켜면 위쪽 전체 메뉴·페이지
-                    여백까지 걷어낸 전체 화면 오버레이로 배치판을 띄워, 배치판 자체를 더 크게 볼 수 있게
-                    한다(위 MAX_CANVAS_W/H가 isFullView를 반영해 그만큼 더 크게 계산됨). Esc로도 닫힌다. */}
-                <button
-                  onClick={() => setIsFullView((v) => !v)}
-                  title={isFullView ? "전체보기를 끄고 원래 화면으로 돌아가요(Esc)" : "배치판을 화면 전체로 크게 봐요"}
-                  className="layoutsim-no-print"
-                  style={{
-                    ...miniBtnStyle,
-                    whiteSpace: "nowrap",
-                    background: isFullView ? C.ink : "transparent",
-                    color: isFullView ? "#fff" : C.inkSoft,
-                    borderColor: isFullView ? C.ink : C.lineSoft,
-                  }}
-                >
-                  {isFullView ? "⤡ 전체보기 닫기" : "⤢ 전체보기"}
-                </button>
-              </div>
-            </div>
-          </div>
+          {/* (2026-10-01 변경) "공간 WxH + 줄자·도면업로드·격자·확대축소·전체보기" 도구모음은 더 이상
+              여기(오른쪽 칸 맨 위)에서 별도로 한 줄을 차지하지 않는다 — "대지가 더 위로 올라왔으면"
+              요청으로 "저장된 배치안" 줄과 한 줄로 합쳐서 그 위(모형 목록/배치판 두 칸으로 나뉘기 전)로
+              옮겼다. 버튼들의 기능·동작은 전혀 바뀌지 않았고 그려지는 위치만 바뀌었다 — 자세한 경위는
+              그 통합된 줄 바로 위 주석 참고. 그 결과 이 칸(canvasColRef)은 인쇄용 숨김 제목 바로 다음
+              "대지" 박스로 곧장 이어진다. */}
           {/* (예전엔 선택 도구모음을 배치판 "위"에 별도 줄로 두고, 선택 여부에 따라 minHeight+
               visibility로 자리만 차지한 채 숨겼었다. 그런데 그렇게 하면 선택된 게 하나도 없을 때도
               그 줄의 자리(높이)가 항상 예약돼 있어서, 배치판이 그 예약된 높이만큼 아래로 내려와
