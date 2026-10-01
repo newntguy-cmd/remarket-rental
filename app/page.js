@@ -15864,20 +15864,28 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
             >
               🚧 좌측{selectedSingleItem.partitions?.left ? " (켜짐)" : ""}
             </button>
+            {/* "파티션 사이즈 수정해도 반영이 안된다" 신고(2026-10-01) — onBlur(입력칸에서 포커스가
+                빠져나갈 때 자동 적용)만 믿고 있었는데, 바로 옆 토글 버튼을 클릭하면 그 클릭이 먼저
+                처리되면서 길이 수정이 씹히는 경우가 있었다. 그래서 다른 입력칸들(가로·세로·좌표·각도)과
+                똑같은 방식 — Enter 또는 바로 옆 "적용" 버튼을 눌러야만 반영됨 — 으로 통일했다. */}
             {selectedSingleItem.partitions?.left && (
-              <input
-                type="number"
-                step="0.1"
-                value={partitionLeftLengthInput}
-                onChange={(e) => setPartitionLeftLengthInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleApplyPartitionLength("left");
-                }}
-                onBlur={() => handleApplyPartitionLength("left")}
-                placeholder="길이(cm)"
-                title="왼쪽 파티션 길이(cm) — 직접 입력해서 조절(책상 크기를 넘게는 못 늘림)"
-                style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
-              />
+              <>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={partitionLeftLengthInput}
+                  onChange={(e) => setPartitionLeftLengthInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleApplyPartitionLength("left");
+                  }}
+                  placeholder="길이(cm)"
+                  title="왼쪽 파티션 길이(cm) — 직접 입력 후 Enter 또는 옆 '적용' 버튼으로 반영(책상 크기를 넘게는 못 늘림)"
+                  style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
+                />
+                <button onClick={() => handleApplyPartitionLength("left")} title="입력한 왼쪽 파티션 길이를 반영해요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
+                  적용
+                </button>
+              </>
             )}
             <button
               onClick={() => handleTogglePartition("right")}
@@ -15893,19 +15901,23 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               🚧 우측{selectedSingleItem.partitions?.right ? " (켜짐)" : ""}
             </button>
             {selectedSingleItem.partitions?.right && (
-              <input
-                type="number"
-                step="0.1"
-                value={partitionRightLengthInput}
-                onChange={(e) => setPartitionRightLengthInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleApplyPartitionLength("right");
-                }}
-                onBlur={() => handleApplyPartitionLength("right")}
-                placeholder="길이(cm)"
-                title="오른쪽 파티션 길이(cm) — 직접 입력해서 조절(책상 크기를 넘게는 못 늘림)"
-                style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
-              />
+              <>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={partitionRightLengthInput}
+                  onChange={(e) => setPartitionRightLengthInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleApplyPartitionLength("right");
+                  }}
+                  placeholder="길이(cm)"
+                  title="오른쪽 파티션 길이(cm) — 직접 입력 후 Enter 또는 옆 '적용' 버튼으로 반영(책상 크기를 넘게는 못 늘림)"
+                  style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
+                />
+                <button onClick={() => handleApplyPartitionLength("right")} title="입력한 오른쪽 파티션 길이를 반영해요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
+                  적용
+                </button>
+              </>
             )}
             {/* "책상을 정면에서 봤을 때 북쪽에 앞쪽 파티션이 쳐져야지" 지적(2026-10-01)으로, 앞쪽은
                 상판 뒤쪽(y=0, 북쪽)에 붙는다(아래 렌더 쪽 참고). */}
@@ -15923,19 +15935,23 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               🚧 앞쪽{selectedSingleItem.partitions?.front ? " (켜짐)" : ""}
             </button>
             {selectedSingleItem.partitions?.front && (
-              <input
-                type="number"
-                step="0.1"
-                value={partitionFrontLengthInput}
-                onChange={(e) => setPartitionFrontLengthInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleApplyPartitionLength("front");
-                }}
-                onBlur={() => handleApplyPartitionLength("front")}
-                placeholder="길이(cm)"
-                title="앞쪽 파티션 길이(cm) — 직접 입력해서 조절(책상 크기를 넘게는 못 늘림)"
-                style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
-              />
+              <>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={partitionFrontLengthInput}
+                  onChange={(e) => setPartitionFrontLengthInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleApplyPartitionLength("front");
+                  }}
+                  placeholder="길이(cm)"
+                  title="앞쪽 파티션 길이(cm) — 직접 입력 후 Enter 또는 옆 '적용' 버튼으로 반영(책상 크기를 넘게는 못 늘림)"
+                  style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
+                />
+                <button onClick={() => handleApplyPartitionLength("front")} title="입력한 앞쪽 파티션 길이를 반영해요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
+                  적용
+                </button>
+              </>
             )}
           </>
         )}
@@ -16648,6 +16664,20 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               const leftPartitionLenPx = it.partitions?.left ? it.partitions.left.lengthCm * renderScale : 0;
               const rightPartitionLenPx = it.partitions?.right ? it.partitions.right.lengthCm * renderScale : 0;
               const frontPartitionLenPx = it.partitions?.front ? it.partitions.front.lengthCm * renderScale : 0;
+              // "좌측, 우측 아귀 딱맞게 구현해줘 북쪽 파티션은 거기까지 커버해줘" 신고(2026-10-01) —
+              // 앞쪽(북쪽) 파티션은 top: -두께px, 왼쪽·오른쪽 파티션은 top: 0으로 서로 다른 기준선에
+              // 붙다 보니, 두 파티션이 만나는 모서리(모서리 한 칸, 두께×두께 크기)가 어느 쪽에도
+              // 포함되지 않아 퍼즐처럼 딱 맞물리지 않고 빈틈이 생겼다. "북쪽 파티션이 거기까지
+              // 커버해줘"라는 말대로, 앞쪽 파티션의 가로 폭을 왼쪽·오른쪽 파티션이 있는 쪽으로 두께만큼
+              // 더 늘려서 그 모서리 칸까지 덮게 한다(왼쪽 파티션이 있으면 왼쪽으로, 오른쪽 파티션이
+              // 있으면 오른쪽으로 — 둘 다 있으면 양쪽 다). 왼쪽 파티션과 만나는 모서리는 둘 다 항상
+              // 모형의 왼쪽위 원점(0,0)에서 시작하므로 어떤 모양(ㄱ자 포함)이든 항상 맞물린다. 오른쪽
+              // 파티션과 만나는 모서리는, 앞쪽 파티션이 오른쪽 끝(baseWPx)까지 닿아있을 때만(= ㄱ자의
+              // 오른쪽 아래가 파이지 않은, 지금까지 나온 모든 책상 모양에서 해당) 맞물린다 — 혹시
+              // 앞으로 "오른쪽 아래가 파인" 모양이 생겨도, 그때는 두 파티션이 애초에 서로 떨어져 있어
+              // 늘려봐야 안 맞으므로 조건으로 한 번 더 막아둔다.
+              const frontExtendLeftPx = it.partitions?.front && it.partitions?.left ? partitionThicknessPx : 0;
+              const frontExtendRightPx = it.partitions?.front && it.partitions?.right && Math.abs(frontPartitionLenPx - baseWPx) < 0.01 ? partitionThicknessPx : 0;
               const isPoly = it.shapeType === "l" || it.shapeType === "u";
               const isCircle = it.shapeType === "circle";
               const isRoundEnd = it.shapeType === "roundend";
@@ -16919,15 +16949,20 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                         추가했는데, (2026-10-01 변경) "책상을 정면에서 봤을 때 북쪽에 앞쪽 파티션이
                         쳐져야지 왜 남쪽에 있냐" 지적으로, 상판 아래쪽(남쪽, top: baseHPx)이 아니라
                         위쪽(북쪽, top: -두께px) 변 바로 바깥에 붙도록 고쳤다. 왼쪽 끝(left: 0)을
-                        기준점으로 고정해서, 좌/우와 같은 "기준점은 항상 고정된 모서리" 원칙을 따른다. */}
+                        기준점으로 고정해서, 좌/우와 같은 "기준점은 항상 고정된 모서리" 원칙을 따른다.
+                        (2026-10-01 추가 변경) "좌측, 우측 아귀 딱맞게 구현해줘 북쪽 파티션은 거기까지
+                        커버해줘" 신고로, 왼쪽·오른쪽 파티션과 맞물리는 모서리 칸까지 덮도록
+                        frontExtendLeftPx/frontExtendRightPx만큼 좌우로 더 넓게 그린다(위 변수 선언부
+                        주석 참고) — 왼쪽/오른쪽 파티션 쪽 모서리에 빈틈이 생기지 않고 퍼즐처럼 딱
+                        맞물린다. */}
                     {it.partitions?.front && (
                       <div
                         title={`앞쪽 파티션 (두께 ${PARTITION_THICKNESS_CM}cm × 길이 ${it.partitions.front.lengthCm}cm)`}
                         style={{
                           position: "absolute",
-                          left: 0,
+                          left: -frontExtendLeftPx,
                           top: -partitionThicknessPx,
-                          width: frontPartitionLenPx,
+                          width: frontPartitionLenPx + frontExtendLeftPx + frontExtendRightPx,
                           height: partitionThicknessPx,
                           background: C.partitionColor,
                           border: `1px solid ${C.partitionColor}`,
