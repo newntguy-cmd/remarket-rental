@@ -761,10 +761,13 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   const editingShapeCategoryPrevRef = useRef("");
   const newShapeCategoryPrevRef = useRef("");
 
-  const [widthInput, setWidthInput] = useState("5");
-  const [depthInput, setDepthInput] = useState("4");
-  const [spaceWidthM, setSpaceWidthM] = useState(5);
-  const [spaceDepthM, setSpaceDepthM] = useState(4);
+  // "공간 사이즈 기본값을 가로6 세로3으로" 요청으로 처음 들어왔을 때(또는 새로고침 때) 보이는 기본
+  // 공간 크기를 5m×4m에서 6m×3m로 바꿨다. 이미 만들어둔 배치판을 불러오거나(handleLoadBoard) 직접
+  // 입력해서 "배치판 만들기"를 누르면 그 값으로 그대로 바뀌니, 이 기본값은 정말 "처음 화면"에만 쓰인다.
+  const [widthInput, setWidthInput] = useState("6");
+  const [depthInput, setDepthInput] = useState("3");
+  const [spaceWidthM, setSpaceWidthM] = useState(6);
+  const [spaceDepthM, setSpaceDepthM] = useState(3);
 
   // 배치판 위에 실제로 놓인 모형들. cm 단위 좌표로 들고 있다가 화면에 그릴 때만 축척(scale)을 곱해 px로 바꾼다.
   const [placedItems, setPlacedItems] = useState([]);
