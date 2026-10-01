@@ -485,6 +485,14 @@ function rotatedAabbSize(widthCm, depthCm, rotationDeg) {
   };
 }
 
+// "좌표에서 소수점 단위를 너무 많이 보여주지마, 소수점 두자리까지만" 요청(2026-10-01) — 회전·스냅·충돌
+// 계산을 거치고 나면 xCm/yCm가 124.20000000000001cm처럼 길게 떨어지는 경우가 있어서, 좌표 입력칸에
+// 보여줄 때만 소수점 둘째 자리까지로 반올림한다(실제 좌표값 자체·계산 정밀도는 그대로 두고, 화면에
+// 보이는 글자만 깔끔하게 다듬는 용도).
+function round2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
 // 한쪽 끝만 둥근 테이블(U형테이블 등: 위쪽은 폭 그대로 사각형으로 내려오다가, 맨 아래에서 폭과 같은
 // 지름의 반원으로 둥글게 마무리되는 모양) 외곽선을 SVG path로 그린다. 직선만으로는 표현할 수 없는
 // 곡선(반원)이 있어서 shapePolygonPoints(다각형)와 달리 path의 "d" 속성 문자열을 만들어 돌려준다.
@@ -2430,8 +2438,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       setManualWidthInput(String(selectedSingleItem.widthCm));
       setManualDepthInput(String(selectedSingleItem.depthCm));
       setManualNameInput(selectedSingleItem.name || "");
-      setManualXInput(String(selectedSingleItem.xCm));
-      setManualYInput(String(selectedSingleItem.yCm));
+      setManualXInput(String(round2(selectedSingleItem.xCm)));
+      setManualYInput(String(round2(selectedSingleItem.yCm)));
       const curRotation = selectedSingleItem.rotation != null ? selectedSingleItem.rotation : selectedSingleItem.rotated ? 90 : 0;
       setManualAngleInput(String(Math.round(curRotation)));
     }
@@ -2499,8 +2507,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     const newYCm = Math.min(Math.max(0, rawY), maxY);
     pushHistory();
     setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, xCm: newXCm, yCm: newYCm } : p)));
-    setManualXInput(String(newXCm));
-    setManualYInput(String(newYCm));
+    setManualXInput(String(round2(newXCm)));
+    setManualYInput(String(round2(newYCm)));
   }
 
   // "제품 선택하면 각도 넣어줘 — 지금 회전기능은 그대로 두고 각도 넣으면 조정되게" 요청. 90도 버튼이나
@@ -3125,41 +3133,179 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           있을 때만 그 chip들이 보인다). */}
       <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
         <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          {boards.length > 0 && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span>저장된 배치안:</span>
-              {boards.map((b) => (
-                <span key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  <button
-                    onClick={() => handleLoadBoard(b.id)}
-                    disabled={loadingBoardId === b.id}
-                    style={{ ...miniBtnStyle, borderColor: currentBoardId === b.id ? C.ink : undefined }}
-                  >
-                    {loadingBoardId === b.id ? "불러오는 중…" : b.name}
-                  </button>
-                  <button
-                    onClick={() => handleDeleteBoard(b.id)}
-                    title="이 배치안 삭제"
-                    style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 13 }}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-          {/* (2026-09-30 미세조정) "글씨도 많고 중구난방" 피드백으로, 조작법 전체를 항상 펼쳐두는 대신
-              한 줄(공간 크기)만 보여주고 자세한 조작법은 옆 ⓘ에 마우스를 올리면 그대로 볼 수 있게
-              옮겼다. */}
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <span>공간 {spaceWidthM}m × {spaceDepthM}m</span>
-            <span
-              title="모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요(Ctrl+끌면 기존 선택에 더하기). 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게, Ctrl+방향키는 0.1cm 단위로 아주 정밀하게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요. 마우스 휠로 확대·축소할 수 있고, Shift를 누른 채 끌면 화면을 자유롭게 이동할 수 있어요."
-              style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", border: `1px solid ${C.lineSoft}`, color: C.muted, fontSize: 10, cursor: "help", flexShrink: 0 }}
+          {/* (2026-10-01) "수정판이 배치판 안에 있으니 불편하다, 대지 위로 빼서 줄자 왼쪽에 대지
+              좌측끝 정렬로 줄자옆까지" 요청 — 모형을 하나라도 선택했을 땐, 배치판(대지) 위에
+              position:absolute로 떠서 모형을 가리던 선택 도구모음을 여기(줄자·도면업로드 버튼과
+              같은 줄, 그 왼쪽)로 옮겨서 보여준다. 이 칸 자체가 이미 대지와 같은 왼쪽 끝에서
+              시작하고(flex: "1 1 auto") 오른쪽 버튼 묶음(flexShrink: 0)은 자기 칸만큼만 차지하니,
+              선택 도구모음은 자연스럽게 "대지 왼쪽 끝부터 줄자 바로 앞까지"를 차지하게 된다(화면이
+              좁아 다 안 들어가면 평소처럼 줄바꿈됨). 선택이 없을 때는 원래대로 "저장된 배치안"·
+              "공간 WxH" 정보를 보여준다. */}
+          {selectedPlacedIds.size > 0 ? (
+            <div
+              className="layoutsim-no-print"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "6px 10px",
+                background: C.purpleBg,
+                border: `1px solid ${C.purple}`,
+                borderRadius: 8,
+                flexWrap: "wrap",
+              }}
             >
-              ⓘ
-            </span>
-          </span>
+              <span style={{ fontSize: 12, color: C.purple, fontWeight: 600 }}>
+                {selectedPlacedIds.size}개 선택됨
+              </span>
+              {/* 하나만 선택했을 때만 가로·세로를 숫자로 직접 입력해서 정확히 맞출 수 있다(여러 개를
+                  한꺼번에 선택했을 때는 "가로·세로"가 하나로 정해지지 않으므로 안 보여준다). */}
+              {selectedSingleItem && (
+                <>
+                  <input
+                    type="text"
+                    value={manualNameInput}
+                    onChange={(e) => setManualNameInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleApplyManualName();
+                    }}
+                    onBlur={handleApplyManualName}
+                    placeholder="이름"
+                    title="이 모형만의 이름(마우스를 올리면 보이는 말풍선·저장된 배치에 쓰임)"
+                    style={{ ...smallInputStyle, width: 100, boxSizing: "border-box" }}
+                  />
+                  <span style={{ fontSize: 12, color: C.lineSoft }}>|</span>
+                  {/* "소수점까지 인식되게 해줘" 요청 — step="0.1"을 줘서 4.5처럼 소수점 있는 값도
+                      스핀 버튼(▲▼)이 0.1 단위로 자연스럽게 움직이고, 직접 타이핑한 소수점 값도
+                      아무 위화감 없이 그대로 입력되게 한다(Number()로 읽는 부분은 원래부터 소수점을
+                      그대로 인식했다 — step만 정수 1로 남아있던 게 어색함의 원인이었다). */}
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={manualWidthInput}
+                    onChange={(e) => setManualWidthInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleApplyManualSize();
+                    }}
+                    placeholder="가로(cm)"
+                    title="가로(cm)"
+                    style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
+                  />
+                  <span style={{ fontSize: 12, color: C.muted }}>×</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={manualDepthInput}
+                    onChange={(e) => setManualDepthInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleApplyManualSize();
+                    }}
+                    placeholder="세로(cm)"
+                    title="세로(cm)"
+                    style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
+                  />
+                  <button onClick={handleApplyManualSize} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>적용</button>
+                  <span style={{ fontSize: 12, color: C.lineSoft }}>|</span>
+                  {/* "제품 클릭해서 좌표값 넣어주는 기능 — 제일 정확하지" 요청 — 끌지 않고도 왼쪽위
+                      모서리 좌표(x, y, cm)를 숫자로 직접 입력해서 정확한 자리에 둘 수 있다. */}
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={manualXInput}
+                    onChange={(e) => setManualXInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleApplyManualPosition();
+                    }}
+                    placeholder="X(cm)"
+                    title="왼쪽위 모서리 X좌표(cm)"
+                    style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
+                  />
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={manualYInput}
+                    onChange={(e) => setManualYInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleApplyManualPosition();
+                    }}
+                    placeholder="Y(cm)"
+                    title="왼쪽위 모서리 Y좌표(cm)"
+                    style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
+                  />
+                  <button onClick={handleApplyManualPosition} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>이동</button>
+                  <span style={{ fontSize: 12, color: C.lineSoft }}>|</span>
+                  {/* "제품 선택하면 각도 넣어줘 — 회전기능은 그대로 두고 각도 넣으면 조정되게" 요청 —
+                      90도 버튼(⟳)·동그라미 자유회전 손잡이는 그대로 둔 채, 숫자로 각도를 직접 입력하는
+                      방법만 하나 더 추가. */}
+                  <input
+                    type="number"
+                    step="1"
+                    value={manualAngleInput}
+                    onChange={(e) => setManualAngleInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleApplyManualAngle();
+                    }}
+                    placeholder="각도"
+                    title="회전 각도(도, 0~359)"
+                    style={{ ...smallInputStyle, width: 60, boxSizing: "border-box" }}
+                  />
+                  <button onClick={handleApplyManualAngle} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>각도 적용</button>
+                </>
+              )}
+              {selectedPlacedIds.size >= 2 && (
+                <button onClick={handleGroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🔗 그룹화</button>
+              )}
+              {placedItems.some((it) => selectedPlacedIds.has(it.id) && it.groupId) && (
+                <button onClick={handleUngroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>⛓️‍💥 그룹 해제</button>
+              )}
+              {selectedPlacedIds.size >= 2 && (
+                <button onClick={handleAlignTopSelected} title="선택한 모형들을 가장 위에 있는 모형에 맞춰 위쪽 끝을 나란히 맞춰요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>⬆ 상단맞추기</button>
+              )}
+              {selectedPlacedIds.size >= 3 && (
+                <button onClick={handleDistributeSelected} title="양 끝 모형은 그대로 두고, 그 사이 모형들의 간격을 똑같이 맞춰요(가로로 나란하면 가로로, 세로로 나란하면 세로로 자동 판단)" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>↔ 간격 동일하게</button>
+              )}
+              <button onClick={handleRemoveSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🗑 삭제</button>
+              <button onClick={() => setSelectedPlacedIds(new Set())} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>선택 해제</button>
+            </div>
+          ) : (
+            <>
+              {boards.length > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span>저장된 배치안:</span>
+                  {boards.map((b) => (
+                    <span key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <button
+                        onClick={() => handleLoadBoard(b.id)}
+                        disabled={loadingBoardId === b.id}
+                        style={{ ...miniBtnStyle, borderColor: currentBoardId === b.id ? C.ink : undefined }}
+                      >
+                        {loadingBoardId === b.id ? "불러오는 중…" : b.name}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteBoard(b.id)}
+                        title="이 배치안 삭제"
+                        style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 13 }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {/* (2026-09-30 미세조정) "글씨도 많고 중구난방" 피드백으로, 조작법 전체를 항상 펼쳐두는 대신
+                  한 줄(공간 크기)만 보여주고 자세한 조작법은 옆 ⓘ에 마우스를 올리면 그대로 볼 수 있게
+                  옮겼다. */}
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <span>공간 {spaceWidthM}m × {spaceDepthM}m</span>
+                <span
+                  title="모형을 끌어다 놓거나, 이미 놓은 모형을 끌어서 옮겨보세요. 모형을 클릭하면 선택되고(테두리 강조), 빈 곳을 끌면 여러 개를 한꺼번에 선택할 수 있어요(Ctrl+끌면 기존 선택에 더하기). 방향키로 세밀하게 옮기고(Shift+방향키는 더 크게, Ctrl+방향키는 0.1cm 단위로 아주 정밀하게), Ctrl+C/Ctrl+V로 복사·붙여넣기도 할 수 있어요. 마우스 휠로 확대·축소할 수 있고, Shift를 누른 채 끌면 화면을 자유롭게 이동할 수 있어요."
+                  style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", border: `1px solid ${C.lineSoft}`, color: C.muted, fontSize: 10, cursor: "help", flexShrink: 0 }}
+                >
+                  ⓘ
+                </span>
+              </span>
+            </>
+          )}
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
           <button
@@ -3701,142 +3847,9 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               boxShadow: "inset 0 1px 4px rgba(28,43,58,0.06)",
             }}
           >
-            {/* 선택 도구모음 — 여러 개를 묶어서 그룹으로 만들거나 풀고, 한꺼번에 지우거나 선택을 해제할
-                수 있다. 배치판(canvasRef) 안쪽에 position:absolute로 떠 있는 오버레이라서, 선택된 게
-                있을 때만 조건부로 그려도(마운트/언마운트) 배치판 자체의 크기·위치에는 전혀 영향을
-                주지 않는다(배치판이 항상 같은 자리에 "고정"돼 있음). */}
-            {selectedPlacedIds.size > 0 && (
-              <div
-                className="layoutsim-no-print"
-                style={{
-                  position: "absolute",
-                  top: 8,
-                  left: 8,
-                  zIndex: 40,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "6px 10px",
-                  background: C.purpleBg,
-                  border: `1px solid ${C.purple}`,
-                  borderRadius: 8,
-                  flexWrap: "wrap",
-                  boxShadow: "0 2px 6px rgba(28,43,58,0.18)",
-                }}
-              >
-                <span style={{ fontSize: 12, color: C.purple, fontWeight: 600 }}>
-                  {selectedPlacedIds.size}개 선택됨
-                </span>
-                {/* 하나만 선택했을 때만 가로·세로를 숫자로 직접 입력해서 정확히 맞출 수 있다(여러 개를
-                    한꺼번에 선택했을 때는 "가로·세로"가 하나로 정해지지 않으므로 안 보여준다). */}
-                {selectedSingleItem && (
-                  <>
-                    <input
-                      type="text"
-                      value={manualNameInput}
-                      onChange={(e) => setManualNameInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleApplyManualName();
-                      }}
-                      onBlur={handleApplyManualName}
-                      placeholder="이름"
-                      title="이 모형만의 이름(마우스를 올리면 보이는 말풍선·저장된 배치에 쓰임)"
-                      style={{ ...smallInputStyle, width: 100, boxSizing: "border-box" }}
-                    />
-                    <span style={{ fontSize: 12, color: C.lineSoft }}>|</span>
-                    {/* "소수점까지 인식되게 해줘" 요청 — step="0.1"을 줘서 4.5처럼 소수점 있는 값도
-                        스핀 버튼(▲▼)이 0.1 단위로 자연스럽게 움직이고, 직접 타이핑한 소수점 값도
-                        아무 위화감 없이 그대로 입력되게 한다(Number()로 읽는 부분은 원래부터 소수점을
-                        그대로 인식했다 — step만 정수 1로 남아있던 게 어색함의 원인이었다). */}
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={manualWidthInput}
-                      onChange={(e) => setManualWidthInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleApplyManualSize();
-                      }}
-                      placeholder="가로(cm)"
-                      title="가로(cm)"
-                      style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
-                    />
-                    <span style={{ fontSize: 12, color: C.muted }}>×</span>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={manualDepthInput}
-                      onChange={(e) => setManualDepthInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleApplyManualSize();
-                      }}
-                      placeholder="세로(cm)"
-                      title="세로(cm)"
-                      style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
-                    />
-                    <button onClick={handleApplyManualSize} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>적용</button>
-                    <span style={{ fontSize: 12, color: C.lineSoft }}>|</span>
-                    {/* "제품 클릭해서 좌표값 넣어주는 기능 — 제일 정확하지" 요청 — 끌지 않고도 왼쪽위
-                        모서리 좌표(x, y, cm)를 숫자로 직접 입력해서 정확한 자리에 둘 수 있다. */}
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={manualXInput}
-                      onChange={(e) => setManualXInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleApplyManualPosition();
-                      }}
-                      placeholder="X(cm)"
-                      title="왼쪽위 모서리 X좌표(cm)"
-                      style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
-                    />
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={manualYInput}
-                      onChange={(e) => setManualYInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleApplyManualPosition();
-                      }}
-                      placeholder="Y(cm)"
-                      title="왼쪽위 모서리 Y좌표(cm)"
-                      style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
-                    />
-                    <button onClick={handleApplyManualPosition} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>이동</button>
-                    <span style={{ fontSize: 12, color: C.lineSoft }}>|</span>
-                    {/* "제품 선택하면 각도 넣어줘 — 회전기능은 그대로 두고 각도 넣으면 조정되게" 요청 —
-                        90도 버튼(⟳)·동그라미 자유회전 손잡이는 그대로 둔 채, 숫자로 각도를 직접 입력하는
-                        방법만 하나 더 추가. */}
-                    <input
-                      type="number"
-                      step="1"
-                      value={manualAngleInput}
-                      onChange={(e) => setManualAngleInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleApplyManualAngle();
-                      }}
-                      placeholder="각도"
-                      title="회전 각도(도, 0~359)"
-                      style={{ ...smallInputStyle, width: 60, boxSizing: "border-box" }}
-                    />
-                    <button onClick={handleApplyManualAngle} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>각도 적용</button>
-                  </>
-                )}
-                {selectedPlacedIds.size >= 2 && (
-                  <button onClick={handleGroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🔗 그룹화</button>
-                )}
-                {placedItems.some((it) => selectedPlacedIds.has(it.id) && it.groupId) && (
-                  <button onClick={handleUngroupSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>⛓️‍💥 그룹 해제</button>
-                )}
-                {selectedPlacedIds.size >= 2 && (
-                  <button onClick={handleAlignTopSelected} title="선택한 모형들을 가장 위에 있는 모형에 맞춰 위쪽 끝을 나란히 맞춰요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>⬆ 상단맞추기</button>
-                )}
-                {selectedPlacedIds.size >= 3 && (
-                  <button onClick={handleDistributeSelected} title="양 끝 모형은 그대로 두고, 그 사이 모형들의 간격을 똑같이 맞춰요(가로로 나란하면 가로로, 세로로 나란하면 세로로 자동 판단)" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>↔ 간격 동일하게</button>
-                )}
-                <button onClick={handleRemoveSelected} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>🗑 삭제</button>
-                <button onClick={() => setSelectedPlacedIds(new Set())} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>선택 해제</button>
-              </div>
-            )}
+            {/* (2026-10-01) 선택 도구모음은 "대지 안에 있으니 불편하다"는 요청으로 배치판 밖, 줄자
+                버튼 줄 왼쪽으로 옮겼다(위 도구모음 줄 참고). 예전엔 여기 배치판(canvasRef) 안쪽에
+                position:absolute 오버레이로 떠서 모형을 가리고 있었다. */}
             {placedItems.map((it) => {
               // 예전에 저장된 배치(rotated: true/false만 있던 옛 데이터)도 그대로 이어받는다.
               const rotation = it.rotation != null ? it.rotation : it.rotated ? 90 : 0;
