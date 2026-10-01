@@ -4366,6 +4366,46 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
   // 품목별 데이터: 같은 품목명+규격끼리 수량을 합산해서 "현장에 총 몇 개인지" 한눈에 보여준다.
   // 품목/규격/총수량 머리글을 눌러 정렬 기준·방향을 바꿀 수 있다(기본은 총수량 많은순).
   const rawGroupedStats = useMemo(() => groupItemQuantities(items, excludedIdxs), [items, excludedIdxs]);
+
+  // (2026-10-01) "품목별데이터에서 체크체크 해서 병합하면 수량 합산되게끔" 요청 — 품목명·규격이 달라
+  // 자동으로는(위 groupItemQuantities) 안 합쳐지는 행들도(예: 파티션 H1800*W700 / H1800*W500처럼
+  // 규격이 제각각인 경우) 체크박스로 직접 골라 수동으로 합칠 수 있게 한다. 여기는 등록된 데이터가
+  // 아니라 그때그때 붙여넣어 쓰는 계산기라 DB에 저장하지 않고 화면 상태로만 가지고 있다가, 붙여넣은
+  // 내용이 바뀌면(원본 행 구성이 달라지므로) 같이 초기화된다.
+  const [manualMerges, setManualMerges] = useState([]); // [{ repKey, memberKeys: [key, ...] }]
+  useEffect(() => {
+    setManualMerges([]);
+  }, [rawItems]);
+
+  // rawGroupedStats에 manualMerges를 겹쳐서, 병합된 행은 대표 품목명·규격 하나로 수량을 합산해 보여주고
+  // (memberKeys·mergedCount로 몇 건이 합쳐졌는지 추적) 병합 안 된 행은 그대로 둔다.
+  const mergedGroupStats = useMemo(() => {
+    if (manualMerges.length === 0) return rawGroupedStats.map((g) => ({ ...g, mergedCount: 1, memberKeys: [g.key] }));
+    const keyToGroup = new Map(rawGroupedStats.map((g) => [g.key, g]));
+    const consumedKeys = new Set();
+    const merged = [];
+    for (const m of manualMerges) {
+      const rep = keyToGroup.get(m.repKey);
+      if (!rep) continue;
+      let qty = 0;
+      let idxs = [];
+      const memberKeys = [];
+      for (const k of m.memberKeys) {
+        const g = keyToGroup.get(k);
+        if (!g) continue;
+        qty += g.qty;
+        idxs = idxs.concat(g.idxs);
+        memberKeys.push(k);
+        consumedKeys.add(k);
+      }
+      if (memberKeys.length > 0) merged.push({ key: rep.key, item: rep.item, spec: rep.spec, qty, idxs, mergedCount: memberKeys.length, memberKeys });
+    }
+    for (const g of rawGroupedStats) {
+      if (!consumedKeys.has(g.key)) merged.push({ ...g, mergedCount: 1, memberKeys: [g.key] });
+    }
+    return merged;
+  }, [rawGroupedStats, manualMerges]);
+
   const [groupSortKey, setGroupSortKey] = useState("qty"); // "item" | "spec" | "qty"
   const [groupSortDir, setGroupSortDir] = useState("desc"); // "asc" | "desc"
   function toggleGroupSort(key) {
@@ -4377,7 +4417,7 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
     }
   }
   const groupedItemStats = useMemo(() => {
-    const arr = [...rawGroupedStats];
+    const arr = [...mergedGroupStats];
     const dir = groupSortDir === "asc" ? 1 : -1;
     arr.sort((a, b) => {
       if (groupSortKey === "qty") return (a.qty - b.qty) * dir;
@@ -4386,7 +4426,7 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
       return (av || "").localeCompare(bv || "", "ko") * dir;
     });
     return arr;
-  }, [rawGroupedStats, groupSortKey, groupSortDir]);
+  }, [mergedGroupStats, groupSortKey, groupSortDir]);
   const groupedItemTotalQty = groupedItemStats.reduce((s, r) => s + r.qty, 0);
 
   // 카드① 품목별 데이터의 체크박스 선택삭제 상태(붙여넣은 내용이 바뀌면 초기화)
@@ -4416,6 +4456,24 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
       return next;
     });
     setCheckedGroupKeys(new Set());
+  }
+  // 체크한 품목 2종 이상을 하나로 합친다 — 화면에 먼저 보이는(정렬 기준 첫 번째) 품목의 이름·규격을
+  // 대표로 쓰고, 나머지 수량은 거기로 더해진다. 이미 합쳐진 행을 또 다른 행과 같이 체크해서 누르면,
+  // 기존 병합은 통째로 풀어내고(memberKeys 전체를) 새로 고른 범위로 다시 합친다.
+  function handleMergeSelectedGroups() {
+    const chosen = groupedItemStats.filter((r) => checkedGroupKeys.has(r.key));
+    if (chosen.length < 2) return;
+    const repKey = chosen[0].key;
+    const allMemberKeys = Array.from(new Set(chosen.flatMap((r) => r.memberKeys || [r.key])));
+    setManualMerges((prev) => {
+      const filtered = prev.filter((m) => !chosen.some((r) => r.key === m.repKey));
+      return [...filtered, { repKey, memberKeys: allMemberKeys }];
+    });
+    setCheckedGroupKeys(new Set());
+  }
+  // 합친 걸 다시 원래 행들로 풀어낸다(원본 붙여넣은 데이터는 손댄 적이 없으니 그냥 병합 기록만 지우면 됨).
+  function handleUnmergeGroup(repKey) {
+    setManualMerges((prev) => prev.filter((m) => m.repKey !== repKey));
   }
 
   // 카드② 톤수 계산의 체크박스 선택삭제 상태(원본 행 인덱스 기준, 붙여넣은 내용이 바뀌면 초기화)
@@ -4575,6 +4633,14 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
               </button>
               <button
                 type="button"
+                onClick={handleMergeSelectedGroups}
+                disabled={checkedGroupKeys.size < 2}
+                style={{ ...ghostBtnStyle, opacity: checkedGroupKeys.size < 2 ? 0.5 : 1 }}
+              >
+                {`선택 병합${checkedGroupKeys.size >= 2 ? ` (${checkedGroupKeys.size})` : ""}`}
+              </button>
+              <button
+                type="button"
                 onClick={handleDeleteSelectedGroups}
                 disabled={checkedGroupKeys.size === 0}
                 style={{ ...ghostBtnStyle, opacity: checkedGroupKeys.size === 0 ? 0.5 : 1 }}
@@ -4583,7 +4649,7 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
               </button>
             </div>
             <div className="qtc-no-print" style={{ fontSize: 11.5, color: C.muted, marginTop: -6, marginBottom: 10 }}>
-              * 여기서 "선택삭제"는 이 계산(품목별 데이터·톤수·배송비)에서만 제외하는 거예요. 붙여넣은 원본 텍스트는 그대로 있고, 다시 붙여넣으면 복원돼요.
+              * "선택 병합"은 이름·규격이 달라도 2개 이상 체크하면 수량을 하나로 더해서 보여줘요(먼저 체크박스로 고르세요). "선택삭제"는 이 계산(품목별 데이터·톤수·배송비)에서만 제외하는 거예요. 둘 다 붙여넣은 원본 텍스트는 그대로 있고, 다시 붙여넣으면 복원돼요.
             </div>
             <div className="qtc-no-print" style={{ fontSize: 11.5, color: C.muted, marginTop: -6, marginBottom: 10 }}>
               칸 경계를 드래그하면 너비를 늘이고 줄일 수 있어요.
@@ -4648,7 +4714,24 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
                     <div className="qtc-no-print">
                       <input type="checkbox" checked={checkedGroupKeys.has(r.key)} onChange={() => toggleGroupChecked(r.key)} />
                     </div>
-                    <div>{r.item}</div>
+                    <div>
+                      {r.item}
+                      {r.mergedCount > 1 && (
+                        <span style={{ marginLeft: 6, fontSize: 11, color: C.purple, background: C.purpleBg, borderRadius: 4, padding: "1px 5px" }}>
+                          {r.mergedCount}건 합산
+                        </span>
+                      )}
+                      {r.mergedCount > 1 && (
+                        <button
+                          type="button"
+                          className="qtc-no-print"
+                          onClick={() => handleUnmergeGroup(r.key)}
+                          style={{ marginLeft: 6, border: "none", background: "none", cursor: "pointer", fontSize: 11, color: C.muted, textDecoration: "underline", padding: 0 }}
+                        >
+                          병합 해제
+                        </button>
+                      )}
+                    </div>
                     <div>{r.spec || "-"}</div>
                     <div style={{ textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</div>
                   </div>
@@ -4690,7 +4773,10 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
                 <tbody>
                   {groupedItemStats.map((r) => (
                     <tr key={r.key}>
-                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.item}</td>
+                      <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>
+                        {r.item}
+                        {r.mergedCount > 1 ? `(${r.mergedCount}건 합산)` : ""}
+                      </td>
                       <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px" }}>{r.spec || "-"}</td>
                       <td style={{ border: `1px solid ${C.line}`, padding: "8px 10px", textAlign: "right" }}>{r.qty.toLocaleString("ko-KR")}</td>
                     </tr>
