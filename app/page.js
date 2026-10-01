@@ -14731,9 +14731,9 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           shapeId: shape.id,
           name: shape.name,
           shapeType: shape.shape_type || "rect",
-          // "파티션은 책상에만 국한시켜줘" 요청(2026-10-01) — 파티션을 "책상류"에만 붙일 수 있게
-          // 제한하려면, 이 모형이 어느 카테고리(책상류/의자류/테이블류/…)에서 왔는지 놓을 때 같이
-          // 저장해둬야 한다(모형 목록 쪽 shape.category를 그대로 가져옴).
+          // "파티션은 책상에만 국한시켜줘" 요청(2026-10-01) — "파티션 추가" 버튼을 "책상류"를
+          // 선택했을 때만 보여주려면, 이 모형이 어느 카테고리(책상류/의자류/테이블류/…)에서 왔는지
+          // 놓을 때 같이 저장해둬야 한다(모형 목록 쪽 shape.category를 그대로 가져옴).
           category: shape.category || "기타",
           widthCm,
           depthCm,
@@ -14744,10 +14744,6 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           rotation: 0,
           flipped: false,
           groupId: null,
-          // "파티션 넣기 기능" 요청(2026-10-01) — 상판 좌/우에 붙인 파티션 정보. 기본은 없음(null).
-          // 있으면 { left: { lengthCm }, right: { lengthCm }, front: { lengthCm } } 형태로 한쪽만,
-          // 또는 세 변 중 몇 개든 동시에 가질 수 있다("책상류"일 때만 붙일 수 있음 — 아래 category 참고).
-          partitions: null,
         },
       ]);
     } else if (payload.type === "placed") {
@@ -15032,14 +15028,6 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 짧게 보이지만(윗 주석 참고), 모형 하나하나마다 자기만의 이름(예: "박대표 책상", "3층 회의실 A")을
   // 붙여두면 title(마우스 올리면 뜨는 말풍선)·저장된 배치 데이터에서 구분하기 편하다.
   const [manualNameInput, setManualNameInput] = useState("");
-  // "파티션 넣기 기능을 하나 만들어줘... 길이조절 가능하게 해주고 직접 입력해서" 요청(2026-10-01) —
-  // 상판 좌/우/앞에 붙인 파티션의 길이(cm)를 숫자로 직접 입력해서 조절하는 칸. 가로·세로·좌표·각도
-  // 입력칸들과 똑같은 방식(값 비어있으면 입력칸만 비어있고, 적용을 눌러야 실제로 반영됨)이다.
-  // (2026-10-01 추가) "도형(책상)을 누르면... 왼쪽 오른쪽 앞에 모두 파티션이 칠 수 있으면 된다"
-  // 요청으로, 앞쪽(front)도 좌/우와 똑같은 방식으로 하나 더 생겼다.
-  const [partitionLeftLengthInput, setPartitionLeftLengthInput] = useState("");
-  const [partitionRightLengthInput, setPartitionRightLengthInput] = useState("");
-  const [partitionFrontLengthInput, setPartitionFrontLengthInput] = useState("");
   // 선택이 "다른 모형으로" 바뀔 때만 입력칸을 그 모형의 현재 크기·이름으로 다시 채운다(id 기준) —
   // 입력하는 도중에 같은 모형의 다른 값(예: 드래그로 살짝 움직인 좌표) 때문에 타이핑 중인 값이
   // 지워지지 않게.
@@ -15053,71 +15041,77 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       setManualYInput(String(round2(selectedSingleItem.yCm)));
       const curRotation = selectedSingleItem.rotation != null ? selectedSingleItem.rotation : selectedSingleItem.rotated ? 90 : 0;
       setManualAngleInput(String(Math.round(curRotation)));
-      setPartitionLeftLengthInput(selectedSingleItem.partitions?.left ? String(round2(selectedSingleItem.partitions.left.lengthCm)) : "");
-      setPartitionRightLengthInput(selectedSingleItem.partitions?.right ? String(round2(selectedSingleItem.partitions.right.lengthCm)) : "");
-      setPartitionFrontLengthInput(selectedSingleItem.partitions?.front ? String(round2(selectedSingleItem.partitions.front.lengthCm)) : "");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSingleItemId]);
 
-  // "도형 클릭후 상판 좌측 우측 선택하면 거기에 맞춰서 파티션이 자동으로 입혀지게" 요청(2026-10-01) —
-  // 선택한 모형 하나의 왼쪽(left)·오른쪽(right)·앞쪽(front) 변에 파티션을 붙이거나(없으면) 떼어낸다
-  // (있으면). (2026-10-01 추가 수정) "퍼즐 왼쪽은 120이 아니잖아 책상크기 만큼만 파티션을 쳐야지"
-  // 신고로, 기본 길이는 더 이상 무조건 widthCm/depthCm이 아니라 partitionMaxLengthCm으로 — ㄱ자처럼
-  // 파인 모서리가 있으면 그만큼 짧게 — 계산한다. 두께는 항상 PARTITION_THICKNESS_CM(4.5cm) 고정.
-  // 파티션은 독립된 배치 아이템이 아니라 이 모형 데이터(it.partitions)에 딸려있는 한 세트로 취급해서,
-  // 모형을 옮기거나 돌리거나 지우면 파티션도 자동으로 같이 움직이거나 같이 지워진다(사용자 선택:
-  // "붙어있는 도형과 한 세트로").
-  const PARTITION_SIDE_SETTERS = {
-    left: setPartitionLeftLengthInput,
-    right: setPartitionRightLengthInput,
-    front: setPartitionFrontLengthInput,
-  };
-  function handleTogglePartition(side) {
+  // "파티션 생기니까 도형이 여기 붙었다 저기 붙었다 정신을 못차린다"(책상에 파티션이 붙어있으니 책상
+  // 자체를 자유롭게 끌어 옮기기 힘들어짐) + "파티션 길이조절이 안된다"(아래 가로·세로 입력칸에
+  // 묻어가지 못하고 따로 만든 길이 입력칸이 제대로 안 먹음) + "파티션 자유이동 기능도 넣어줘"(변에서
+  // 완전히 떼어내 배치판 아무 곳에나 독립적으로 놓을 수 있게) — 이 세 가지 신고(2026-10-01 3차)를
+  // 한 번에 해결하기 위해, 파티션을 "책상 모형 데이터(it.partitions)에 딸려있는 한 세트"가 아니라
+  // 책상·의자처럼 배치판 위의 독립된 모형(shapeType: "partition") 하나로 바꿨다. 이러면:
+  //  ① 책상에는 더 이상 아무것도 "붙어" 있지 않으므로 책상을 끌 때 파티션이 간섭하지 않고(자유이동
+  //     문제 해결), ② 파티션도 다른 모형과 똑같이 끌기·회전·삭제·Ctrl+Z가 되고(자유이동 기능 자체),
+  //     ③ 길이를 바꾸는 것도 이미 잘 작동하는 공용 "가로·세로 직접 입력(Enter 또는 적용 버튼)" 칸을
+  //     그대로 쓰게 되어(아래 가로=widthCm을 "길이"로 쓴다) 따로 만들었던(그리고 말썽이었던) 전용
+  //     길이 입력칸이 더 이상 필요 없다. "책상류를 선택했을 때만 뜨는 버튼"은 그대로 남겨뒀지만,
+  //     이제 그 버튼은 파티션을 "토글(붙이기/떼기)"하는 게 아니라, 그 책상 옆에 알맞은 길이로
+  //     새 파티션 모형 하나를 "만들어 놓아주는" 역할만 한다 — 그 다음부터는 책상과 완전히 별개로
+  //     자유롭게 움직일 수 있다.
+  function handleAddPartitionItem(side) {
     if (!selectedSingleItem) return;
-    // "파티션은 책상에만 국한시켜줘" 요청 — 버튼 자체를 "책상류"일 때만 보여주지만(위 렌더 쪽),
-    // 혹시 모를 경우를 대비해 실제로 붙이는 함수에서도 한 번 더 막아둔다.
     if (selectedSingleItem.category !== "책상류") return;
-    const it = selectedSingleItem;
-    const already = !!it.partitions?.[side];
-    const defaultLengthCm = partitionMaxLengthCm(it, side);
+    const desk = selectedSingleItem;
+    const deskRotation = desk.rotation != null ? desk.rotation : desk.rotated ? 90 : 0;
+    const aabb = rotatedAabbSize(desk.widthCm, desk.depthCm, deskRotation);
+    // partitionMaxLengthCm은 ㄱ자 책상의 파인 모서리까지 고려해서 "그 변에 실제로 책상이 맞닿아 있는
+    // 길이"를 계산하는데, 이 계산은 돌리기 전(로컬) 좌표계를 기준으로 한다. 책상이 0도/180도로 놓여
+    // 있을 때만 이 로컬 좌/우/앞 방향이 화면에서도 그대로 좌/우/앞이므로 그 값을 쓰고, 90도 등으로
+    // 돌아간 책상은 방향이 뒤섞이므로 더 간단하게 바깥 네모(aabb) 치수로 대신한다 — 어차피 이제
+    // 파티션은 독립된 모형이라 자리·길이를 자유롭게 다시 맞출 수 있으니, 처음 놓이는 자리는 "대략
+    // 책상 옆"이면 충분하다.
+    const axisAligned = deskRotation % 180 === 0;
+    const lengthCm = round2(axisAligned ? partitionMaxLengthCm(desk, side) : side === "front" ? aabb.w : aabb.h);
+    let widthCm, depthCm, xCm, yCm;
+    if (side === "left") {
+      widthCm = PARTITION_THICKNESS_CM;
+      depthCm = lengthCm;
+      xCm = desk.xCm - PARTITION_THICKNESS_CM;
+      yCm = desk.yCm;
+    } else if (side === "right") {
+      widthCm = PARTITION_THICKNESS_CM;
+      depthCm = lengthCm;
+      xCm = desk.xCm + aabb.w;
+      yCm = desk.yCm;
+    } else {
+      widthCm = lengthCm;
+      depthCm = PARTITION_THICKNESS_CM;
+      xCm = desk.xCm;
+      yCm = desk.yCm - PARTITION_THICKNESS_CM;
+    }
+    xCm = Math.max(0, xCm);
+    yCm = Math.max(0, yCm);
     pushHistory();
-    setPlacedItems((prev) =>
-      prev.map((p) => {
-        if (p.id !== it.id) return p;
-        const nextPartitions = { ...(p.partitions || {}) };
-        if (already) {
-          delete nextPartitions[side];
-        } else {
-          nextPartitions[side] = { lengthCm: partitionMaxLengthCm(p, side) };
-        }
-        return { ...p, partitions: Object.keys(nextPartitions).length > 0 ? nextPartitions : null };
-      })
-    );
-    PARTITION_SIDE_SETTERS[side](already ? "" : String(round2(defaultLengthCm)));
-  }
-
-  // 파티션 길이를 숫자로 직접 입력해서 조절한다("길이조절 가능하게 해주고 직접 입력해서" 요청). 최소
-  // 1cm는 보장하고(가로·세로 직접입력과 같은 규칙), 위로는 partitionMaxLengthCm(그 변에 실제로 책상이
-  // 맞닿아 있는 길이)을 넘지 못하게 막는다 — "책상크기 만큼만 파티션을 쳐야지" 요청대로, 책상보다 더
-  // 길게 삐져나온 파티션은 만들 수 없다(짧게는 자유롭게 줄일 수 있다).
-  const PARTITION_SIDE_INPUTS = {
-    left: partitionLeftLengthInput,
-    right: partitionRightLengthInput,
-    front: partitionFrontLengthInput,
-  };
-  function handleApplyPartitionLength(side) {
-    if (!selectedSingleItem) return;
-    const it = selectedSingleItem;
-    if (!it.partitions?.[side]) return;
-    const raw = PARTITION_SIDE_INPUTS[side];
-    const maxLengthCm = partitionMaxLengthCm(it, side);
-    const newLengthCm = Math.min(maxLengthCm, Math.max(1, Number(raw) || it.partitions[side].lengthCm));
-    pushHistory();
-    setPlacedItems((prev) =>
-      prev.map((p) => (p.id === it.id ? { ...p, partitions: { ...p.partitions, [side]: { lengthCm: newLengthCm } } } : p))
-    );
-    PARTITION_SIDE_SETTERS[side](String(newLengthCm));
+    setPlacedItems((prev) => [
+      ...prev,
+      {
+        id: nextPlacedId(),
+        shapeId: null,
+        name: "파티션",
+        shapeType: "partition",
+        category: "소파·파티션·기타",
+        widthCm,
+        depthCm,
+        notchWidthCm: null,
+        notchDepthCm: null,
+        xCm,
+        yCm,
+        rotation: 0,
+        flipped: false,
+        groupId: null,
+      },
+    ]);
   }
 
   // 선택한 모형 하나의 이름만 바꾼다(가로·세로 크기는 그대로 둠). 빈 칸으로 지우고 적용하면 원래
@@ -15836,123 +15830,31 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       </div>
 
       {/* "수정창은 아예 도형수정하는 곳 위에 별도로 빼자(책상을 누르면 거기에 별도로 뜨는게 맞을듯)"
-          요청(2026-10-01) — 파티션 좌/우/앞쪽 토글 버튼·길이 입력칸을, 아래 "도형수정"(선택 도구모음:
-          이름·가로세로·좌표·각도 등) 줄 안에 같이 끼워 넣던 것을, 그 줄 바로 위에 전용 줄로 따로 뺐다.
-          "책상류"를 선택했을 때만 내용이 나타나지만, 이 줄 자체는(아래 도형수정 줄과 똑같은 이유로)
-          minHeight를 고정해서 책상을 선택하거나 해제해도, 또는 책상이 아닌 다른 가구를 선택해도 줄
-          높이가 전혀 안 바뀐다 — "모형 목록"·"대지"가 흔들리던 예전 문제가 이 줄 때문에 재현되지
-          않는다(자세한 경위는 바로 아래 줄 주석 참고). */}
+          요청(2026-10-01) — 파티션 만들기 버튼을, 아래 "도형수정"(선택 도구모음: 이름·가로세로·좌표·
+          각도 등) 줄 안에 같이 끼워 넣던 것을, 그 줄 바로 위에 전용 줄로 따로 뺐다. "책상류"를
+          선택했을 때만 내용이 나타나지만, 이 줄 자체는(아래 도형수정 줄과 똑같은 이유로) minHeight를
+          고정해서 책상을 선택하거나 해제해도, 또는 책상이 아닌 다른 가구를 선택해도 줄 높이가 전혀
+          안 바뀐다 — "모형 목록"·"대지"가 흔들리던 예전 문제가 이 줄 때문에 재현되지 않는다.
+          (2026-10-01 3차 변경) "파티션 생기니까 도형이 여기 붙었다 저기 붙었다 정신을 못차린다" +
+          "파티션 길이조절이 안된다" + "파티션 자유이동 기능도 넣어줘" 신고로, 이 버튼들은 더 이상
+          책상에 파티션을 "붙이는"(토글) 버튼이 아니라, 그 책상 옆에 알맞은 길이의 독립된 파티션
+          모형을 "새로 만들어 놓아주는" 버튼이다(자세한 설계 이유는 handleAddPartitionItem 선언부
+          주석 참고). 만들어진 뒤에는 책상과 완전히 별개로 자유롭게 끌어서 옮기거나 회전·삭제할 수
+          있고, 길이는 선택했을 때 아래 "도형수정" 줄의 공용 가로 입력칸(Enter 또는 적용 버튼)으로
+          조절한다 — 전용 길이 입력칸은 더 이상 없다. */}
       <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, minHeight: 40, flexWrap: "nowrap", overflowX: "auto" }}>
         {selectedSingleItem && selectedSingleItem.category === "책상류" && (
           <>
-            <span style={{ fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>🚧 파티션:</span>
-            {/* "도형 클릭후 상판 좌측 우측 선택하면 거기에 맞춰서 파티션이 자동으로 입혀지게" 요청
-                (2026-10-01) — 버튼을 누르면 그 변에 파티션(두께 4.5cm 고정, 색상은 PW505 패브릭
-                사진과 비슷하게)이 붙고, 다시 누르면 떼어진다(토글). 길이는 기본으로 그 변에 실제로
-                책상이 맞닿아 있는 만큼(ㄱ자처럼 파인 모서리가 있으면 그만큼 짧게)만 붙고, 옆 입력칸으로
-                직접 줄일 수도 있다(그 길이를 넘게는 못 늘림 — "책상크기 만큼만"). */}
-            <button
-              onClick={() => handleTogglePartition("left")}
-              title="선택한 책상의 왼쪽 변에 파티션(두께 4.5cm)을 붙이거나 떼어요"
-              style={{
-                ...miniBtnStyle,
-                whiteSpace: "nowrap",
-                background: selectedSingleItem.partitions?.left ? C.partitionColor : "transparent",
-                color: selectedSingleItem.partitions?.left ? "#fff" : C.inkSoft,
-                borderColor: selectedSingleItem.partitions?.left ? C.partitionColor : C.lineSoft,
-              }}
-            >
-              🚧 좌측{selectedSingleItem.partitions?.left ? " (켜짐)" : ""}
+            <span style={{ fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>🚧 파티션 추가:</span>
+            <button onClick={() => handleAddPartitionItem("left")} title="선택한 책상 왼쪽에 파티션(두께 4.5cm) 모형을 새로 만들어요 — 만든 뒤엔 책상과 별개로 자유롭게 옮길 수 있어요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
+              🚧 좌측
             </button>
-            {/* "파티션 사이즈 수정해도 반영이 안된다" 신고(2026-10-01) — onBlur(입력칸에서 포커스가
-                빠져나갈 때 자동 적용)만 믿고 있었는데, 바로 옆 토글 버튼을 클릭하면 그 클릭이 먼저
-                처리되면서 길이 수정이 씹히는 경우가 있었다. 그래서 다른 입력칸들(가로·세로·좌표·각도)과
-                똑같은 방식 — Enter 또는 바로 옆 "적용" 버튼을 눌러야만 반영됨 — 으로 통일했다. */}
-            {selectedSingleItem.partitions?.left && (
-              <>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={partitionLeftLengthInput}
-                  onChange={(e) => setPartitionLeftLengthInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleApplyPartitionLength("left");
-                  }}
-                  placeholder="길이(cm)"
-                  title="왼쪽 파티션 길이(cm) — 직접 입력 후 Enter 또는 옆 '적용' 버튼으로 반영(책상 크기를 넘게는 못 늘림)"
-                  style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
-                />
-                <button onClick={() => handleApplyPartitionLength("left")} title="입력한 왼쪽 파티션 길이를 반영해요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
-                  적용
-                </button>
-              </>
-            )}
-            <button
-              onClick={() => handleTogglePartition("right")}
-              title="선택한 책상의 오른쪽 변에 파티션(두께 4.5cm)을 붙이거나 떼어요"
-              style={{
-                ...miniBtnStyle,
-                whiteSpace: "nowrap",
-                background: selectedSingleItem.partitions?.right ? C.partitionColor : "transparent",
-                color: selectedSingleItem.partitions?.right ? "#fff" : C.inkSoft,
-                borderColor: selectedSingleItem.partitions?.right ? C.partitionColor : C.lineSoft,
-              }}
-            >
-              🚧 우측{selectedSingleItem.partitions?.right ? " (켜짐)" : ""}
+            <button onClick={() => handleAddPartitionItem("right")} title="선택한 책상 오른쪽에 파티션(두께 4.5cm) 모형을 새로 만들어요 — 만든 뒤엔 책상과 별개로 자유롭게 옮길 수 있어요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
+              🚧 우측
             </button>
-            {selectedSingleItem.partitions?.right && (
-              <>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={partitionRightLengthInput}
-                  onChange={(e) => setPartitionRightLengthInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleApplyPartitionLength("right");
-                  }}
-                  placeholder="길이(cm)"
-                  title="오른쪽 파티션 길이(cm) — 직접 입력 후 Enter 또는 옆 '적용' 버튼으로 반영(책상 크기를 넘게는 못 늘림)"
-                  style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
-                />
-                <button onClick={() => handleApplyPartitionLength("right")} title="입력한 오른쪽 파티션 길이를 반영해요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
-                  적용
-                </button>
-              </>
-            )}
-            {/* "책상을 정면에서 봤을 때 북쪽에 앞쪽 파티션이 쳐져야지" 지적(2026-10-01)으로, 앞쪽은
-                상판 뒤쪽(y=0, 북쪽)에 붙는다(아래 렌더 쪽 참고). */}
-            <button
-              onClick={() => handleTogglePartition("front")}
-              title="선택한 책상의 앞쪽(북쪽) 변에 파티션(두께 4.5cm)을 붙이거나 떼어요"
-              style={{
-                ...miniBtnStyle,
-                whiteSpace: "nowrap",
-                background: selectedSingleItem.partitions?.front ? C.partitionColor : "transparent",
-                color: selectedSingleItem.partitions?.front ? "#fff" : C.inkSoft,
-                borderColor: selectedSingleItem.partitions?.front ? C.partitionColor : C.lineSoft,
-              }}
-            >
-              🚧 앞쪽{selectedSingleItem.partitions?.front ? " (켜짐)" : ""}
+            <button onClick={() => handleAddPartitionItem("front")} title="선택한 책상 앞쪽(북쪽)에 파티션(두께 4.5cm) 모형을 새로 만들어요 — 만든 뒤엔 책상과 별개로 자유롭게 옮길 수 있어요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
+              🚧 앞쪽
             </button>
-            {selectedSingleItem.partitions?.front && (
-              <>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={partitionFrontLengthInput}
-                  onChange={(e) => setPartitionFrontLengthInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleApplyPartitionLength("front");
-                  }}
-                  placeholder="길이(cm)"
-                  title="앞쪽 파티션 길이(cm) — 직접 입력 후 Enter 또는 옆 '적용' 버튼으로 반영(책상 크기를 넘게는 못 늘림)"
-                  style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
-                />
-                <button onClick={() => handleApplyPartitionLength("front")} title="입력한 앞쪽 파티션 길이를 반영해요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
-                  적용
-                </button>
-              </>
-            )}
           </>
         )}
       </div>
@@ -16654,30 +16556,6 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               const outerHPx = outerAabb.h * renderScale;
               const baseWPx = it.widthCm * renderScale;
               const baseHPx = it.depthCm * renderScale;
-              // "파티션 넣기 기능" 요청(2026-10-01) — 상판 왼쪽/오른쪽/앞쪽 변에 붙은 파티션을 화면에
-              // 그리기 위한 크기(px). 두께는 PARTITION_THICKNESS_CM(4.5cm) 고정, 길이는 모형마다 따로
-              // 저장된 it.partitions.left/right/front.lengthCm(기본은 붙일 때의 depthCm 또는 widthCm,
-              // 직접 입력으로 바뀔 수 있음). 모형을 감싸는 회전·반전(rotate/scaleX) div 안쪽에 이 모형의
-              // 가로·세로(widthCm×depthCm) 기준 "원래(돌리기 전) 좌표계"로 그려서, 모형이 돌아가거나
-              // 옮겨지면 파티션도 자동으로 같이 돌아가고 같이 옮겨진다(따로 위치를 계산해 줄 필요가 없다).
-              const partitionThicknessPx = PARTITION_THICKNESS_CM * renderScale;
-              const leftPartitionLenPx = it.partitions?.left ? it.partitions.left.lengthCm * renderScale : 0;
-              const rightPartitionLenPx = it.partitions?.right ? it.partitions.right.lengthCm * renderScale : 0;
-              const frontPartitionLenPx = it.partitions?.front ? it.partitions.front.lengthCm * renderScale : 0;
-              // "좌측, 우측 아귀 딱맞게 구현해줘 북쪽 파티션은 거기까지 커버해줘" 신고(2026-10-01) —
-              // 앞쪽(북쪽) 파티션은 top: -두께px, 왼쪽·오른쪽 파티션은 top: 0으로 서로 다른 기준선에
-              // 붙다 보니, 두 파티션이 만나는 모서리(모서리 한 칸, 두께×두께 크기)가 어느 쪽에도
-              // 포함되지 않아 퍼즐처럼 딱 맞물리지 않고 빈틈이 생겼다. "북쪽 파티션이 거기까지
-              // 커버해줘"라는 말대로, 앞쪽 파티션의 가로 폭을 왼쪽·오른쪽 파티션이 있는 쪽으로 두께만큼
-              // 더 늘려서 그 모서리 칸까지 덮게 한다(왼쪽 파티션이 있으면 왼쪽으로, 오른쪽 파티션이
-              // 있으면 오른쪽으로 — 둘 다 있으면 양쪽 다). 왼쪽 파티션과 만나는 모서리는 둘 다 항상
-              // 모형의 왼쪽위 원점(0,0)에서 시작하므로 어떤 모양(ㄱ자 포함)이든 항상 맞물린다. 오른쪽
-              // 파티션과 만나는 모서리는, 앞쪽 파티션이 오른쪽 끝(baseWPx)까지 닿아있을 때만(= ㄱ자의
-              // 오른쪽 아래가 파이지 않은, 지금까지 나온 모든 책상 모양에서 해당) 맞물린다 — 혹시
-              // 앞으로 "오른쪽 아래가 파인" 모양이 생겨도, 그때는 두 파티션이 애초에 서로 떨어져 있어
-              // 늘려봐야 안 맞으므로 조건으로 한 번 더 막아둔다.
-              const frontExtendLeftPx = it.partitions?.front && it.partitions?.left ? partitionThicknessPx : 0;
-              const frontExtendRightPx = it.partitions?.front && it.partitions?.right && Math.abs(frontPartitionLenPx - baseWPx) < 0.01 ? partitionThicknessPx : 0;
               const isPoly = it.shapeType === "l" || it.shapeType === "u";
               const isCircle = it.shapeType === "circle";
               const isRoundEnd = it.shapeType === "roundend";
@@ -16685,6 +16563,13 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               const isChair = it.shapeType === "chair";
               const isMeetingChair = it.shapeType === "meetingchair";
               const isSofa = it.shapeType === "sofa";
+              // "파티션 생기니까 도형이 여기 붙었다 저기 붙었다 정신을 못차린다" + "파티션 자유이동
+              // 기능도 넣어줘" 신고(2026-10-01 3차)로, 파티션은 더 이상 책상에 "붙어서" 책상 바깥으로
+              // 삐져나오게 그리는 장식이 아니라, 책상·의자와 똑같은 독립된 모형(shapeType:
+              // "partition")이 됐다 — 그래서 더 이상 여기서 it.partitions 같은 별도 좌표 계산이
+              // 필요 없고, 다른 사각형 모형처럼 바로 아래 isPartition 분기 하나로 끝난다(렌더 쪽은
+              // 더 아래 색칠하는 부분 참고).
+              const isPartition = it.shapeType === "partition";
               const polyPoints = isPoly
                 ? shapePolygonPoints(it.shapeType, it.widthCm, it.depthCm, it.notchWidthCm, it.notchDepthCm)
                     .map((p) => p.join(","))
@@ -16900,75 +16785,20 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
                         <SofaTopIcon w={it.widthCm} d={it.depthCm} fill={C.furnitureBg} stroke={C.brownAccent} />
                       </svg>
+                    ) : isPartition ? (
+                      // "파티션 넣기 기능... 파티션 실제 두께는 4.5cm야" 요청으로 시작했다가, (2026-10-01
+                      // 3차) "파티션 생기니까 도형이 여기 붙었다 저기 붙었다 정신을 못차린다" + "파티션
+                      // 자유이동 기능도 넣어줘" 신고로 책상에 붙는 장식이 아니라 다른 모형과 똑같이
+                      // 독립적으로 끌고 다닐 수 있는 모형이 됐다. 생김새는 사각형과 같되, 색만 PW505
+                      // 패브릭 사진에서 뽑은 C.partitionColor로 칠해서 "파티션"임을 한눈에 알아볼 수
+                      // 있게 한다.
+                      <div style={{ width: "100%", height: "100%", background: C.partitionColor, border: `1.4px solid ${C.partitionColor}`, borderRadius: 3, boxSizing: "border-box" }} />
                     ) : (
                       // (위 요청 계속) 사각형은 선택 강조를 이 안쪽 테두리가 아니라 바깥 wrapper의
                       // outline·그림자가 이미 맡고 있어서(위쪽 style의 outline/boxShadow 참고), 여기
                       // 안쪽 테두리는 selection 여부와 무관하게 다른 모양들의 "평소" 굵기(1.4px)에
                       // 맞춰 통일감만 준다 — 선택했을 때 outline과 겹쳐 두꺼워 보이는 일이 없도록.
                       <div style={{ width: "100%", height: "100%", background: C.furnitureBg, border: `1.4px solid ${C.brownAccent}`, borderRadius: 3, boxSizing: "border-box" }} />
-                    )}
-                    {/* "파티션 넣기 기능... 파티션 실제 두께는 4.5cm야" 요청 — 상판 왼쪽 변 바로
-                        바깥에 붙는 두께 4.5cm짜리 파티션(색은 PW505 패브릭 사진과 비슷하게 — 위
-                        C.partitionColor 참고). (2026-10-01 변경) "기준점이 80으로 수정했더니 위에서
-                        아래로 빠지는데 위에가 무조건 기준점이야" 지적으로, 가운데 정렬(centering) 대신
-                        언제나 맨 위(top: 0, 상판의 "뒤쪽" 모서리)에 고정해서 길이를 줄이면 아래쪽만
-                        짧아지게 했다. */}
-                    {it.partitions?.left && (
-                      <div
-                        title={`왼쪽 파티션 (두께 ${PARTITION_THICKNESS_CM}cm × 길이 ${it.partitions.left.lengthCm}cm)`}
-                        style={{
-                          position: "absolute",
-                          left: -partitionThicknessPx,
-                          top: 0,
-                          width: partitionThicknessPx,
-                          height: leftPartitionLenPx,
-                          background: C.partitionColor,
-                          border: `1px solid ${C.partitionColor}`,
-                          boxSizing: "border-box",
-                        }}
-                      />
-                    )}
-                    {/* 오른쪽 파티션 — 위 왼쪽과 똑같되 상판 오른쪽 변 바로 바깥(baseWPx 지점)에 붙고,
-                        기준점도 똑같이 맨 위(top: 0)로 고정된다. */}
-                    {it.partitions?.right && (
-                      <div
-                        title={`오른쪽 파티션 (두께 ${PARTITION_THICKNESS_CM}cm × 길이 ${it.partitions.right.lengthCm}cm)`}
-                        style={{
-                          position: "absolute",
-                          left: baseWPx,
-                          top: 0,
-                          width: partitionThicknessPx,
-                          height: rightPartitionLenPx,
-                          background: C.partitionColor,
-                          border: `1px solid ${C.partitionColor}`,
-                          boxSizing: "border-box",
-                        }}
-                      />
-                    )}
-                    {/* 앞쪽 파티션 — "왼쪽 오른쪽 앞에 모두 파티션이 칠 수 있으면 된다"는 요청으로
-                        추가했는데, (2026-10-01 변경) "책상을 정면에서 봤을 때 북쪽에 앞쪽 파티션이
-                        쳐져야지 왜 남쪽에 있냐" 지적으로, 상판 아래쪽(남쪽, top: baseHPx)이 아니라
-                        위쪽(북쪽, top: -두께px) 변 바로 바깥에 붙도록 고쳤다. 왼쪽 끝(left: 0)을
-                        기준점으로 고정해서, 좌/우와 같은 "기준점은 항상 고정된 모서리" 원칙을 따른다.
-                        (2026-10-01 추가 변경) "좌측, 우측 아귀 딱맞게 구현해줘 북쪽 파티션은 거기까지
-                        커버해줘" 신고로, 왼쪽·오른쪽 파티션과 맞물리는 모서리 칸까지 덮도록
-                        frontExtendLeftPx/frontExtendRightPx만큼 좌우로 더 넓게 그린다(위 변수 선언부
-                        주석 참고) — 왼쪽/오른쪽 파티션 쪽 모서리에 빈틈이 생기지 않고 퍼즐처럼 딱
-                        맞물린다. */}
-                    {it.partitions?.front && (
-                      <div
-                        title={`앞쪽 파티션 (두께 ${PARTITION_THICKNESS_CM}cm × 길이 ${it.partitions.front.lengthCm}cm)`}
-                        style={{
-                          position: "absolute",
-                          left: -frontExtendLeftPx,
-                          top: -partitionThicknessPx,
-                          width: frontPartitionLenPx + frontExtendLeftPx + frontExtendRightPx,
-                          height: partitionThicknessPx,
-                          background: C.partitionColor,
-                          border: `1px solid ${C.partitionColor}`,
-                          boxSizing: "border-box",
-                        }}
-                      />
                     )}
                   </div>
                   {/* "가구 이름이 지저분하게 나오니까 깔끔하게" 요청 — 이름 대신 규격(가로×세로)만
@@ -17077,8 +16907,12 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       ("제품 클릭하면... 회전 자유자재로" 요청으로 회전이 90도 단위를 벗어날 수 있게
                       되면서, 이 손잡이의 "오른쪽 아래를 끌면 가로·세로가 커진다"는 계산은 90도 단위
                       회전에서만 정확하므로, 자유 각도로 돌아간 상태에서는 혼란을 막기 위해 숨긴다 —
-                      그 상태에서 크기를 바꾸려면 위 가로·세로 직접 입력칸을 쓰면 된다.) */}
-                  {rotation % 90 === 0 && (
+                      그 상태에서 크기를 바꾸려면 위 가로·세로 직접 입력칸을 쓰면 된다.
+                      "도형 우측 하단에 까만점 없애줘" 신고(2026-10-01) — 이 손잡이가 선택 여부와
+                      상관없이 모든 모형에 항상 떠 있어서 배치판이 지저분해 보였다. 자유 회전 손잡이
+                      (동그라미, 바로 위 블록)와 똑같이 isSelected일 때만(선택했을 때만) 나타나도록
+                      바꿨다 — 끌어서 크기 조절하는 기능 자체는 그대로, 보이는 시점만 바뀐다.) */}
+                  {isSelected && rotation % 90 === 0 && (
                     <div
                       onMouseDown={startResizePlaced(it, swapped)}
                       onDragStart={(e) => {
