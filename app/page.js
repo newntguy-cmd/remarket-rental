@@ -3898,11 +3898,14 @@ function truckOptionCost(rate, extra, transactionType) {
 
 // "계산하기"로 나온 결과 화면에서 용차 한 줄 옆의 "x"를 눌렀을 때, 그 줄만 빼고 합계를 다시 계산한다.
 // result가 아직 없으면(계산 전) 그대로 둔다.
+// (2026-10-02 수정) 사다리차 기능이 생긴 뒤로는 total이 기본배송비+용차+사다리차 세 가지를 합친
+// 값인데, 여기선 사다리차를 빼놓고 계산해서 용차를 하나 지우면 사다리차 비용까지 같이 사라지는
+// 버그가 있었다. ladderCost를 그대로 더해서 고쳤다.
 function removeTruckDetailFromResult(result, key) {
   if (!result) return result;
   const remaining = result.truckDetails.filter((d) => d.key !== key);
   const truckTotal = remaining.reduce((sum, d) => sum + d.cost, 0);
-  return { ...result, truckDetails: remaining, truckTotal, total: result.base + truckTotal };
+  return { ...result, truckDetails: remaining, truckTotal, total: result.base + truckTotal + (result.ladderCost || 0) };
 }
 
 function findZoneIndex(zones, address) {
@@ -4070,8 +4073,34 @@ function findTruckRowByDistanceKm(km) {
   return CHARTERED_TRUCK_ROWS.findIndex((r) => r.region === "서울/수도권" && r.label === row.label);
 }
 
+// "사다리차 시세 알아본 뒤에 배송비에 사다리차 1시간씩 추가할 수 있는 방법 넣어줘"(2026-10-02) 요청으로
+// 추가. 사다리차·스카이차 요금은 업체·지역·톤수(차량 크기)·층수에 따라 차이가 커서(시세 조사 결과 기본
+// 1시간이 보통 10~30만원대, 추가시간당 8만원대부터 시작하는 등 범위가 넓었다) 하나의 "정가"로 못 박기보다,
+// 시세 조사로 확인한 일반적인 수준(기본 1시간 12만원, 추가 시간당 8만원 — 저층 기준 평균치)을 기본값으로
+// 넣어두고 현장 견적에 맞게 직접 두 단가를 고쳐 쓸 수 있게 했다. 시간은 "1시간씩" 늘리고 줄이는 버튼으로만
+// 조절해서(직접 숫자를 타이핑하다 실수로 이상한 값이 들어가는 걸 방지), 0시간이면 "사다리차 없음"이고
+// 1시간부터는 기본요금, 2시간째부터는 그 위에 추가시간당 요금이 1시간씩 더 붙는다.
+const LADDER_TRUCK_DEFAULT_BASE_RATE = 120000; // 기본 1시간 요금(원)
+const LADDER_TRUCK_DEFAULT_EXTRA_RATE = 80000; // 2시간째부터 1시간당 추가요금(원)
+
+// 사다리차 이용 시간(hours, 0=미이용)과 단가 두 가지로 사다리차 비용을 계산한다. 기본배송비·용차
+// 계산과 같은 화면(아래 DeliveryFeeButton)에서 쓰고, "x"로 뺄 때도 같은 공식으로 0원 처리하면 되므로
+// 함수 하나로 모아뒀다.
+function ladderTruckCost(hours, baseRate, extraRate) {
+  const h = Number(hours) || 0;
+  if (h <= 0) return 0;
+  return (Number(baseRate) || 0) + (h - 1) * (Number(extraRate) || 0);
+}
+
+// 결과 화면에서 사다리차 줄 옆의 "x"를 눌렀을 때, 그 비용만 빼고 합계를 다시 계산한다(용차 쪽의
+// removeTruckDetailFromResult와 같은 방식).
+function removeLadderFromResult(result) {
+  if (!result) return result;
+  return { ...result, ladderHours: 0, ladderCost: 0, total: result.base + result.truckTotal };
+}
+
 // 총 톤수 옆에 다는 "배송비" 버튼. 기본배송비(거래유형+배송지+톤수 기준 자동 계산)에
-// 용차(추가 트럭)를 체크해서 더할 수 있는 계산기를 펼쳐서 보여준다.
+// 용차(추가 트럭)·사다리차를 체크/추가해서 더할 수 있는 계산기를 펼쳐서 보여준다.
 function DeliveryFeeButton({ address, transactionType, totalTon }) {
   const [open, setOpen] = useState(false);
   const zones = transactionType === "purchase" ? PURCHASE_DELIVERY_ZONES : RENTAL_DELIVERY_ZONES;
@@ -4133,6 +4162,12 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
 
   const [checked, setChecked] = useState({});
   const toggleTruck = (key) => setChecked((p) => ({ ...p, [key]: !p[key] }));
+  // 사다리차: 0시간(미이용)에서 "+1시간" 버튼으로만 늘어난다. 단가 두 개(기본 1시간/추가 시간당)는
+  // 시세 조사로 확인한 평균치를 기본값으로 넣어두고, 현장 견적에 따라 직접 고쳐 쓸 수 있게 열어뒀다.
+  const [ladderHours, setLadderHours] = useState(0);
+  const [ladderBaseRate, setLadderBaseRate] = useState(LADDER_TRUCK_DEFAULT_BASE_RATE);
+  const [ladderExtraRate, setLadderExtraRate] = useState(LADDER_TRUCK_DEFAULT_EXTRA_RATE);
+  const ladderPreviewCost = ladderTruckCost(ladderHours, ladderBaseRate, ladderExtraRate);
   const [result, setResult] = useState(null);
   const [applied, setApplied] = useState(null); // "적용"을 눌러 확정한 최종 배송비. 확정되면 버튼 자체에 표시해서 팝업을 닫아도 계속 보인다.
 
@@ -4162,7 +4197,8 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
       truckTotal += cost;
       truckDetails.push({ key: opt.key, label: transactionType === "rental" ? `${opt.label} (왕복 ×2)` : opt.label, cost });
     }
-    setResult({ base: base.amount, truckTotal, truckDetails, total: base.amount + truckTotal });
+    const ladderCost = ladderTruckCost(ladderHours, ladderBaseRate, ladderExtraRate);
+    setResult({ base: base.amount, truckTotal, truckDetails, ladderHours, ladderCost, total: base.amount + truckTotal + ladderCost });
   }
 
   // 결과에 이미 추가된 용차 한 줄을 "x"로 바로 삭제한다. 체크박스도 같이 해제해서, 팝업을 다시 열었을 때도
@@ -4170,6 +4206,41 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
   function removeTruckDetail(key) {
     setChecked((p) => ({ ...p, [key]: false }));
     setResult((prev) => removeTruckDetailFromResult(prev, key));
+  }
+
+  // 결과에 이미 추가된 사다리차 줄을 "x"로 바로 삭제한다(0시간으로 되돌림). 용차와 같은 이유로
+  // 팝업을 다시 열었을 때도 지워진 상태가 유지되게 시간 자체를 0으로 되돌린다.
+  function removeLadder() {
+    setLadderHours(0);
+    setResult((prev) => removeLadderFromResult(prev));
+  }
+
+  // "배송비 관련해서 금액 수동으로도 수정 가능하게 해줘"(2026-10-02) 요청 — 자동 계산된 기본배송비·용차·
+  // 사다리차 금액이 실제 현장 협의·할인 등으로 다를 때, 계산 결과 화면에서 각 줄의 금액을 직접
+  // 타이핑해서 고칠 수 있게 했다. 세 함수 모두 그 줄의 금액만 바꾸고, 합계(total)는 그 자리에서
+  // 나머지 두 금액과 다시 더해서 항상 화면과 맞게 유지한다.
+  function updateResultBase(value) {
+    setResult((prev) => {
+      if (!prev) return prev;
+      const base = value === "" ? 0 : Number(value);
+      return { ...prev, base, total: base + prev.truckTotal + (prev.ladderCost || 0) };
+    });
+  }
+  function updateResultTruckCost(key, value) {
+    setResult((prev) => {
+      if (!prev) return prev;
+      const cost = value === "" ? 0 : Number(value);
+      const truckDetails = prev.truckDetails.map((d) => (d.key === key ? { ...d, cost } : d));
+      const truckTotal = truckDetails.reduce((sum, d) => sum + d.cost, 0);
+      return { ...prev, truckDetails, truckTotal, total: prev.base + truckTotal + (prev.ladderCost || 0) };
+    });
+  }
+  function updateResultLadderCost(value) {
+    setResult((prev) => {
+      if (!prev) return prev;
+      const ladderCost = value === "" ? 0 : Number(value);
+      return { ...prev, ladderCost, total: prev.base + prev.truckTotal + ladderCost };
+    });
   }
 
   return (
@@ -4276,16 +4347,89 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
             })}
           </div>
 
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 2 }}>🪜 사다리차 추가 (현장에 필요할 때 1시간씩)</div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>
+            단가는 지역·층수·차량 크기에 따라 차이가 커요. 시세 조사 평균값이 기본값으로 들어가 있으니, 현장 견적에 맞게 아래 단가를 직접 고쳐주세요.
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+            <label style={{ fontSize: 11.5, color: C.muted, display: "flex", alignItems: "center", gap: 4 }}>
+              기본 1시간
+              <input
+                type="number"
+                value={ladderBaseRate}
+                onChange={(e) => setLadderBaseRate(e.target.value === "" ? "" : Number(e.target.value))}
+                style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: 80 }}
+              />
+              원
+            </label>
+            <label style={{ fontSize: 11.5, color: C.muted, display: "flex", alignItems: "center", gap: 4 }}>
+              추가 시간당
+              <input
+                type="number"
+                value={ladderExtraRate}
+                onChange={(e) => setLadderExtraRate(e.target.value === "" ? "" : Number(e.target.value))}
+                style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: 80 }}
+              />
+              원
+            </label>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <button
+              type="button"
+              onClick={() => setLadderHours((h) => Math.max(0, h - 1))}
+              disabled={ladderHours <= 0}
+              title="사다리차 1시간 줄이기"
+              aria-label="사다리차 1시간 줄이기"
+              style={{ ...miniBtnStyle, padding: "3px 10px", opacity: ladderHours <= 0 ? 0.5 : 1 }}
+            >
+              −
+            </button>
+            <span style={{ fontSize: 12.5, minWidth: 60, textAlign: "center" }}>{ladderHours}시간</span>
+            <button
+              type="button"
+              onClick={() => setLadderHours((h) => h + 1)}
+              title="사다리차 1시간 추가"
+              aria-label="사다리차 1시간 추가"
+              style={{ ...miniBtnStyle, padding: "3px 10px" }}
+            >
+              ＋
+            </button>
+            <span style={{ fontSize: 11.5, color: C.muted }}>
+              {ladderHours > 0 ? <>({fmtWon(ladderPreviewCost)})</> : "사다리차 없음"}
+            </span>
+          </div>
+
           <button type="button" onClick={calculate} style={{ ...miniBtnStylePrimary, width: "100%", marginBottom: result ? 10 : 0 }}>
             계산하기
           </button>
 
           {result && (
             <div style={{ borderTop: `1px solid ${C.lineSoft}`, paddingTop: 10, fontSize: 12.5 }}>
-              <div>기본배송비: {fmtWon(result.base)}</div>
+              <div style={{ fontSize: 10, color: C.muted, marginBottom: 6 }}>
+                아래 금액은 자동 계산된 값이에요. 현장 협의·할인 등으로 다르면 직접 고쳐 쓸 수 있어요.
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <span>기본배송비:</span>
+                <input
+                  type="number"
+                  value={result.base}
+                  onChange={(e) => updateResultBase(e.target.value)}
+                  style={{ ...smallInputStyle, width: 100, padding: "3px 6px", fontSize: 12.5 }}
+                />
+                <span style={{ color: C.muted, fontSize: 11 }}>원</span>
+              </div>
               {result.truckDetails.map((d, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-                  <span>용차 · {d.label}: {fmtWon(d.cost)}</span>
+                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 4 }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    용차 · {d.label}:
+                    <input
+                      type="number"
+                      value={d.cost}
+                      onChange={(e) => updateResultTruckCost(d.key, e.target.value)}
+                      style={{ ...smallInputStyle, width: 100, padding: "3px 6px", fontSize: 12.5 }}
+                    />
+                    <span style={{ color: C.muted, fontSize: 11 }}>원</span>
+                  </span>
                   <button
                     type="button"
                     onClick={() => removeTruckDetail(d.key)}
@@ -4297,6 +4441,29 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
                   </button>
                 </div>
               ))}
+              {result.ladderHours > 0 && (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 4 }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    사다리차 · {result.ladderHours}시간:
+                    <input
+                      type="number"
+                      value={result.ladderCost}
+                      onChange={(e) => updateResultLadderCost(e.target.value)}
+                      style={{ ...smallInputStyle, width: 100, padding: "3px 6px", fontSize: 12.5 }}
+                    />
+                    <span style={{ color: C.muted, fontSize: 11 }}>원</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={removeLadder}
+                    title="사다리차 삭제"
+                    aria-label="사다리차 삭제"
+                    style={{ border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
               <div style={{ marginTop: 6, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                 <span>
                   합계 <strong>{fmtWon(result.total)}</strong>
@@ -4316,7 +4483,7 @@ function DeliveryFeeButton({ address, transactionType, totalTon }) {
           )}
 
           <div style={{ fontSize: 10.5, color: C.muted, marginTop: 10, lineHeight: 1.4 }}>
-            참고용 계산이에요(VAT 별도). 사다리차·기사작업비 등 현장 조건에 따른 추가비용은 별도로 확인해주세요.
+            참고용 계산이에요(VAT 별도). 사다리차 비용은 위에서 직접 시간·단가를 넣어 포함할 수 있어요(단가는 실제 업체 견적과 다를 수 있으니 확인해주세요). 기사작업비 등 그 외 현장 조건에 따른 추가비용은 별도로 확인해주세요.
           </div>
         </div>
       )}
