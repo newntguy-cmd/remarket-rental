@@ -1856,29 +1856,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     e.dataTransfer.setData("text/plain", JSON.stringify({ type: "catalog", shapeId: shape.id }));
   }
 
-  // 배치판 위에 이미 놓인 모형을 다시 끌 때 — 마우스가 그 모형의 왼쪽 위 모서리에서 얼마나 떨어진
-  // 지점을 잡았는지(offset)도 같이 담아서, 놓았을 때 모형이 마우스 쪽으로 툭 튀지 않고 자연스럽게 옮겨지게 한다.
-  function handleDragStartPlaced(e, placed) {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const offsetXCm = (e.clientX - rect.left) / renderScale;
-    const offsetYCm = (e.clientY - rect.top) / renderScale;
-    e.dataTransfer.setData("text/plain", JSON.stringify({ type: "placed", placedId: placed.id, offsetXCm, offsetYCm }));
-    // "의자를 복사해서 드래그하면 이상한 글씨들이 따라다니는 버그" 신고 — 끌 때 브라우저가 기본으로
-    // 보여주는 "드래그 고스트" 이미지는 끌리는 div 전체를 그대로 캡처한다. 그런데 이 모형 div 안에는
-    // "60×56" 규격 글자, 회전·삭제 작은 버튼(⟳ ×), 선택했을 때만 나오는 회전 손잡이(박스 바깥 위쪽
-    // -14px 지점까지 튀어나와 있음)까지 전부 겹쳐 있어서, 브라우저가 그 전체를 스냅샷으로 찍다 보니
-    // 글자·버튼이 캔버스 바깥으로 삐져나오거나 겹쳐 보여 "이상한 글씨가 따라다니는" 것처럼 보였다.
-    // 특히 복사(Ctrl+C/V) 직후에는 붙여넣은 모형이 바로 선택된 상태라 회전 손잡이까지 항상 끼어있어서
-    // 더 두드러졌다. setDragImage에 빈(1×1 투명) 이미지를 줘서 브라우저 기본 고스트 자체를 꺼버리면,
-    // 끄는 동안은 커서만 움직이고 마우스를 놓는 순간 모형이 새 자리로 바로 나타난다(원래도 끄는 중에
-    // 실시간으로 따라 움직이는 미리보기는 없었고, 놓을 때 한 번에 자리가 정해지는 방식이었으므로 이
-    // 동작 자체는 그대로다 — 눈에 거슬리던 고스트 이미지만 없앴다).
-    if (e.dataTransfer.setDragImage) {
-      const img = new Image();
-      img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
-      e.dataTransfer.setDragImage(img, 0, 0);
-    }
-  }
+  // (2026-10-01) "가구가 좌표로 정확히 넣을 수 있으니까 조금만 더 지금보다 부드럽게 움직이면
+  // 좋겠다" 요청으로, 배치판 위에 이미 놓인 모형을 옮기는 방식이 브라우저 기본 드래그(HTML5
+  // draggable/onDragStart, 끄는 동안 미리보기가 없어 뚝뚝 끊겨 보이던 방식)에서 mousedown 기반
+  // 방식(startMovePlaced, 아래쪽 손잡이들 바로 다음에 정의됨)으로 바뀌면서, 이 자리에 있던
+  // handleDragStartPlaced(드래그 고스트 이미지를 투명하게 비우던 함수)는 더 이상 쓰이지 않아
+  // 지웠다 — mousedown 기반 방식은애초에 브라우저 기본 드래그 고스트 자체가 뜨지 않으므로
+  // 마우스가 그 모형의 왼쪽 위 모서리에서 얼마나 떨어진 지점을 잡았는지(offset)는 이제
+  // startMovePlaced 안에서 계산한다 — "이상한 글씨가 따라다니는" 문제도 mousedown 기반 방식에서는
+  // 브라우저 기본 드래그 고스트 자체가 뜨지 않으므로 원천적으로 다시 생기지 않는다.
 
   // 모형을 새로 놓거나 옮길 때, 근처(화면 기준 15px 이내)에 이미 놓인 모형의 변이 있으면 자석처럼
   // 그 변에 딱 붙여준다(왼쪽/오른쪽/위/아래로 붙이기, 변끼리 줄맞추기). 세로 범위가 겹칠 때만 좌우로,
@@ -2183,28 +2169,14 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           groupId: null,
         },
       ]);
-    } else if (payload.type === "placed") {
-      const moving = placedItems.find((it) => it.id === payload.placedId);
-      if (!moving) return;
-      const rotation = moving.rotation != null ? moving.rotation : moving.rotated ? 90 : 0;
-      const rawX = Math.max(0, cmX - (payload.offsetXCm || 0));
-      const rawY = Math.max(0, cmY - (payload.offsetYCm || 0));
-      const moveGroupIds = getMoveGroupIds(moving);
-      if (moveGroupIds.length > 1) {
-        // 여러 개(선택 전체 또는 그룹)를 한꺼번에 옮길 때는 자석처럼 붙거나(snap) 서로 밀어내는 동작은
-        // 하지 않는다(그러면 모형들 사이의 간격·대열이 흐트러지므로) — 대표로 잡은 모형이 옮겨진 만큼
-        // 나머지도 똑같이 옮기고, 벽에 닿으면 전체가 같은 자리에서 함께 멈춘다.
-        const dx = rawX - moving.xCm;
-        const dy = rawY - moving.yCm;
-        const { dx: cdx, dy: cdy } = clampGroupDelta(moveGroupIds, dx, dy);
-        pushHistory();
-        setPlacedItems((prev) => prev.map((it) => (moveGroupIds.includes(it.id) ? { ...it, xCm: it.xCm + cdx, yCm: it.yCm + cdy } : it)));
-      } else {
-        const placed = placeWithSnap(rawX, rawY, moving.widthCm, moving.depthCm, rotation, moving.shapeType === "circle", moving.id);
-        pushHistory();
-        setPlacedItems((prev) => prev.map((it) => (it.id === payload.placedId ? { ...it, xCm: placed.xCm, yCm: placed.yCm } : it)));
-      }
     }
+    // (2026-10-01) 예전엔 여기에 payload.type === "placed" 분기가 더 있어서, 이미 놓인 모형을 다시
+    // 끌어다 "놓는" 순간에 한 번에 자리를 옮겼다. "조금만 더 부드럽게 움직이면 좋겠다" 요청으로 그
+    // 방식(브라우저 기본 드래그)을 mousedown 기반(startMovePlaced, onMoveMove)으로 바꾸면서, 이제
+    // 이미 놓인 모형을 옮기는 계산은 이 함수가 아니라 onMoveMove 쪽에서 매 프레임 이뤄진다 — 똑같은
+    // 계산(자석 스냅 placeWithSnap, 묶어서 옮기기 clampGroupDelta)을 그대로 재사용하되, "드롭할 때
+    // 한 번"이 아니라 "끄는 동안 계속" 실행된다는 점만 다르다. 이 함수(handleCanvasDrop)는 이제
+    // 카탈로그에서 새 모형을 끌어다 놓는 경우(payload.type === "catalog")에만 쓰인다.
   }
 
   function handleRemovePlaced(id) {
@@ -2445,6 +2417,104 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     };
   }
 
+  // "가구가 좌표로 정확히 넣을 수 있으니까 조금만 더 지금보다 부드럽게 움직이면 좋겠다" 요청(2026-10-01)
+  // — 예전엔 모형을 끌어서 옮길 때 브라우저 기본 드래그(HTML5 draggable/onDragStart/onDrop)를 썼는데,
+  // 이 방식은 끄는 동안 실시간으로 따라 움직이는 미리보기가 전혀 없고(마우스를 "놓는" 순간에만 한
+  // 번에 자리가 정해짐 — 바로 위 handleDragStartPlaced였던 자리에 달려있던 옛 주석에도 "끄는 중에
+  // 실시간으로 따라 움직이는 미리보기는 없었다"고 적혀 있었다), 거기다 브라우저가 dragover 이벤트
+  // 자체를 듬성듬성 쏴줘서 전체적으로 뚝뚝 끊기는 느낌이었다. 크기조절·자유회전 손잡이(바로 위
+  // startResizePlaced/startRotatePlaced)가 이미 쓰고 있는 "mousedown으로 시작 → mousemove마다 좌표를
+  // 다시 계산해 state를 갱신(= 매 프레임 다시 그려짐) → mouseup에서 끝" 방식으로 통일해서, 끄는 내내
+  // 모형이 커서를 매끄럽게 따라오도록 바꿨다. 자석처럼 붙는 기능(snapPlacement/placeWithSnap)이나
+  // 여러 개를 묶어서 옮기는 기능(getMoveGroupIds/clampGroupDelta)은 이름까지 그대로 재사용한다 —
+  // 바뀐 건 "언제 좌표가 갱신되는지"(마우스를 놓는 순간 한 번 → 끄는 동안 매 프레임)뿐이고, 실제
+  // 자리를 정하는 계산 자체는 예전 handleCanvasDrop의 "placed" 분기와 똑같다.
+  const moveDragRef = useRef(null);
+  useEffect(() => {
+    function onMoveMove(e) {
+      const drag = moveDragRef.current;
+      if (!drag) return;
+      // 마퀴 선택(handleCanvasMouseDown)과 똑같이, 아주 작은 손떨림(3px 이내)은 "끈 것"으로 치지
+      // 않는다 — 그래야 제자리에서 누르기만 하고 뗀 "그냥 클릭"이 Ctrl+Z 기록에 쌓이거나 선택을
+      // 흐트러뜨리지 않는다(moved가 true가 된 뒤에야 비로소 실행취소 기록 한 번(pushHistory)을 남긴다 —
+      // 손잡이들과 똑같이 "끌기 전" 상태를 한 번만 쌓아서 Ctrl+Z 한 번으로 이번 이동 전체가 통째로
+      // 되돌아가게 한다).
+      if (!drag.moved) {
+        const distPx = Math.hypot(e.clientX - drag.startClientX, e.clientY - drag.startClientY);
+        if (distPx <= 3) return;
+        drag.moved = true;
+        pushHistory();
+      }
+      const rect = canvasRef.current.getBoundingClientRect();
+      const cmX = (e.clientX - rect.left) / renderScale;
+      const cmY = (e.clientY - rect.top) / renderScale;
+      const moving = placedItems.find((it) => it.id === drag.id);
+      if (!moving) return;
+      const rotation = moving.rotation != null ? moving.rotation : moving.rotated ? 90 : 0;
+      const rawX = Math.max(0, cmX - drag.offsetXCm);
+      const rawY = Math.max(0, cmY - drag.offsetYCm);
+      const moveGroupIds = drag.moveGroupIds;
+      if (moveGroupIds.length > 1) {
+        // 여러 개(선택 전체 또는 그룹)를 한꺼번에 옮길 때는 자석처럼 붙거나(snap) 서로 밀어내는 동작은
+        // 하지 않는다(그러면 모형들 사이의 간격·대열이 흐트러지므로) — 대표로 잡은 모형이 옮겨진 만큼
+        // 나머지도 똑같이 옮기고, 벽에 닿으면 전체가 같은 자리에서 함께 멈춘다.
+        const dx = rawX - moving.xCm;
+        const dy = rawY - moving.yCm;
+        const { dx: cdx, dy: cdy } = clampGroupDelta(moveGroupIds, dx, dy);
+        setPlacedItems((prev) => prev.map((it) => (moveGroupIds.includes(it.id) ? { ...it, xCm: it.xCm + cdx, yCm: it.yCm + cdy } : it)));
+      } else {
+        const placed = placeWithSnap(rawX, rawY, moving.widthCm, moving.depthCm, rotation, moving.shapeType === "circle", moving.id);
+        setPlacedItems((prev) => prev.map((it) => (it.id === moving.id ? { ...it, xCm: placed.xCm, yCm: placed.yCm } : it)));
+      }
+    }
+    function onMoveUp() {
+      const drag = moveDragRef.current;
+      // 실제로 끌어서 움직인 뒤라면, 뒤이어 자동으로 따라오는 click 이벤트(끌고 나서 손을 뗀 바로 그
+      // 자리에서 mousedown·mouseup이 같은 요소에서 일어나면 브라우저가 click도 한 번 더 쏴준다)가
+      // 모형 선택 로직(아래 onClick)까지 건드리지 않도록 "방금 끌었다"는 표시만 남겨둔다 — 예전
+      // 브라우저 기본 드래그(HTML5 DnD)는 실제로 끌렸으면 click 자체가 안 일어났는데, mousedown 기반
+      // 방식으로 바꾸면서 생긴 차이를 메워주는 부분이다(안 그러면 여러 개를 선택해 같이 끌어 옮긴
+      // 직후 선택이 끌던 모형 하나로 줄어들어 버린다).
+      if (drag && drag.moved) suppressNextClickRef.current = true;
+      moveDragRef.current = null;
+    }
+    window.addEventListener("mousemove", onMoveMove);
+    window.addEventListener("mouseup", onMoveUp);
+    return () => {
+      window.removeEventListener("mousemove", onMoveMove);
+      window.removeEventListener("mouseup", onMoveUp);
+    };
+  }, [renderScale, spaceWidthM, spaceDepthM, placedItems]);
+
+  // 끌고 나서 손을 뗀 직후에 하나 더 쏘아지는 click 이벤트를 걸러내기 위한 표시(바로 위 onMoveUp
+  // 주석 참고). 렌더와 무관한 순간적인 신호라 useRef로 들고 있는다(끌 때마다 다시 그려질 필요 없음).
+  const suppressNextClickRef = useRef(null);
+  if (suppressNextClickRef.current === null) suppressNextClickRef.current = false;
+
+  function startMovePlaced(it) {
+    return (e) => {
+      // 줄자 모드에서는 끌기를 아예 하지 않는다 — 브라우저 기본 드래그가 살짝이라도 시작되면 그 순간
+      // 클릭(onClick)이 아예 안 먹히는 경우가 있어서, 정확히 점을 찍으려는 클릭이 모형을 옮기는
+      // 동작으로 오인되지 않게 막던 예전 draggable={!rulerMode}와 같은 이유로 그대로 둔다.
+      if (rulerMode) return;
+      if (e.button !== 0) return; // 왼쪽 버튼으로 끌 때만(오른쪽 클릭 등은 무시)
+      e.stopPropagation();
+      e.preventDefault();
+      const rect = canvasRef.current.getBoundingClientRect();
+      const cmX = (e.clientX - rect.left) / renderScale;
+      const cmY = (e.clientY - rect.top) / renderScale;
+      moveDragRef.current = {
+        id: it.id,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        offsetXCm: cmX - it.xCm,
+        offsetYCm: cmY - it.yCm,
+        moveGroupIds: getMoveGroupIds(it),
+        moved: false,
+      };
+    };
+  }
+
   // "모든 품목 가로/세로 사이즈 넣을 수 있는 칸을 만들어줘(적용버튼)" 요청으로 추가된 기능. 손잡이를
   // 마우스로 끌어서 크기를 조절하는 것 말고도, 정확한 숫자를 직접 입력해서 한 번에 맞출 수 있게
   // 한다. 딱 하나만 선택했을 때만 의미가 있으므로(여러 개를 한꺼번에 선택했을 때는 "가로·세로"가
@@ -2517,12 +2587,51 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     );
   }
 
+  // "도형 누르고 파티션 좌측 우측 누르면 생기잖아 다시 누르면 없어지게 해줭" 요청(2026-10-01 5차) —
+  // 앞쪽(북쪽) 파티션을 토글할 때도 "이 책상 북쪽에 이미 파티션이 있는지"를 찾아야 한다. 다만 북쪽
+  // 파티션은 findAdjacentPartition(왼쪽·오른쪽용, 정확한 한 점만 보는 방식)과 달리 왼쪽·오른쪽
+  // 파티션 유무에 따라 처음 만들어질 때부터 시작점(xCm)·길이가 달라질 수 있어서(바로 아래
+  // handleAddPartitionItem의 left/right 늘림 로직 참고), 정확히 한 점이 아니라 "책상 바로 위쪽
+  // (두께만큼)에 놓여 있고, 가로 범위가 책상과 겹치는 가로막대 파티션인지"로 넉넉하게 찾는다.
+  function findFrontPartitionForDesk(desk, aabb) {
+    const expectedYCm = desk.yCm - PARTITION_THICKNESS_CM;
+    return (
+      placedItems.find(
+        (p) =>
+          p.shapeType === "partition" &&
+          p.depthCm === PARTITION_THICKNESS_CM && // 가로막대(앞쪽용)만 — 세로막대(좌/우용)는 제외
+          Math.abs(p.yCm - expectedYCm) < 0.5 &&
+          p.xCm < desk.xCm + aabb.w &&
+          p.xCm + p.widthCm > desk.xCm
+      ) || null
+    );
+  }
+
   function handleAddPartitionItem(side) {
     if (!selectedSingleItem) return;
     if (selectedSingleItem.category !== "책상류") return;
     const desk = selectedSingleItem;
     const deskRotation = desk.rotation != null ? desk.rotation : desk.rotated ? 90 : 0;
     const aabb = rotatedAabbSize(desk.widthCm, desk.depthCm, deskRotation);
+    // "도형 누르고 파티션 좌측 우측 누르면 생기잖아 다시 누르면 없어지게 해줭" 요청(2026-10-01 5차) —
+    // 이 버튼은 이제 단순히 "추가"만 하는 게 아니라 토글이다. 그 변에 이 책상의 파티션이 이미 있으면
+    // (책상 옆 기본 자리에 그대로 있을 때만 찾아짐 — 파티션은 독립 모형이라 자유롭게 옮겨질 수
+    // 있으므로, 다른 데로 옮겨진 파티션은 "이 책상의 파티션"으로 못 찾는 게 자연스러운 한계다) 새로
+    // 만들지 않고 그 파티션을 지운다(다시 누르면 없어짐). 좌/우 파티션을 지워도 이미 만들어져 있는
+    // 앞쪽(북쪽) 파티션의 길이를 되돌리지는 않는다 — 파티션들은 만들어진 뒤로는 서로 완전히
+    // 독립적이라는 기존 설계("자유이동") 그대로다.
+    const existing = side === "front" ? findFrontPartitionForDesk(desk, aabb) : findAdjacentPartition(desk, side, aabb);
+    if (existing) {
+      pushHistory();
+      setPlacedItems((prev) => prev.filter((it) => it.id !== existing.id));
+      setSelectedPlacedIds((prev) => {
+        if (!prev.has(existing.id)) return prev;
+        const next = new Set(prev);
+        next.delete(existing.id);
+        return next;
+      });
+      return;
+    }
     // partitionMaxLengthCm은 ㄱ자 책상의 파인 모서리까지 고려해서 "그 변에 실제로 책상이 맞닿아 있는
     // 길이"를 계산하는데, 이 계산은 돌리기 전(로컬) 좌표계를 기준으로 한다. 책상이 0도/180도로 놓여
     // 있을 때만 이 로컬 좌/우/앞 방향이 화면에서도 그대로 좌/우/앞이므로 그 값을 쓰고, 90도 등으로
@@ -3325,14 +3434,14 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, minHeight: 32, flexWrap: "nowrap", overflowX: "auto" }}>
         {selectedSingleItem && selectedSingleItem.category === "책상류" && (
           <>
-            <span style={{ fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>🚧 파티션 추가:</span>
-            <button onClick={() => handleAddPartitionItem("left")} title="선택한 책상 왼쪽에 파티션(두께 4.5cm) 모형을 새로 만들어요 — 만든 뒤엔 책상과 별개로 자유롭게 옮길 수 있어요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
+            <span style={{ fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>🚧 파티션 추가(다시 누르면 없어짐):</span>
+            <button onClick={() => handleAddPartitionItem("left")} title="선택한 책상 왼쪽에 파티션(두께 4.5cm) 모형을 새로 만들어요 — 만든 뒤엔 책상과 별개로 자유롭게 옮길 수 있고, 책상 옆 자리에 그대로 있다면 다시 눌러서 없앨 수 있어요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
               🚧 좌측
             </button>
-            <button onClick={() => handleAddPartitionItem("right")} title="선택한 책상 오른쪽에 파티션(두께 4.5cm) 모형을 새로 만들어요 — 만든 뒤엔 책상과 별개로 자유롭게 옮길 수 있어요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
+            <button onClick={() => handleAddPartitionItem("right")} title="선택한 책상 오른쪽에 파티션(두께 4.5cm) 모형을 새로 만들어요 — 만든 뒤엔 책상과 별개로 자유롭게 옮길 수 있고, 책상 옆 자리에 그대로 있다면 다시 눌러서 없앨 수 있어요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
               🚧 우측
             </button>
-            <button onClick={() => handleAddPartitionItem("front")} title="선택한 책상 앞쪽(북쪽)에 파티션(두께 4.5cm) 모형을 새로 만들어요 — 만든 뒤엔 책상과 별개로 자유롭게 옮길 수 있어요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
+            <button onClick={() => handleAddPartitionItem("front")} title="선택한 책상 앞쪽(북쪽)에 파티션(두께 4.5cm) 모형을 새로 만들어요 — 만든 뒤엔 책상과 별개로 자유롭게 옮길 수 있고, 책상 옆 자리에 그대로 있다면 다시 눌러서 없앨 수 있어요" style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>
               🚧 앞쪽
             </button>
           </>
@@ -4120,13 +4229,22 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 <div
                   key={it.id}
                   className={`layoutsim-placed-item${isSelected ? " layoutsim-placed-item--selected" : ""}${isNonRectShape ? " layoutsim-placed-item--nonrect" : ""}`}
-                  // 줄자 모드에서는 끌기(draggable)를 꺼둔다 — 브라우저 기본 드래그가 살짝이라도
-                  // 시작되면 그 순간 클릭(onClick)이 아예 안 먹히는 경우가 있어서, 정확히 점을 찍으려는
-                  // 클릭이 모형을 옮기는 동작으로 오인되지 않게 막는다.
-                  draggable={!rulerMode}
-                  onDragStart={(e) => handleDragStartPlaced(e, it)}
+                  // "조금만 더 지금보다 부드럽게 움직이면 좋겠다" 요청(2026-10-01)으로 브라우저 기본
+                  // 드래그(HTML5 draggable/onDragStart) 대신, 손잡이들과 같은 mousedown 기반 방식
+                  // (startMovePlaced)으로 바꿨다 — 자세한 경위는 바로 위 startMovePlaced 정의부 주석
+                  // 참고. 줄자 모드에서는 startMovePlaced 안에서 바로 return해서 끌기 자체가 시작되지
+                  // 않는다(예전 draggable={!rulerMode}와 같은 이유 — 정확히 점을 찍으려는 클릭이 모형을
+                  // 옮기는 동작으로 오인되지 않게 막는다).
+                  onMouseDown={startMovePlaced(it)}
                   onClick={(e) => {
                     e.stopPropagation();
+                    // 방금 끌어서(mousedown → mousemove → mouseup) 모형을 옮긴 직후라면, 뒤이어 자동으로
+                    // 쏘아지는 이 click 이벤트는 선택 상태를 건드리지 않고 그냥 지나간다(바로 위
+                    // onMoveUp 주석 참고 — 안 그러면 여러 개를 같이 끌어 옮긴 직후 선택이 하나로 줄어든다).
+                    if (suppressNextClickRef.current) {
+                      suppressNextClickRef.current = false;
+                      return;
+                    }
                     // 줄자 모드일 때는 모형을 클릭해도 선택하지 않고, 그 자리(가장 가까운 모형 끝점에
                     // 딱 맞춰서)에 줄자 점을 찍는다. 실제로 거리를 재고 싶은 지점은 대부분 모형의
                     // 모서리라서, 모형 위를 클릭하면 늘 "선택"으로 처리되던 것이 "줄자 사용이 불편하다"
