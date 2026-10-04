@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useState, useRef } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { deriveLoginId } from "../lib/accountRecovery";
 import {
   ResponsiveContainer,
   BarChart,
@@ -1700,7 +1701,7 @@ export default function Home() {
     );
   }
   if (!session || !profile) return <LoginScreen />;
-  return <Dashboard profile={profile} onLogout={() => supabase.auth.signOut()} />;
+  return <Dashboard profile={profile} session={session} onLogout={() => supabase.auth.signOut()} />;
 }
 
 // 로그인 아이디에 "@"가 없으면(직원용 짧은 아이디, 예: re001) 내부적으로 가짜 도메인을 붙여
@@ -1716,6 +1717,8 @@ function LoginScreen() {
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  // "로그인 아이디/비밀번호를 잊으셨나요?" 요청(2026-10-04)에 따라 추가한 계정 찾기 모달 노출 여부.
+  const [showRecovery, setShowRecovery] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -1751,7 +1754,107 @@ function LoginScreen() {
           <button type="submit" disabled={busy} style={primaryBtnStyle}>
             {busy ? "로그인 중…" : "로그인"}
           </button>
+          <button
+            type="button"
+            onClick={() => setShowRecovery(true)}
+            style={{
+              display: "block",
+              width: "100%",
+              textAlign: "center",
+              background: "transparent",
+              border: "none",
+              color: C.inkSoft,
+              fontSize: 12.5,
+              marginTop: 14,
+              cursor: "pointer",
+              fontFamily: sans,
+              textDecoration: "underline",
+            }}
+          >
+            아이디/비밀번호를 잊으셨나요?
+          </button>
         </form>
+      </div>
+      {showRecovery && <AccountRecoveryModal onClose={() => setShowRecovery(false)} />}
+    </div>
+  );
+}
+
+// "아이디/비밀번호를 잊으셨나요?" 모달(2026-10-04 추가).
+// 이름+휴대전화번호가 profiles 테이블에 등록된 값과 정확히 일치하는 직원 1명을 서버(/api/account-recovery)가
+// 찾아서, 로그인 아이디와 새로 발급한 임시 비밀번호를 알려준다. (전화번호를 등록해두지 않은 직원은
+// 이 기능을 쓸 수 없고, 관리자가 Supabase 대시보드에서 직접 비밀번호를 재설정해줘야 한다.)
+function AccountRecoveryModal({ onClose }) {
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [err, setErr] = useState("");
+  const [result, setResult] = useState(null); // { loginId, tempPassword }
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr("");
+    if (!name.trim() || !phone.trim()) {
+      setErr("이름과 휴대전화번호를 모두 입력해주세요.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const resp = await fetch("/api/account-recovery", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, phone }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setErr(data.error || "일치하는 계정을 찾을 수 없어요. 관리자에게 문의해주세요.");
+      } else {
+        setResult(data);
+      }
+    } catch (e2) {
+      setErr("서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,20,20,0.5)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: "#fff", width: "min(380px, 100%)", border: `1px solid ${C.line}`, padding: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontFamily: serif, fontSize: 16 }}>아이디/비밀번호 찾기</div>
+          <button type="button" onClick={onClose} style={ghostBtnStyle}>닫기</button>
+        </div>
+
+        {result ? (
+          <div>
+            <div style={{ fontSize: 13.5, lineHeight: 1.9, marginBottom: 16 }}>
+              <div>로그인 아이디: <b>{result.loginId}</b></div>
+              <div>임시 비밀번호: <b>{result.tempPassword}</b></div>
+            </div>
+            <div style={{ fontSize: 12.5, color: C.brick, marginBottom: 16, lineHeight: 1.6 }}>
+              이 임시 비밀번호는 지금만 보이고 다시는 확인할 수 없어요. 꼭 적어두신 뒤 로그인하시고, 로그인 후
+              오른쪽 위 "내 정보"에서 바로 원하는 비밀번호로 바꿔주세요.
+            </div>
+            <button type="button" onClick={onClose} style={primaryBtnStyle}>확인했어요</button>
+          </div>
+        ) : (
+          <form onSubmit={submit}>
+            <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 14, lineHeight: 1.6 }}>
+              등록된 이름과 휴대전화번호가 모두 일치하면, 로그인 아이디와 새 임시 비밀번호를 알려드려요.
+            </div>
+            <Field label="이름">
+              <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} autoFocus />
+            </Field>
+            <Field label="휴대전화번호 (등록된 번호)">
+              <input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} placeholder="예: 01012345678" />
+            </Field>
+            {err && <div style={{ color: C.brick, fontSize: 13, marginBottom: 12 }}>{err}</div>}
+            <button type="submit" disabled={busy} style={primaryBtnStyle}>
+              {busy ? "확인 중…" : "확인"}
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );
@@ -1778,7 +1881,108 @@ function StatCell({ label, value, color, active, onClick, last }) {
   );
 }
 
-function Dashboard({ profile, onLogout }) {
+// "내 정보" 모달(2026-10-04 추가) — 이름/로그인 아이디/역할을 보여주고, 본인 비밀번호를 바꿀 수 있게 한다.
+// 비밀번호를 바꾸기 전에 "현재 비밀번호"를 한 번 더 확인(재로그인 시도)해서, 자리를 비운 사이 다른
+// 사람이 함부로 비밀번호를 바꿔버리는 일을 막는다.
+function MyInfoModal({ profile, session, onClose }) {
+  const [currentPw, setCurrentPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const loginId = deriveLoginId(session?.user?.email);
+  const isAdmin = profile.role === "admin";
+  const isSales = profile.role === "sales";
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr("");
+    setMsg("");
+    if (!currentPw || !newPw || !confirmPw) {
+      setErr("모든 칸을 입력해주세요.");
+      return;
+    }
+    if (newPw.length < 6) {
+      setErr("새 비밀번호는 6자 이상이어야 해요.");
+      return;
+    }
+    if (newPw !== confirmPw) {
+      setErr("새 비밀번호와 확인이 서로 달라요.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const { error: verifyErr } = await supabase.auth.signInWithPassword({
+        email: session.user.email,
+        password: currentPw,
+      });
+      if (verifyErr) {
+        setErr("현재 비밀번호가 올바르지 않아요.");
+        setBusy(false);
+        return;
+      }
+      const { error: updateErr } = await supabase.auth.updateUser({ password: newPw });
+      if (updateErr) {
+        setErr("비밀번호 변경에 실패했어요. (" + (updateErr.message || "") + ")");
+      } else {
+        setMsg("비밀번호가 변경되었습니다. 다음 로그인부터 새 비밀번호를 사용해주세요.");
+        setCurrentPw("");
+        setNewPw("");
+        setConfirmPw("");
+      }
+    } catch (e2) {
+      setErr("서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,20,20,0.5)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: "#fff", width: "min(420px, 100%)", maxHeight: "92vh", overflow: "auto", border: `1px solid ${C.line}`, padding: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontFamily: serif, fontSize: 17 }}>내 정보</div>
+          <button type="button" onClick={onClose} style={ghostBtnStyle}>닫기</button>
+        </div>
+
+        <div style={{ fontSize: 13.5, color: C.inkSoft, marginBottom: 20, lineHeight: 1.8 }}>
+          <div><span style={{ color: C.muted }}>이름 </span>{profile.name}</div>
+          <div><span style={{ color: C.muted }}>로그인 아이디 </span>{loginId}</div>
+          <div>
+            <span style={{ color: C.muted }}>역할 </span>
+            {isAdmin ? "관리자" : isSales ? `영업담당자 (${profile.manager_name || ""})` : `${profile.company || ""} 담당자`}
+          </div>
+        </div>
+
+        <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 16 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 12 }}>비밀번호 변경</div>
+          <form onSubmit={submit}>
+            <Field label="현재 비밀번호">
+              <input type="password" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} style={inputStyle} autoFocus />
+            </Field>
+            <Field label="새 비밀번호 (6자 이상)">
+              <input type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)} style={inputStyle} />
+            </Field>
+            <Field label="새 비밀번호 확인">
+              <input type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} style={inputStyle} />
+            </Field>
+            {err && <div style={{ color: C.brick, fontSize: 13, marginBottom: 12 }}>{err}</div>}
+            {msg && <div style={{ color: C.green, fontSize: 13, marginBottom: 12 }}>{msg}</div>}
+            <button type="submit" disabled={busy} style={primaryBtnStyle}>
+              {busy ? "변경 중…" : "비밀번호 변경"}
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Dashboard({ profile, session, onLogout }) {
+  // "내 정보" 화면(이름/로그인 아이디/역할 확인 + 비밀번호 변경) 노출 여부(2026-10-04 추가).
+  const [showMyInfo, setShowMyInfo] = useState(false);
   const isAdmin = profile.role === "admin";
   const isSales = profile.role === "sales"; // 영업담당자 계정: 본인 담당자명과 일치하는 데이터만 보고 관리할 수 있음
   const isStaff = isAdmin || isSales; // 내부 직원(관리자+영업담당자)은 같은 화면 구성을 쓰고, 실제 데이터 범위는 DB 권한(RLS)이 갈라준다.
@@ -2186,10 +2390,12 @@ function Dashboard({ profile, onLogout }) {
               <div style={{ color: C.ink, fontWeight: 600 }}>{profile.name}</div>
               <div style={{ fontSize: 11.5 }}>{isAdmin ? "관리자" : isSales ? `${managerName} 담당자` : `${profile.company} 담당자`}</div>
             </div>
+            <button className="rm-logout-btn" onClick={() => setShowMyInfo(true)} style={ghostBtnStyle}>내 정보</button>
             <button className="rm-logout-btn" onClick={onLogout} style={ghostBtnStyle}>로그아웃</button>
           </div>
         </div>
       </div>
+      {showMyInfo && <MyInfoModal profile={profile} session={session} onClose={() => setShowMyInfo(false)} />}
 
       {/* (2026-09-30 미세조정) 위 헤더 줄과 똑같이 maxWidth 1900 + margin 0(왼쪽 고정)으로 맞췄다.
           예전엔 둘 다 "margin: 0 auto"로 가운데 정렬돼 있었는데, 그러면 화면 세로 스크롤바가 생겼다
