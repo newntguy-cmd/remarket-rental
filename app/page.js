@@ -5541,10 +5541,12 @@ function QuotePhotoOutputView({ state, onClose }) {
           </div>
         </div>
 
+        {/* (2026-10-04) "출력물에서 '사무집기 이미지 출력물'이란 단어는 다 빼줘" 요청으로, 인쇄 영역
+            맨 위에 있던 큰 제목을 뺐다. 거래처·현장·전표번호 줄은 어떤 전표의 출력물인지 구분하는 데
+            여전히 필요해서 그대로 남겨뒀다. */}
         <div id="qpo-print-area">
           <div style={{ textAlign: "center", marginBottom: 18 }}>
-            <div style={{ fontFamily: serif, fontSize: 20 }}>사무집기 이미지 출력물</div>
-            <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: C.muted }}>
               {state.customer || state.recipient || ""}
               {state.siteName ? ` · ${state.siteName}` : ""}
               {state.voucherNo ? ` · #${state.voucherNo}` : ""}
@@ -5561,11 +5563,10 @@ function QuotePhotoOutputView({ state, onClose }) {
                     <span style={{ fontSize: 11.5, color: C.muted }}>사진 없음</span>
                   )}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 2 }}>{it.item || "(품목명 없음)"}</div>
-                {it.spec && <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 4 }}>{it.spec}</div>}
-                <div style={{ fontSize: 11.5, color: C.inkSoft }}>
-                  수량 {it.qty ?? "-"} · 단가 {fmtWon(it.unit_price)} · 금액 {fmtWon(it.amount)}
-                </div>
+                {/* (2026-10-04) "사진 하단에 수량 단가 금액 등은 제외해줘" 요청으로 아래 수량/단가/금액
+                    줄을 뺐다 — 사진으로 품목을 확인시켜주는 용도라 가격 정보는 필요없다고 판단한 것. */}
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: it.spec ? 2 : 0 }}>{it.item || "(품목명 없음)"}</div>
+                {it.spec && <div style={{ fontSize: 11.5, color: C.muted }}>{it.spec}</div>}
               </div>
             ))}
           </div>
