@@ -1360,6 +1360,118 @@ async function convertPdfFileToSheets(file) {
   return { sheets, anyTextFound };
 }
 
+// ---------- PDF→엑셀 변환 결과를 "원본처럼 보이게" 꾸미기 ----------
+// (2026-10-06 추가) "엑셀 변환 퀄리티가 이 정도는 나와줘야지", "원본하고 최대한 비슷하게 부탁해" 요청으로
+// 추가. 지금까지는 글자만 칸에 맞춰 넣어줬을 뿐 테두리·배경색이 전혀 없어서 "표"처럼 보이지 않았다.
+//
+// 테두리/배경색을 가진 진짜 .xlsx 파일을 만들려면 셀 서식을 "쓸" 수 있는 라이브러리(예: exceljs)가
+// 필요한데, 지금 작업 환경에서는 새 라이브러리를 설치해 테스트해볼 수 없는 제약이 있어(사내 네트워크
+// 정책), 이미 쓰고 있는 xlsx 패키지로는 서식을 쓸 수 없다(무료 버전의 알려진 제약). 그래서 대신,
+// 엑셀이 예전부터 지원해온 다른 방법을 썼다: "표(HTML)를 .xls 파일로 저장하면 엑셀이 그 표의 테두리·
+// 배경색·글자굵기를 그대로 살려서 열어준다" — 엑셀 자체 기능이라 새 라이브러리가 전혀 필요 없다.
+// (참고: 구글시트/한셀 등 엑셀이 아닌 프로그램에서는 이 방식이 100% 똑같이 보이지 않을 수 있다.)
+function escapeHtmlCell(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// 칸 안의 내용이 "숫자/금액처럼" 보이는지(수량·단가·금액 칸, "-"로 표시된 빈 금액 칸 포함) 본다.
+// 품목표의 머리글(품목/규격/수량/단가/금액/비고)에는 이런 칸이 없고, 실제 품목 행에는 반드시 있다.
+function looksLikeNumericCell(cell) {
+  const t = String(cell ?? "").trim();
+  if (!t) return false;
+  return /^-$/.test(t) || /^[\d][\d,.\-%]*$/.test(t);
+}
+function looksLikeDataRow(row) {
+  return (row || []).some(looksLikeNumericCell);
+}
+
+// 표의 "제목행"을 추정한다: 칸이 3개 이상이면서 숫자 칸이 하나도 없는(=라벨만 있는) 줄이, 몇 줄 안에
+// 숫자가 들어간 "품목 데이터행"으로 이어지면 그 라벨 줄을 제목행으로 본다 — 품목표의 "품목/규격/수량/
+// 단가/금액/비고" 같은 머리글(+ 영문 보조행)을 잡아내려는 것. 실제 품목 행 자체(숫자 칸이 있음)나,
+// "수신 : DB월드"처럼 라벨 한두 칸뿐인 줄(칸이 3개 미만)은 제목행으로 오인하지 않는다.
+function detectHeaderRowSet(aoa) {
+  const headerRows = new Set();
+  const LOOKAHEAD = 3;
+  for (let i = 0; i < aoa.length; i++) {
+    const row = aoa[i] || [];
+    if (row.length < 3) continue;
+    if (looksLikeDataRow(row)) continue;
+    let hasNearbyDataRow = false;
+    for (let k = i + 1; k <= i + LOOKAHEAD && k < aoa.length; k++) {
+      if (looksLikeDataRow(aoa[k] || [])) {
+        hasNearbyDataRow = true;
+        break;
+      }
+    }
+    if (hasNearbyDataRow) headerRows.add(i);
+  }
+  return headerRows;
+}
+
+// 칸마다 들어있는 글자 길이를 보고 적당한 폭(px)을 정한다(너무 좁거나 너무 넓지 않게 50~400px로 제한).
+function computeColWidthsPx(aoa) {
+  const widths = [];
+  for (const row of aoa) {
+    (row || []).forEach((cell, ci) => {
+      const len = String(cell ?? "").length;
+      widths[ci] = Math.max(widths[ci] || 0, len);
+    });
+  }
+  return widths.map((len) => Math.min(400, Math.max(50, len * 7 + 16)));
+}
+
+function aoaSheetToHtmlTable(aoa, title) {
+  const headerRows = detectHeaderRowSet(aoa);
+  const colWidths = computeColWidthsPx(aoa);
+  const colsHtml = colWidths.map((w) => `<col style="width:${w}px">`).join("");
+  const titleHtml = title
+    ? `<tr><td colspan="${Math.max(1, colWidths.length)}" style="font-weight:bold; font-size:13pt; border:none; padding:4px 2px;">${escapeHtmlCell(title)}</td></tr>`
+    : "";
+  const rowsHtml = aoa
+    .map((row, ri) => {
+      const isHeader = headerRows.has(ri);
+      const cellsHtml = (row || [])
+        .map((cell) => {
+          const style = isHeader
+            ? 'border:1px solid #999999; background:#F2F2F2; font-weight:bold; padding:3px 6px; mso-number-format:"\\@";'
+            : 'border:1px solid #999999; padding:3px 6px; mso-number-format:"\\@";';
+          return `<td style='${style}'>${escapeHtmlCell(cell)}</td>`;
+        })
+        .join("");
+      return `<tr>${cellsHtml}</tr>`;
+    })
+    .join("");
+  return `<table border="0" cellspacing="0" cellpadding="0"><colgroup>${colsHtml}</colgroup>${titleHtml}${rowsHtml}</table>`;
+}
+
+// convertPdfFileToSheets가 만든 sheets(페이지별 aoa)를 받아, 엑셀이 테두리·배경색·글자굵기를 그대로
+// 살려서 열어주는 .xls(HTML 기반) 파일 내용을 만든다. 맨 앞의 BOM(﻿)은 한글이 깨지지 않도록
+// 엑셀에게 "이 파일은 UTF-8이다"라고 알려주는 역할이다.
+function aoaSheetsToStyledHtmlXls(sheets) {
+  const tables = sheets.map((s) => aoaSheetToHtmlTable(s.aoa, sheets.length > 1 ? s.name : null)).join("<br>");
+  return (
+    "﻿" +
+    `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="UTF-8">
+<!--[if gte mso 9]><xml>
+<x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Sheet1</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook>
+</xml><![endif]-->
+<style>
+table { border-collapse: collapse; font-family: "맑은 고딕", Calibri, Arial, sans-serif; font-size: 10.5pt; }
+td { vertical-align: middle; }
+</style>
+</head>
+<body>
+${tables}
+</body>
+</html>`
+  );
+}
+
 // ---------- A/S 접수 및 처리보고서 엑셀 파싱 ----------
 // 이 양식은 품목표처럼 행이 반복되는 표가 아니라, "라벨 칸 + 값 칸"이 나란히 있는 1장짜리 양식이다(예:
 // "고 객 명" 칸 바로 오른쪽에 실제 고객명이 적힌 칸이 옴). 그래서 견적서 파싱과 달리, 각 행을 훑으면서
@@ -5399,15 +5511,18 @@ function PdfToExcelTab() {
         setErr("이 PDF에서 글자를 읽어내지 못했어요. 스캔한 이미지로 만들어진 PDF는 아직 지원하지 않아요(엑셀·한글 프로그램에서 PDF로 저장한 파일이면 대부분 잘 변환돼요).");
         return;
       }
-      const XLSX = await import("xlsx");
-      const wb = XLSX.utils.book_new();
-      sheets.forEach((s) => {
-        const ws = XLSX.utils.aoa_to_sheet(s.aoa);
-        XLSX.utils.book_append_sheet(wb, ws, s.name);
-      });
-      const outName = file.name.replace(/\.pdf$/i, "") + "_변환.xlsx";
-      XLSX.writeFile(wb, outName);
-      setDoneMsg(`"${outName}" 파일로 내려받았어요. (총 ${sheets.length}페이지)`);
+      const html = aoaSheetsToStyledHtmlXls(sheets);
+      const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
+      const outName = file.name.replace(/\.pdf$/i, "") + "_변환.xls";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = outName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setDoneMsg(`"${outName}" 파일로 내려받았어요. (총 ${sheets.length}페이지, 테두리·표 머리글 색이 들어가요)`);
     } catch (e) {
       console.error(e);
       setErr("PDF를 변환하는 중 문제가 발생했어요. 파일 형식을 확인해주세요.");
@@ -5427,9 +5542,9 @@ function PdfToExcelTab() {
     <div>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>PDF를 엑셀로 변환</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16, maxWidth: 560, lineHeight: 1.7 }}>
-        PDF 파일을 올리면 화면에 보이는 줄·칸 구성을 최대한 그대로 살려서 엑셀(.xlsx) 파일로 내려받아요.
-        엑셀이나 한글 프로그램에서 PDF로 저장한 문서일수록 더 정확하게 변환돼요(표가 아닌 문서나 스캔한
-        이미지 PDF는 줄·칸이 완벽히 맞지 않을 수 있어요).
+        PDF 파일을 올리면 화면에 보이는 줄·칸 구성과 표 테두리·머리글 색까지 살려서 엑셀(.xls) 파일로
+        내려받아요. 엑셀이나 한글 프로그램에서 PDF로 저장한 문서일수록 더 정확하게 변환돼요(표가 아닌
+        문서나 스캔한 이미지 PDF는 줄·칸이 완벽히 맞지 않을 수 있어요).
       </div>
 
       <div
@@ -6061,6 +6176,116 @@ function formatDims(p) {
   return parts.length ? parts.join("×") + "mm" : null;
 }
 
+// (2026-10-06 추가) "2개 클릭해서 연체리 기준으로를 고르면 월넛이 커져야 하는 거 아니냐? 반영 안됨" 버그
+// 신고 — 처음 만든 "기준으로 맞추기"는 두 사진의 zoom_pct 숫자를 그냥 똑같이 맞췄는데, 두 사진이 원래
+// 찍힌/잘린 정도(사진 속에서 가구가 차지하는 비율)가 서로 다르면 zoom_pct가 같아도 실제 화면에 보이는
+// 크기는 여전히 다르게 나온다(두 사진 다 기본값 100%였는데 100%=100%라서 아예 아무 변화도 없었던
+// 것도 이 때문). 그래서 사진마다 배경을 자동으로 읽어서 "가구가 사진 안에서 실제로 차지하는 비율"
+// (fillRatio, 0~1)을 미리 계산해두고, 그 비율이 작을수록(=사진에 여백이 많을수록) 자동으로 더 확대해서
+// 보정한다. fillRatio를 못 구했거나 신뢰할 수 없는 사진(예: 배경이 지저분해서 전경/배경 구분이 잘 안 될
+// 때)은 1로 두어(보정 없음) 예전처럼 보이게 한다. 최대 3배까지만 자동 보정한다(그 이상은 화질이 깨지거나
+// 결과가 이상해질 수 있어서).
+function autoBoostFromFillRatio(fillRatio) {
+  const r = fillRatio == null ? 1 : fillRatio;
+  const clamped = Math.max(1 / 3, Math.min(1, r));
+  return 1 / clamped;
+}
+
+// 체크박스로 고른 사진들 중 "이 사진 기준으로 맞추기"를 눌렀을 때, 나머지 사진들에 저장할 zoom_pct 값을
+// 계산하는 순수 함수(Supabase 호출 없이 계산만) — 기준 사진의 "실제 보이는 크기"(manual 배율 × fillRatio
+// 자동보정)를 구한 뒤, 나머지 사진도 똑같은 "실제 보이는 크기"가 나오도록 각자의 fillRatio를 감안해
+// 역산한다. 20~400% 범위로 한도를 둔다.
+function computeReferenceZoomUpdates(ref, others, fillRatioById) {
+  const refManual = ref.zoom_pct || 100;
+  const refBoost = autoBoostFromFillRatio(fillRatioById[ref.id]);
+  const refEffective = refManual * refBoost;
+  return others.map((p) => {
+    const boost = autoBoostFromFillRatio(fillRatioById[p.id]);
+    const manual = Math.max(20, Math.min(400, Math.round(refEffective / boost)));
+    return { id: p.id, zoom_pct: manual };
+  });
+}
+
+// 사진 하나를 캔버스에 그려서, 네 모서리 색을 배경색으로 추정한 뒤 그 색과 뚜렷이 다른 픽셀들의
+// 테두리 상자를 구해 "가구가 사진 안에서 차지하는 비율"(0~1)을 계산한다. 배경 추정이 믿을만하지
+// 않아 보이면(전경이 거의 없거나 거의 전체를 덮는 경우) 1(보정 없음)을 돌려준다. 브라우저의
+// 이미지/캔버스 기능이 필요해서 실제로는 화면(클라이언트)에서만 동작한다.
+function detectContentFillRatio(url) {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const MAX = 120;
+          const scale = Math.min(1, MAX / Math.max(img.naturalWidth || MAX, img.naturalHeight || MAX));
+          const w = Math.max(1, Math.round((img.naturalWidth || MAX) * scale));
+          const h = Math.max(1, Math.round((img.naturalHeight || MAX) * scale));
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, w, h);
+          const { data } = ctx.getImageData(0, 0, w, h);
+          const corners = [
+            [0, 0],
+            [w - 1, 0],
+            [0, h - 1],
+            [w - 1, h - 1],
+          ];
+          let br = 0,
+            bg = 0,
+            bb = 0;
+          for (const [cx, cy] of corners) {
+            const idx = (cy * w + cx) * 4;
+            br += data[idx];
+            bg += data[idx + 1];
+            bb += data[idx + 2];
+          }
+          br /= 4;
+          bg /= 4;
+          bb /= 4;
+          const THRESHOLD = 32;
+          let minX = w,
+            minY = h,
+            maxX = -1,
+            maxY = -1,
+            fgCount = 0;
+          for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+              const idx = (y * w + x) * 4;
+              const dr = data[idx] - br;
+              const dg = data[idx + 1] - bg;
+              const db = data[idx + 2] - bb;
+              if (Math.sqrt(dr * dr + dg * dg + db * db) > THRESHOLD) {
+                fgCount++;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+              }
+            }
+          }
+          const totalPx = w * h;
+          if (fgCount < totalPx * 0.01 || fgCount > totalPx * 0.97) {
+            resolve(1);
+            return;
+          }
+          const bboxW = maxX - minX + 1;
+          const bboxH = maxY - minY + 1;
+          const ratio = Math.sqrt((bboxW * bboxH) / totalPx);
+          resolve(Math.min(1, Math.max(0.25, ratio)));
+        } catch (e) {
+          resolve(1);
+        }
+      };
+      img.onerror = () => resolve(1);
+      img.src = url;
+    } catch (e) {
+      resolve(1);
+    }
+  });
+}
+
 // ---------- 제품사진 라이브러리 (사무집기 사진을 품목명과 함께 미리 등록해두는 관리 화면) ----------
 // "이미지 파일을 별도로 줄거야"라는 요청에 맞춰, 화면에서 사진을 하나씩 올리고 품목명(+선택적으로
 // 규격)을 입력해 등록하는 방식으로 만들었다. 여기 등록한 사진은 견적서 업로드 화면의 "사진 출력물
@@ -6072,6 +6297,9 @@ function PhotoLibraryTab() {
   const [photos, setPhotos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [urlById, setUrlById] = useState({});
+  // (2026-10-06 추가) 사진마다 "가구가 실제로 차지하는 비율"을 자동으로 계산해서 담아둔다(id -> 0~1).
+  // 사진을 불러올 때마다(아래 urlById가 채워질 때마다) 한 번씩 계산해서 채워진다.
+  const [fillRatioById, setFillRatioById] = useState({});
   const [newName, setNewName] = useState("");
   const [newSpec, setNewSpec] = useState("");
   // "규격 옆에 색상 넣는 칸을 하나 만들어서... 나중에 견적서 상의 색상하고도 매칭되게 해보자" 요청 —
@@ -6169,6 +6397,27 @@ function PhotoLibraryTab() {
       urls.forEach((u) => URL.revokeObjectURL(u));
     };
   }, [photos]);
+
+  // (2026-10-06 추가) "같은 제품인데 보이는 크기가 다르면 네가 알아서" 요청 — 사진 주소(urlById)가
+  // 새로 생기면, 아직 fillRatio를 계산 안 해본 사진들만 골라 하나씩 계산해서 채워준다. 이미 계산해둔
+  // 사진은 다시 계산하지 않는다(이미지가 안 바뀌는 한 결과도 안 바뀌므로).
+  useEffect(() => {
+    let cancelled = false;
+    const already = new Set(Object.keys(fillRatioById));
+    const pending = Object.keys(urlById).filter((id) => !already.has(id));
+    if (pending.length === 0) return;
+    (async () => {
+      for (const id of pending) {
+        const ratio = await detectContentFillRatio(urlById[id]);
+        if (cancelled) return;
+        setFillRatioById((prev) => (prev[id] !== undefined ? prev : { ...prev, [id]: ratio }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlById]);
 
   async function handleAdd() {
     if (!newName.trim()) {
@@ -6452,18 +6701,24 @@ function PhotoLibraryTab() {
     setBulkZoomValue(null);
   }
 
-  // 지금 체크된 카드들에 한해서, 슬라이더로 고른 확대 비율을 실시간 미리보기로 보여준다(아직 저장 전).
-  // 체크 안 한 카드나, 슬라이더를 아직 한 번도 안 움직였으면(bulkZoomValue가 null) 원래 저장된 값 그대로.
+  // 화면에 실제로 적용할 확대 비율 = 사람이 정한 배율(수동, 체크 중이면 슬라이더 미리보기값 우선) ×
+  // 사진마다 자동으로 계산해둔 보정값(autoBoostFromFillRatio — 사진 속 여백이 많을수록 자동으로 더 확대).
+  // (버그 수정 2026-10-06) "2개 클릭해서 연체리 기준으로를 고르면 월넛이 커져야 하는 거 아니냐? 반영
+  // 안됨" — 전에는 이 자동보정이 없어서, 두 사진의 zoom_pct 숫자만 같으면(둘 다 기본값 100%였던 경우
+  // 등) 실제 사진 속 여백 차이가 그대로 남아 화면에 다르게 보였다.
   function effectiveZoomPct(p) {
-    if (bulkZoomValue != null && selectedIds.has(p.id)) return bulkZoomValue;
-    return p.zoom_pct || 100;
+    const manual = bulkZoomValue != null && selectedIds.has(p.id) ? bulkZoomValue : p.zoom_pct || 100;
+    return manual * autoBoostFromFillRatio(fillRatioById[p.id]);
   }
 
-  // 여러 장의 id에 같은 zoom_pct 값을 한꺼번에 저장하는 공용 함수. 직접 비율을 입력해서 맞출 때(applyBulkZoom)와
-  // "이 사진 기준으로 맞추기" 버튼을 눌렀을 때(applyReferenceZoom) 둘 다 이 함수를 쓴다.
-  async function persistZoomToIds(ids, zoomValue) {
+  // 여러 장에, 각자 다른 zoom_pct 값을 한꺼번에 저장하는 공용 함수. updates는 [{id, zoom_pct}, ...] 형태.
+  // 직접 비율을 입력해서 맞출 때(applyBulkZoom, 전부 같은 값)와 "이 사진 기준으로 맞추기"를 눌렀을
+  // 때(applyReferenceZoom, 사진마다 다른 값) 둘 다 이 함수를 쓴다.
+  async function persistZoomUpdates(updates) {
     setApplyingZoom(true);
-    const results = await Promise.all(ids.map((id) => supabase.from("item_photos").update({ zoom_pct: zoomValue }).eq("id", id)));
+    const results = await Promise.all(
+      updates.map(({ id, zoom_pct }) => supabase.from("item_photos").update({ zoom_pct }).eq("id", id))
+    );
     setApplyingZoom(false);
     const err = results.find((r) => r.error)?.error;
     if (err) {
@@ -6481,23 +6736,23 @@ function PhotoLibraryTab() {
 
   async function applyBulkZoom() {
     if (selectedIds.size === 0 || bulkZoomValue == null) return;
-    const ok = await persistZoomToIds(Array.from(selectedIds), bulkZoomValue);
+    const ok = await persistZoomUpdates(Array.from(selectedIds).map((id) => ({ id, zoom_pct: bulkZoomValue })));
     if (!ok) return;
     clearSelection();
     fetchPhotos();
   }
 
   // "A와 B를 B 기준으로 동일하게, A 기준으로 동일하게" 요청 — 비율을 숫자로 직접 입력하는 대신, 선택한
-  // 사진 중 하나를 "이 사진 기준으로 맞추기"로 고르면, 그 사진의 현재 배율을 나머지 선택된 사진들에
-  // 그대로 복사해 저장한다(기준으로 고른 사진 자체는 그대로 둔다). 슬라이더로 값을 가늠할 필요 없이
-  // 눈에 보이는 사진을 그대로 기준 삼을 수 있어 더 직관적이다.
+  // 사진 중 하나를 "이 사진 기준으로 맞추기"로 고르면, 그 사진이 화면에 실제로 보이는 크기(수동 배율 ×
+  // 자동보정)를 구해서, 나머지 선택된 사진들도 각자의 자동보정을 감안해 똑같은 크기로 보이도록 역산한
+  // zoom_pct를 계산해 저장한다(기준으로 고른 사진 자체는 그대로 둔다).
   async function applyReferenceZoom(refId) {
     const ref = photos.find((x) => x.id === refId);
     if (!ref) return;
-    const targetZoom = ref.zoom_pct || 100;
-    const otherIds = Array.from(selectedIds).filter((id) => id !== refId);
-    if (otherIds.length === 0) return;
-    const ok = await persistZoomToIds(otherIds, targetZoom);
+    const others = photos.filter((p) => selectedIds.has(p.id) && p.id !== refId);
+    if (others.length === 0) return;
+    const updates = computeReferenceZoomUpdates(ref, others, fillRatioById);
+    const ok = await persistZoomUpdates(updates);
     if (!ok) return;
     clearSelection();
     fetchPhotos();
