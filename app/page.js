@@ -6459,13 +6459,11 @@ function PhotoLibraryTab() {
     return p.zoom_pct || 100;
   }
 
-  async function applyBulkZoom() {
-    if (selectedIds.size === 0 || bulkZoomValue == null) return;
+  // 여러 장의 id에 같은 zoom_pct 값을 한꺼번에 저장하는 공용 함수. 직접 비율을 입력해서 맞출 때(applyBulkZoom)와
+  // "이 사진 기준으로 맞추기" 버튼을 눌렀을 때(applyReferenceZoom) 둘 다 이 함수를 쓴다.
+  async function persistZoomToIds(ids, zoomValue) {
     setApplyingZoom(true);
-    const ids = Array.from(selectedIds);
-    const results = await Promise.all(
-      ids.map((id) => supabase.from("item_photos").update({ zoom_pct: bulkZoomValue }).eq("id", id))
-    );
+    const results = await Promise.all(ids.map((id) => supabase.from("item_photos").update({ zoom_pct: zoomValue }).eq("id", id)));
     setApplyingZoom(false);
     const err = results.find((r) => r.error)?.error;
     if (err) {
@@ -6476,8 +6474,31 @@ function PhotoLibraryTab() {
             ? " (Supabase의 item_photos 테이블에 zoom_pct 컬럼이 아직 없을 수 있어요. item_photos_size_order_setup.sql을 Supabase SQL Editor에서 다시 실행해주세요.)"
             : "")
       );
-      return;
+      return false;
     }
+    return true;
+  }
+
+  async function applyBulkZoom() {
+    if (selectedIds.size === 0 || bulkZoomValue == null) return;
+    const ok = await persistZoomToIds(Array.from(selectedIds), bulkZoomValue);
+    if (!ok) return;
+    clearSelection();
+    fetchPhotos();
+  }
+
+  // "A와 B를 B 기준으로 동일하게, A 기준으로 동일하게" 요청 — 비율을 숫자로 직접 입력하는 대신, 선택한
+  // 사진 중 하나를 "이 사진 기준으로 맞추기"로 고르면, 그 사진의 현재 배율을 나머지 선택된 사진들에
+  // 그대로 복사해 저장한다(기준으로 고른 사진 자체는 그대로 둔다). 슬라이더로 값을 가늠할 필요 없이
+  // 눈에 보이는 사진을 그대로 기준 삼을 수 있어 더 직관적이다.
+  async function applyReferenceZoom(refId) {
+    const ref = photos.find((x) => x.id === refId);
+    if (!ref) return;
+    const targetZoom = ref.zoom_pct || 100;
+    const otherIds = Array.from(selectedIds).filter((id) => id !== refId);
+    if (otherIds.length === 0) return;
+    const ok = await persistZoomToIds(otherIds, targetZoom);
+    if (!ok) return;
     clearSelection();
     fetchPhotos();
   }
@@ -6490,8 +6511,8 @@ function PhotoLibraryTab() {
         찾아 붙여줘요. 규격·색상까지 적어두면 더 정확하게 매칭돼요(둘 다 선택 입력) — 품목명 뒤 괄호 안 색상("접의자(밤색)")이나
         콤마로 나열한 마지막 색상("탑책상, W1400*D800, 연체리")도 자동으로 읽어서 비교해요. 가로·세로·높이(mm)를 적어두면 다른
         제품끼리는 실제 크기 차이가 나게 보이고, 카드를 마우스로 끌어다 놓으면 순서를 자유롭게 바꿀 수 있어요. 같은 제품인데
-        사진마다 확대된 정도가 달라 화면에 보이는 크기가 다르게 느껴지면, 사진 왼쪽 위 체크박스로 여러 장을 고른 뒤 아래에서
-        나오는 슬라이더로 크기를 똑같이 맞출 수 있어요.
+        사진마다 확대된 정도가 달라 화면에 보이는 크기가 다르게 느껴지면, 사진 왼쪽 위 체크박스로 여러 장을 고른 뒤 "이 사진
+        기준으로 맞추기" 버튼으로 그중 가장 마음에 드는 사진에 나머지를 맞출 수 있어요(직접 비율을 입력하는 것도 가능해요).
         {reordering && <span style={{ color: C.purple }}> (순서 저장 중…)</span>}
       </div>
 
@@ -6557,37 +6578,67 @@ function PhotoLibraryTab() {
             background: C.purpleBg,
             padding: "10px 14px",
             marginBottom: 14,
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            flexWrap: "wrap",
             fontSize: 12.5,
           }}
         >
-          <span style={{ color: C.purpleDark, fontWeight: 600 }}>{selectedIds.size}장 선택됨</span>
-          <span style={{ color: C.inkSoft }}>보여지는 크기:</span>
-          <input
-            type="range"
-            min={50}
-            max={250}
-            step={5}
-            value={bulkZoomValue ?? 100}
-            onChange={(e) => setBulkZoomValue(Number(e.target.value))}
-            style={{ width: 180 }}
-          />
-          <span style={{ color: C.inkSoft, minWidth: 40, display: "inline-block" }}>{bulkZoomValue ?? 100}%</span>
-          <span style={{ color: C.muted, fontSize: 11 }}>(슬라이더를 움직이면 선택한 카드들에 바로 미리 보여요)</span>
-          <button
-            type="button"
-            onClick={applyBulkZoom}
-            disabled={applyingZoom || bulkZoomValue == null}
-            style={{ ...primaryBtnStyle2, fontSize: 12, padding: "6px 14px" }}
-          >
-            {applyingZoom ? "적용 중…" : "적용"}
-          </button>
-          <button type="button" onClick={clearSelection} style={{ ...ghostBtnStyle, fontSize: 12, padding: "6px 14px" }}>
-            선택 해제
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: selectedIds.size >= 2 ? 10 : 0 }}>
+            <span style={{ color: C.purpleDark, fontWeight: 600 }}>{selectedIds.size}장 선택됨</span>
+            <button type="button" onClick={clearSelection} style={{ ...ghostBtnStyle, fontSize: 12, padding: "4px 12px" }}>
+              선택 해제
+            </button>
+          </div>
+
+          {selectedIds.size >= 2 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+              <span style={{ color: C.inkSoft }}>이 사진 기준으로 나머지 크기 맞추기:</span>
+              {Array.from(selectedIds).map((id) => {
+                const sp = photos.find((x) => x.id === id);
+                if (!sp) return null;
+                const label = [sp.item_name, sp.color].filter(Boolean).join(" · ");
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => applyReferenceZoom(id)}
+                    disabled={applyingZoom}
+                    style={{
+                      ...ghostBtnStyle,
+                      fontSize: 12,
+                      padding: "4px 10px",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    {urlById[id] && <img src={urlById[id]} alt="" style={{ width: 18, height: 18, objectFit: "contain" }} />}
+                    "{label}" 기준으로
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ color: C.muted, fontSize: 11 }}>직접 비율을 입력해서 맞출 수도 있어요:</span>
+            <input
+              type="range"
+              min={50}
+              max={250}
+              step={5}
+              value={bulkZoomValue ?? 100}
+              onChange={(e) => setBulkZoomValue(Number(e.target.value))}
+              style={{ width: 180 }}
+            />
+            <span style={{ color: C.inkSoft, minWidth: 40, display: "inline-block" }}>{bulkZoomValue ?? 100}%</span>
+            <button
+              type="button"
+              onClick={applyBulkZoom}
+              disabled={applyingZoom || bulkZoomValue == null}
+              style={{ ...primaryBtnStyle2, fontSize: 12, padding: "6px 14px" }}
+            >
+              {applyingZoom ? "적용 중…" : "적용"}
+            </button>
+          </div>
         </div>
       )}
 
