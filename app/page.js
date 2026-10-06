@@ -6103,6 +6103,20 @@ function PhotoLibraryTab() {
   // 지금 끌고 있는 카드, reordering은 끌어다 놓은 뒤 서버에 순서를 저장하는 중인지 표시용.
   const [dragId, setDragId] = useState(null);
   const [reordering, setReordering] = useState(false);
+  // "컨트롤 Z로 뒤로 갈 수 있게... 수정 후 뒤로가기" 요청 — 정보 수정(품목명·규격·색상·가로/세로/높이)
+  // 저장에 한해서, 바로 직전 저장 전 값을 undoSnapshot에 기억해뒀다가 Ctrl+Z(또는 Cmd+Z)를 누르면 그
+  // 값으로 되돌린다. 한 단계(가장 최근 수정 1건)만 되돌릴 수 있다 — 여러 단계를 쌓아두지 않는 게 더
+  // 안전하고 확실하다는 판단. 사진 교체·삭제·순서변경은 이 되돌리기 대상이 아니다(요청 범위 밖).
+  const [undoSnapshot, setUndoSnapshot] = useState(null);
+  const [undoing, setUndoing] = useState(false);
+  // "제품 왼쪽 상단에 체크박스 넣어서 A,B,C 클릭하고 보여지는 크기 동일하게" 요청 — 같은 품목인데
+  // 사진을 찍을 때 확대 정도가 달라서 화면에 보이는 크기가 서로 다르게 느껴질 때, 사람이 직접 보고
+  // 여러 장을 체크해서 한 번에 같은 확대 비율(zoom_pct)로 맞출 수 있게 한다. 체크만 해서는 아무 것도
+  // 안 바뀌고, 아래 슬라이더를 움직여야 그 순간부터 선택된 카드들에 실시간 미리보기가 적용되며,
+  // "적용"을 눌러야 실제로 저장된다(눌러보고 마음에 안 들면 "선택 해제"로 그냥 취소할 수 있음).
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkZoomValue, setBulkZoomValue] = useState(null);
+  const [applyingZoom, setApplyingZoom] = useState(false);
 
   async function fetchPhotos() {
     setLoading(true);
@@ -6324,10 +6338,56 @@ function PhotoLibraryTab() {
     if (newImagePath && p.image_path) {
       supabase.storage.from("item-photos").remove([p.image_path]).catch(() => {});
     }
+    // 정보(품목명·규격·색상·가로/세로/높이) 저장이 끝난 시점에, 그 직전 값(p — 이번에 수정하기 전
+    // 원래 값)을 기억해둔다. 사진(image_path)은 되돌리기 대상이 아니라서 여기엔 안 담는다.
+    setUndoSnapshot({
+      id: p.id,
+      item_name: p.item_name,
+      spec: p.spec,
+      color: p.color,
+      width_mm: p.width_mm,
+      depth_mm: p.depth_mm,
+      height_mm: p.height_mm,
+    });
     setEditingId(null);
     setEditFile(null);
     fetchPhotos();
   }
+
+  async function handleUndo() {
+    if (!undoSnapshot) return;
+    setUndoing(true);
+    const { id, ...prevValues } = undoSnapshot;
+    const { data, error } = await supabase.from("item_photos").update(prevValues).eq("id", id).select();
+    setUndoing(false);
+    if (error) {
+      alert("되돌리기에 실패했어요: " + error.message);
+      return;
+    }
+    if (!data || data.length === 0) {
+      // 그 사이에 삭제된 경우 등 — 되돌릴 대상이 이제 없다는 뜻이라 조용히 안내만 하고 넘어간다.
+      alert("되돌릴 사진을 찾지 못했어요. 이미 삭제됐을 수 있어요.");
+      setUndoSnapshot(null);
+      return;
+    }
+    setUndoSnapshot(null);
+    fetchPhotos();
+  }
+
+  // Ctrl+Z(윈도우) / Cmd+Z(맥)를 누르면 바로 직전 수정을 되돌린다. 단, 다른 입력칸에 커서가 있을 때는
+  // (예: 품목명을 타이핑하다가) 브라우저 기본 되돌리기(타이핑 취소)가 그대로 동작하도록 건드리지 않는다.
+  useEffect(() => {
+    function onKeyDown(e) {
+      const isUndoKey = (e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "z" || e.key === "Z");
+      if (!isUndoKey || !undoSnapshot) return;
+      const tag = document.activeElement && document.activeElement.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (document.activeElement && document.activeElement.isContentEditable)) return;
+      e.preventDefault();
+      handleUndo();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [undoSnapshot]);
 
   async function handleDelete(p) {
     if (!confirm(`"${p.item_name}" 사진을 삭제할까요?`)) return;
@@ -6378,16 +6438,83 @@ function PhotoLibraryTab() {
     setReordering(false);
   }
 
+  function toggleSelect(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+    setBulkZoomValue(null);
+  }
+
+  // 지금 체크된 카드들에 한해서, 슬라이더로 고른 확대 비율을 실시간 미리보기로 보여준다(아직 저장 전).
+  // 체크 안 한 카드나, 슬라이더를 아직 한 번도 안 움직였으면(bulkZoomValue가 null) 원래 저장된 값 그대로.
+  function effectiveZoomPct(p) {
+    if (bulkZoomValue != null && selectedIds.has(p.id)) return bulkZoomValue;
+    return p.zoom_pct || 100;
+  }
+
+  async function applyBulkZoom() {
+    if (selectedIds.size === 0 || bulkZoomValue == null) return;
+    setApplyingZoom(true);
+    const ids = Array.from(selectedIds);
+    const results = await Promise.all(
+      ids.map((id) => supabase.from("item_photos").update({ zoom_pct: bulkZoomValue }).eq("id", id))
+    );
+    setApplyingZoom(false);
+    const err = results.find((r) => r.error)?.error;
+    if (err) {
+      alert(
+        "크기 맞추기에 실패했어요: " +
+          err.message +
+          (/zoom_pct/.test(err.message)
+            ? " (Supabase의 item_photos 테이블에 zoom_pct 컬럼이 아직 없을 수 있어요. item_photos_size_order_setup.sql을 Supabase SQL Editor에서 다시 실행해주세요.)"
+            : "")
+      );
+      return;
+    }
+    clearSelection();
+    fetchPhotos();
+  }
+
   return (
     <div>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>제품사진 라이브러리</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         사무집기 사진을 품목명과 함께 등록해두면, 견적서 업로드 화면의 "사진 출력물 보기"에서 품목명이 비슷한 사진을 자동으로
         찾아 붙여줘요. 규격·색상까지 적어두면 더 정확하게 매칭돼요(둘 다 선택 입력) — 품목명 뒤 괄호 안 색상("접의자(밤색)")이나
-        콤마로 나열한 마지막 색상("탑책상, W1400*D800, 연체리")도 자동으로 읽어서 비교해요. 가로·세로·높이(mm)를 적어두면 같은
-        제품은 사진을 어떻게 찍었든 화면에 항상 같은 크기로 보이고, 카드를 마우스로 끌어다 놓으면 순서를 자유롭게 바꿀 수 있어요.
+        콤마로 나열한 마지막 색상("탑책상, W1400*D800, 연체리")도 자동으로 읽어서 비교해요. 가로·세로·높이(mm)를 적어두면 다른
+        제품끼리는 실제 크기 차이가 나게 보이고, 카드를 마우스로 끌어다 놓으면 순서를 자유롭게 바꿀 수 있어요. 같은 제품인데
+        사진마다 확대된 정도가 달라 화면에 보이는 크기가 다르게 느껴지면, 사진 왼쪽 위 체크박스로 여러 장을 고른 뒤 아래에서
+        나오는 슬라이더로 크기를 똑같이 맞출 수 있어요.
         {reordering && <span style={{ color: C.purple }}> (순서 저장 중…)</span>}
       </div>
+
+      {undoSnapshot && (
+        <div
+          style={{
+            border: `1px solid ${C.purple}`,
+            background: C.purpleBg,
+            color: C.purpleDark,
+            padding: "8px 14px",
+            marginBottom: 14,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            fontSize: 12.5,
+          }}
+        >
+          <span>방금 수정한 정보를 되돌릴 수 있어요. (Ctrl+Z 또는 Cmd+Z)</span>
+          <button type="button" onClick={handleUndo} disabled={undoing} style={{ ...ghostBtnStyle, fontSize: 12, padding: "4px 12px" }}>
+            {undoing ? "되돌리는 중…" : "되돌리기"}
+          </button>
+        </div>
+      )}
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginBottom: 20, display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
         <div>
@@ -6423,6 +6550,47 @@ function PhotoLibraryTab() {
         </button>
       </div>
 
+      {selectedIds.size > 0 && (
+        <div
+          style={{
+            border: `1px solid ${C.purple}`,
+            background: C.purpleBg,
+            padding: "10px 14px",
+            marginBottom: 14,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+            fontSize: 12.5,
+          }}
+        >
+          <span style={{ color: C.purpleDark, fontWeight: 600 }}>{selectedIds.size}장 선택됨</span>
+          <span style={{ color: C.inkSoft }}>보여지는 크기:</span>
+          <input
+            type="range"
+            min={50}
+            max={250}
+            step={5}
+            value={bulkZoomValue ?? 100}
+            onChange={(e) => setBulkZoomValue(Number(e.target.value))}
+            style={{ width: 180 }}
+          />
+          <span style={{ color: C.inkSoft, minWidth: 40, display: "inline-block" }}>{bulkZoomValue ?? 100}%</span>
+          <span style={{ color: C.muted, fontSize: 11 }}>(슬라이더를 움직이면 선택한 카드들에 바로 미리 보여요)</span>
+          <button
+            type="button"
+            onClick={applyBulkZoom}
+            disabled={applyingZoom || bulkZoomValue == null}
+            style={{ ...primaryBtnStyle2, fontSize: 12, padding: "6px 14px" }}
+          >
+            {applyingZoom ? "적용 중…" : "적용"}
+          </button>
+          <button type="button" onClick={clearSelection} style={{ ...ghostBtnStyle, fontSize: 12, padding: "6px 14px" }}>
+            선택 해제
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <div style={{ fontSize: 12.5, color: C.muted }}>불러오는 중…</div>
       ) : photos.length === 0 ? (
@@ -6447,12 +6615,40 @@ function PhotoLibraryTab() {
                 opacity: dragId === p.id ? 0.4 : 1,
               }}
             >
-              <div style={{ width: "100%", height: 130, background: C.panel, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 8, overflow: "hidden" }}>
+              <div
+                style={{
+                  width: "100%",
+                  height: 130,
+                  background: C.panel,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  marginBottom: 8,
+                  overflow: "hidden",
+                  position: "relative",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(p.id)}
+                  onChange={() => toggleSelect(p.id)}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                  draggable={false}
+                  onDragStart={(e) => e.preventDefault()}
+                  title="체크해서 다른 사진들과 크기를 맞춰요"
+                  style={{ position: "absolute", top: 6, left: 6, zIndex: 2, width: 16, height: 16, cursor: "pointer" }}
+                />
                 {urlById[p.id] ? (
                   <img
                     src={urlById[p.id]}
                     alt={p.item_name}
-                    style={{ maxWidth: `${(photoSizeFrac(p) * 100).toFixed(1)}%`, maxHeight: `${(photoSizeFrac(p) * 100).toFixed(1)}%`, objectFit: "contain" }}
+                    style={{
+                      maxWidth: `${(photoSizeFrac(p) * 100).toFixed(1)}%`,
+                      maxHeight: `${(photoSizeFrac(p) * 100).toFixed(1)}%`,
+                      objectFit: "contain",
+                      transform: `scale(${(effectiveZoomPct(p) / 100).toFixed(2)})`,
+                    }}
                   />
                 ) : (
                   <span style={{ fontSize: 11, color: C.muted }}>불러오는 중…</span>
