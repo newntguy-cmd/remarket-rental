@@ -2304,8 +2304,8 @@ function Dashboard({ profile, session, onLogout }) {
     ...(isStaff ? [{ key: "quickcalc", label: "품목별데이터/톤수/배송비" }] : []),
     ...(isStaff ? [{ key: "layoutSim", label: "가구배치(시뮬레이션)" }] : []),
     ...(isStaff ? [{ key: "photoLibrary", label: "제품사진 라이브러리" }] : []),
-    ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
     ...(isStaff ? [{ key: "pdfToExcel", label: "PDF를 엑셀로 변환" }] : []),
+    ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
     ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
     ...(isStaff ? [{ key: "purchases", label: "구매내역" }] : []),
     ...(isStaff ? [{ key: "shares", label: "지분관리" }] : []),
@@ -13755,6 +13755,21 @@ function curvedLDeskPathD(widthCm, depthCm, notchWidthCm, notchDepthCm) {
   return `M 0,0 L ${W - nw},0 ${sCurve(W - nw, 0, W, nd)} L ${W},${D} L 0,${D} Z`;
 }
 
+// "코너용 90도 상판" 요청(2026-10-06, 참고 이미지: 일자형 회의테이블 사이에 끼워 방향을 꺾는 1/4원
+// 모양 상판 — W800×D600 책상 사이에 W600×D600짜리가 들어감) 외곽선을 SVG path로 그린다. 왼쪽
+// 위(0,0) 모서리는 직각 그대로 두고(위쪽 변은 오른쪽으로 W만큼, 왼쪽 변은 아래로 D만큼 직선으로
+// 뻗어나감), 그 두 변의 끝점(W,0)과 (0,D)만 1/4 타원 호 하나로 매끄럽게 이어서 반대쪽 모서리를
+// 둥글게 깎아낸다 — 참고 이미지의 "두 직선 변 + 1/4원 호" 모양 그대로다. 가로·세로가 같으면
+// (보통의 경우, 예: 600×600) 완전한 1/4 원이 되고, 다르면 1/4 타원이 된다. 충돌(겹침) 판정은
+// 다른 둥근 모양(원형·한쪽둥근)과 마찬가지로 shapePolygonPoints/shapeSubRects를 따로 손대지 않고
+// 그냥 전체 네모 박스 기준으로 계산한다(모형이 책상류라 어차피 넉넉히 떨어뜨려 배치하는 용도라
+// 실용상 문제없음).
+function quarterCirclePathD(widthCm, depthCm) {
+  const W = Number(widthCm) || 0;
+  const D = Number(depthCm) || 0;
+  return `M 0,0 L ${W},0 A ${W},${D} 0 0 1 0,${D} Z`;
+}
+
 // 사무용 의자를 캐드(CAD) 도면처럼 위에서 내려다본 모양으로 그린다. 사용자가 직접 올려준 참고 이미지
 // (주차배치도 안 의자 기호 — 의자가 옆으로 돌아간 채 찍혀 있었다)를 확대해서 확인해보니 "방석과 헤드가
 // 있고 양옆에 팔걸이가 있는" 사무의자를 위에서 본 모습이었다: 둥근 네모 두 덩어리(헤드/등받이 + 방석)가
@@ -13952,7 +13967,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   const [shapes, setShapes] = useState([]);
   const [loadingShapes, setLoadingShapes] = useState(true);
   const [newShapeName, setNewShapeName] = useState("");
-  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "curvedl"(곡선ㄱ자책상) | "u"(U자) | "circle"(원형) | "roundend"(한쪽둥근) | "chair"(사무의자) | "meetingchair"(회의의자) | "sofa"(쇼파)
+  const [newShapeType, setNewShapeType] = useState("rect"); // "rect" | "l"(ㄱ자) | "curvedl"(곡선ㄱ자책상) | "u"(U자) | "circle"(원형) | "roundend"(한쪽둥근) | "quartercircle"(코너용 1/4원 상판) | "chair"(사무의자) | "meetingchair"(회의의자) | "sofa"(쇼파)
   const [newShapeWidth, setNewShapeWidth] = useState("");
   const [newShapeDepth, setNewShapeDepth] = useState("");
   const [newShapeNotchWidth, setNewShapeNotchWidth] = useState(""); // ㄱ자: 잘려나간 모서리, U자: 안쪽 파인 부분
@@ -14279,6 +14294,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     const isCircle = shapeType === "circle";
     const isRoundEnd = shapeType === "roundend";
     const isCurvedL = shapeType === "curvedl";
+    const isQuarterCircle = shapeType === "quartercircle";
     const isChair = shapeType === "chair";
     const isMeetingChair = shapeType === "meetingchair";
     const isSofa = shapeType === "sofa";
@@ -14339,6 +14355,10 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               stroke={C.brownAccent}
               strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12}
             />
+          </svg>
+        ) : isQuarterCircle ? (
+          <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
+            <path d={quarterCirclePathD(s.width_cm, s.depth_cm)} fill={C.furnitureBg} stroke={C.brownAccent} strokeWidth={Math.max(s.width_cm, s.depth_cm) / 12} />
           </svg>
         ) : isChair ? (
           <svg width={22} height={22} viewBox={`0 0 ${s.width_cm} ${s.depth_cm}`} style={{ flexShrink: 0 }}>
@@ -17014,6 +17034,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 { key: "rect", label: "사각형" },
                 { key: "l", label: "ㄱ자" },
                 { key: "circle", label: "원형" },
+                { key: "quartercircle", label: "코너(1/4원)" },
                 { key: "chair", label: "사무의자" },
                 { key: "meetingchair", label: "회의의자" },
                 { key: "sofa", label: "쇼파" },
@@ -17341,6 +17362,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               const isCircle = it.shapeType === "circle";
               const isRoundEnd = it.shapeType === "roundend";
               const isCurvedL = it.shapeType === "curvedl";
+              const isQuarterCircle = it.shapeType === "quartercircle";
               const isChair = it.shapeType === "chair";
               const isMeetingChair = it.shapeType === "meetingchair";
               const isSofa = it.shapeType === "sofa";
@@ -17367,7 +17389,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               // 의자류도 정도만 다를 뿐 같은 문제(둥근 모양 바깥의 네 귀퉁이가 안 칠해짐)를 안고 있다.
               // 그래서 이런 모양들은 바깥 네모 박스에는 더 이상 테두리·글로우를 주지 않고, 실제 모양을
               // 그리는 SVG 쪽에(파인 부분·둥근 모서리를 그대로 따라가도록) 선택 표시를 옮겼다.
-              const isNonRectShape = isPoly || isCircle || isRoundEnd || isCurvedL || isChair || isMeetingChair || isSofa;
+              const isNonRectShape = isPoly || isCircle || isRoundEnd || isCurvedL || isQuarterCircle || isChair || isMeetingChair || isSofa;
               // ("테두리도 그리다 만 것 같고... 아마추어 느낌이야, 테두리 마감을 프로페셔널하게" 요청)
               // 예전엔 평소(선택 안 됐을 때) 테두리가 1px밖에 안 돼서, 특히 확대하지 않은 기본 배율에선
               // 거의 안 보이다시피 가늘어 "그리다 만" 스케치처럼 보였다. 1.4px로 살짝 더 또렷하게 올렸다
@@ -17555,6 +17577,18 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                       <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
                         <path
                           d={curvedLDeskPathD(it.widthCm, it.depthCm, it.notchWidthCm, it.notchDepthCm)}
+                          fill={C.furnitureBg}
+                          stroke={C.brownAccent}
+                          strokeWidth={shapeStrokeWidth}
+                          strokeDasharray={shapeStrokeDasharray}
+                          strokeLinejoin={shapeStrokeJoin}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      </svg>
+                    ) : isQuarterCircle ? (
+                      <svg width={baseWPx} height={baseHPx} viewBox={`0 0 ${it.widthCm} ${it.depthCm}`} style={shapeSvgStyle}>
+                        <path
+                          d={quarterCirclePathD(it.widthCm, it.depthCm)}
                           fill={C.furnitureBg}
                           stroke={C.brownAccent}
                           strokeWidth={shapeStrokeWidth}
