@@ -1303,323 +1303,6 @@ async function parseQuotePdf(file) {
   };
 }
 
-// ---------- 일반 PDF → 엑셀 변환 (새 메뉴 "PDF를 엑셀로 변환", 2026-10-06 추가) ----------
-// "피디에프 파일 올리면 엑셀로 이상하게 말고 보이는 화면 똑같이 엑셀로 변환해주는 기능" 요청으로 추가.
-// 위의 parseQuotePdf는 우리 회사 견적서 양식을 안다는 전제로 품목/금액 등 정해진 자리를 찾아 읽지만,
-// 이 변환기는 어떤 PDF든 양식을 전혀 모른 채 "글자가 찍힌 위치"만 보고 줄·칸으로 나눠 그대로 엑셀에 옮긴다.
-//
-// (2026-10-06 재작성) 처음엔 "페이지 전체에서 비슷한 x 위치끼리 하나의 칸으로 묶는" 방식이었는데,
-// 실제 한글(HWP)로 만든 공문 PDF로 테스트해보니 엉망으로 깨졌다("호환 좀 신경써줘" 신고). 원인은
-// 두 가지였다: ① 표가 아닌 일반 문서는 줄마다 글자가 전혀 다른 x 위치에서 시작해서, 페이지 전체
-// 기준으로 "칸"을 잡으면 사실상 거의 모든 글자 조각이 자기 혼자만의 칸이 돼버린다. ② "수  신"처럼
-// 라벨 글자 사이에 정렬용으로 넓은 공백을 일부러 넣어둔 경우, 같은 단어의 글자들마저 서로 다른
-// 칸으로 쪼개져 버린다. 그래서 페이지 전체를 아우르는 칸 경계를 만드는 대신, 줄마다 따로 "그 줄
-// 안에서 간격이 넓게 벌어지는 지점"만 기준으로 칸을 나누는 방식으로 바꿨다(견적서 업로드의 라벨:값
-// 2단 인식에 이미 쓰고 있던 pdfSplitRowSegments와 같은 방식). 표의 진짜 칸 사이는 보통 글자 한 칸
-// 너비보다 훨씬 넓게 벌어져 있어서 이 기준으로도 잘 갈라지고, 반대로 한 문장 안의 단어 사이나 "수 신"
-// 같은 라벨 안의 글자 사이는 간격이 좁아 한 칸으로 자연스럽게 합쳐진다. 줄마다 칸 개수가 다를 수
-// 있지만(표가 아닌 문서는 대부분 한 줄에 칸이 하나뿐), 표 형식 문서는 보통 모든 줄의 칸 개수가
-// 똑같이 나와서 결과적으로 엑셀에서도 줄끼리 칸이 잘 맞는다.
-//
-// (2026-10-06 추가 보완) 실제 엑셀/한글 혼합 양식의 "렌탈 견적서" PDF로 다시 테스트해보니("차이가
-// 심각하다" 신고), 품목명 칸이 유난히 좁고 규격 칸의 글자가 길어서 칸 경계에 거의 붙는 줄에서는
-// gapThreshold=35로도 품목명과 규격이 한 칸으로 잘못 합쳐지는 경우가 있었다. 실제 PDF 데이터로
-// "반드시 합쳐져야 하는 간격(라벨 안 글자 사이, 최대 약 29)"과 "반드시 나뉘어야 하는 간격(진짜 칸
-// 사이, 최소 약 31.6)"을 직접 비교해 그 사이 값인 30으로 낮췄다 — 한글 공문 PDF 쪽은 이 값으로 바꿔도
-// 결과가 그대로였고(여유 있는 범위라 안전), 렌탈 견적서 쪽은 품목명/규격이 더 잘 나뉘는 것으로 확인됨.
-// (참고: pdfSplitRowSegments 자체의 기본값 35는 그대로 둠 — 견적서 업로드의 2단 라벨:값 인식이
-// 이미 그 기본값에 맞춰 잘 동작하고 있어서, 거기엔 영향이 가지 않도록 이 함수 호출 쪽에서만 30을 썼다.)
-function buildPdfPageGridAOA(items, gapThreshold = 30) {
-  const rows = pdfGroupRows(items); // 위→아래 순, 각 줄 안에서는 왼쪽→오른쪽 순
-  return rows.map((r) => pdfSplitRowSegments(r.items, gapThreshold));
-}
-
-// 업로드한 PDF 파일(여러 페이지 가능)을 읽어 페이지별 엑셀 시트 내용을 만든다. parseQuotePdf와 똑같은
-// 방식(pdfjs-dist로 글자 조각의 x/y 좌표를 읽음)을 쓰되, 특정 항목을 찾아내지 않고 줄·칸 구성만 그대로 돌려준다.
-// ---------- PDF 안에 "그림으로" 박혀있는 로고·사진도 함께 꺼내기 ----------
-// (2026-10-06 추가) "명판도 없고 아예 다른 폼" 신고 — 견적서 위쪽의 회사 로고·사업자정보(명판)가 PDF
-// 안에 글자가 아니라 통째로 그림으로 박혀있어서, 글자만 읽는 지금 방식으로는 애초에 가져올 수 없었다.
-// PDF 안의 그림 데이터를 직접 꺼내 PNG 파일로 만들어(새 라이브러리 설치 없이, 브라우저에 이미 내장된
-// 압축 기능만 사용— exceljs 등 새 라이브러리를 못 쓰는 사정은 위 설명 참고) 변환된 엑셀 파일에도 같이
-// 넣어준다. PNG 파일 구조(헤더+압축된 그림 데이터+체크섬)를 직접 만드는 부분이라 조금 길다.
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (let i = 0; i < bytes.length; i++) {
-    crc ^= bytes[i];
-    for (let j = 0; j < 8; j++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-function pngU32(n) {
-  return new Uint8Array([(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
-}
-function pngChunk(type, data) {
-  const typeBytes = new TextEncoder().encode(type);
-  const body = new Uint8Array(typeBytes.length + data.length);
-  body.set(typeBytes, 0);
-  body.set(data, typeBytes.length);
-  const crc = crc32(body);
-  const chunk = new Uint8Array(4 + body.length + 4);
-  chunk.set(pngU32(data.length), 0);
-  chunk.set(body, 4);
-  chunk.set(pngU32(crc), 4 + body.length);
-  return chunk;
-}
-// PNG의 그림 데이터(IDAT)는 zlib 압축 형식을 쓰는데, 브라우저 내장 CompressionStream("deflate")가
-// 정확히 그 zlib 형식을 만들어줘서 별도 압축 라이브러리 없이도 쓸 수 있다.
-async function deflateZlib(bytes) {
-  const cs = new CompressionStream("deflate");
-  const writer = cs.writable.getWriter();
-  writer.write(bytes);
-  writer.close();
-  const chunks = [];
-  const reader = cs.readable.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-  }
-  const total = chunks.reduce((a, c) => a + c.length, 0);
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out;
-}
-// width×height 크기의 픽셀 데이터(순서대로 R,G,B[,A])를 PNG 파일(바이트 배열)로 만든다.
-// rgba가 true면 픽셀당 4바이트(R,G,B,A), 아니면 3바이트(R,G,B)로 본다.
-async function encodePngFromPixels(width, height, pixelData, rgba) {
-  const bpp = rgba ? 4 : 3;
-  const stride = width * bpp;
-  const raw = new Uint8Array(height * (stride + 1));
-  for (let y = 0; y < height; y++) {
-    raw[y * (stride + 1)] = 0; // 줄마다 맨 앞에 "필터 없음" 표시 바이트가 필요하다(PNG 스펙).
-    raw.set(pixelData.subarray(y * stride, y * stride + stride), y * (stride + 1) + 1);
-  }
-  const idatData = await deflateZlib(raw);
-  const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-  const ihdr = new Uint8Array(13);
-  ihdr.set(pngU32(width), 0);
-  ihdr.set(pngU32(height), 4);
-  ihdr[8] = 8; // 색상당 8비트
-  ihdr[9] = rgba ? 6 : 2; // PNG 색상 종류: 6=RGBA, 2=RGB
-  const parts = [sig, pngChunk("IHDR", ihdr), pngChunk("IDAT", idatData), pngChunk("IEND", new Uint8Array(0))];
-  const total = parts.reduce((a, c) => a + c.length, 0);
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const c of parts) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out;
-}
-function bytesToBase64(bytes) {
-  let binary = "";
-  const CHUNK = 0x8000; // 한 번에 너무 많이 넘기면 브라우저에서 에러가 나서 나눠서 처리한다.
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(binary);
-}
-// 한 픽셀 크기를 가로/세로 중 긴 쪽이 maxDim을 넘지 않도록 비율 그대로 줄인 크기로 바꾼다
-// (엑셀 파일에 그림이 너무 크게 들어가지 않도록).
-function clampImgDisplaySize(w, h, maxDim) {
-  const scale = Math.min(1, maxDim / Math.max(w, h));
-  return { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) };
-}
-// PDF 한 페이지 안에 박혀있는 그림들을(나온 순서대로) PNG data URL 목록으로 꺼낸다. 그림 하나가
-// 알 수 없는 형식이거나 실패해도 조용히 건너뛰고 나머지는 계속 진행한다 — 그림을 하나도 못 꺼내도
-// 표(글자) 변환 자체는 그대로 되게 하려는 것이다.
-async function extractPdfPageImages(pdfjsLib, page) {
-  const images = [];
-  try {
-    const opList = await page.getOperatorList();
-    const seen = new Set();
-    const ids = [];
-    for (let i = 0; i < opList.fnArray.length; i++) {
-      if (opList.fnArray[i] === pdfjsLib.OPS.paintImageXObject) {
-        const id = opList.argsArray[i][0];
-        if (!seen.has(id)) {
-          seen.add(id);
-          ids.push(id);
-        }
-      }
-    }
-    for (const id of ids) {
-      try {
-        const obj = page.objs.get(id);
-        if (!obj || !obj.data || !obj.width || !obj.height) continue;
-        const rgba = obj.kind === pdfjsLib.ImageKind.RGBA_32BPP;
-        if (!rgba && obj.kind !== pdfjsLib.ImageKind.RGB_24BPP) continue; // 흑백 등 드문 형식은 건너뜀
-        const png = await encodePngFromPixels(obj.width, obj.height, obj.data, rgba);
-        images.push({ dataUrl: "data:image/png;base64," + bytesToBase64(png), width: obj.width, height: obj.height });
-      } catch (e) {
-        // 그림 하나가 실패해도 나머지는 계속 진행
-      }
-    }
-  } catch (e) {
-    // 그림 추출 자체가 실패해도(예: 구조가 특이한 PDF) 표 변환에는 영향이 없게 한다.
-  }
-  return images;
-}
-
-async function convertPdfFileToSheets(file) {
-  const pdfjsLib = await import("pdfjs-dist/build/pdf.mjs");
-  // 이유는 parseQuotePdf와 동일: 워커 파일을 번들에 포함시키면 Vercel 빌드 압축 도구가 처리하지 못해
-  // 빌드가 실패하므로, 번들에 넣지 않고 CDN 주소를 그대로 가리키게 한다.
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
-
-  const buf = await file.arrayBuffer();
-  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
-
-  const sheets = [];
-  let anyTextFound = false;
-  for (let p = 1; p <= doc.numPages; p++) {
-    const page = await doc.getPage(p);
-    const content = await page.getTextContent();
-    const items = content.items
-      .map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width }))
-      .filter((it) => it.str.trim() !== "");
-    if (items.length > 0) anyTextFound = true;
-    const aoa = buildPdfPageGridAOA(items);
-    const images = await extractPdfPageImages(pdfjsLib, page);
-    sheets.push({ name: doc.numPages > 1 ? `${p}페이지` : "Sheet1", aoa: aoa.length ? aoa : [[""]], images });
-  }
-  return { sheets, anyTextFound };
-}
-
-// ---------- PDF→엑셀 변환 결과를 "원본처럼 보이게" 꾸미기 ----------
-// (2026-10-06 추가) "엑셀 변환 퀄리티가 이 정도는 나와줘야지", "원본하고 최대한 비슷하게 부탁해" 요청으로
-// 추가. 지금까지는 글자만 칸에 맞춰 넣어줬을 뿐 테두리·배경색이 전혀 없어서 "표"처럼 보이지 않았다.
-//
-// 테두리/배경색을 가진 진짜 .xlsx 파일을 만들려면 셀 서식을 "쓸" 수 있는 라이브러리(예: exceljs)가
-// 필요한데, 지금 작업 환경에서는 새 라이브러리를 설치해 테스트해볼 수 없는 제약이 있어(사내 네트워크
-// 정책), 이미 쓰고 있는 xlsx 패키지로는 서식을 쓸 수 없다(무료 버전의 알려진 제약). 그래서 대신,
-// 엑셀이 예전부터 지원해온 다른 방법을 썼다: "표(HTML)를 .xls 파일로 저장하면 엑셀이 그 표의 테두리·
-// 배경색·글자굵기를 그대로 살려서 열어준다" — 엑셀 자체 기능이라 새 라이브러리가 전혀 필요 없다.
-// (참고: 구글시트/한셀 등 엑셀이 아닌 프로그램에서는 이 방식이 100% 똑같이 보이지 않을 수 있다.)
-function escapeHtmlCell(s) {
-  return String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-// 칸 안의 내용이 "숫자/금액처럼" 보이는지(수량·단가·금액 칸, "-"로 표시된 빈 금액 칸 포함) 본다.
-// 품목표의 머리글(품목/규격/수량/단가/금액/비고)에는 이런 칸이 없고, 실제 품목 행에는 반드시 있다.
-function looksLikeNumericCell(cell) {
-  const t = String(cell ?? "").trim();
-  if (!t) return false;
-  return /^-$/.test(t) || /^[\d][\d,.\-%]*$/.test(t);
-}
-function looksLikeDataRow(row) {
-  return (row || []).some(looksLikeNumericCell);
-}
-
-// 표의 "제목행"을 추정한다: 칸이 3개 이상이면서 숫자 칸이 하나도 없는(=라벨만 있는) 줄이, 몇 줄 안에
-// 숫자가 들어간 "품목 데이터행"으로 이어지면 그 라벨 줄을 제목행으로 본다 — 품목표의 "품목/규격/수량/
-// 단가/금액/비고" 같은 머리글(+ 영문 보조행)을 잡아내려는 것. 실제 품목 행 자체(숫자 칸이 있음)나,
-// "수신 : DB월드"처럼 라벨 한두 칸뿐인 줄(칸이 3개 미만)은 제목행으로 오인하지 않는다.
-function detectHeaderRowSet(aoa) {
-  const headerRows = new Set();
-  const LOOKAHEAD = 3;
-  for (let i = 0; i < aoa.length; i++) {
-    const row = aoa[i] || [];
-    if (row.length < 3) continue;
-    if (looksLikeDataRow(row)) continue;
-    let hasNearbyDataRow = false;
-    for (let k = i + 1; k <= i + LOOKAHEAD && k < aoa.length; k++) {
-      if (looksLikeDataRow(aoa[k] || [])) {
-        hasNearbyDataRow = true;
-        break;
-      }
-    }
-    if (hasNearbyDataRow) headerRows.add(i);
-  }
-  return headerRows;
-}
-
-// 칸마다 들어있는 글자 길이를 보고 적당한 폭(px)을 정한다(너무 좁거나 너무 넓지 않게 50~400px로 제한).
-function computeColWidthsPx(aoa) {
-  const widths = [];
-  for (const row of aoa) {
-    (row || []).forEach((cell, ci) => {
-      const len = String(cell ?? "").length;
-      widths[ci] = Math.max(widths[ci] || 0, len);
-    });
-  }
-  return widths.map((len) => Math.min(400, Math.max(50, len * 7 + 16)));
-}
-
-// extractPdfPageImages가 꺼낸 그림들을, 표 맨 위에 한 줄로 나란히 넣을 수 있는 HTML로 만든다
-// (그림 하나도 없으면 빈 문자열). 그림이 너무 크게 들어가지 않도록 한 변의 최대 길이를 200px로 줄인다.
-function aoaImagesRowHtml(images, colspan) {
-  if (!images || images.length === 0) return "";
-  const imgsHtml = images
-    .map((im) => {
-      const { w, h } = clampImgDisplaySize(im.width, im.height, 200);
-      return `<img src="${im.dataUrl}" width="${w}" height="${h}" style="margin:2px;">`;
-    })
-    .join("");
-  return `<tr><td colspan="${Math.max(1, colspan)}" style='border:1px solid #999999; padding:6px;'>${imgsHtml}</td></tr>`;
-}
-
-function aoaSheetToHtmlTable(aoa, title, images) {
-  const headerRows = detectHeaderRowSet(aoa);
-  const colWidths = computeColWidthsPx(aoa);
-  const colsHtml = colWidths.map((w) => `<col style="width:${w}px">`).join("");
-  // (2026-10-06 수정) border:none으로 뒀더니 실제 엑셀에서 검은 띠처럼 깨져 보인다는 신고가 있어,
-  // 다른 칸들과 똑같이 테두리를 그려서(엑셀이 자체적으로 처리 못 하는 속성에 기대지 않도록) 고쳤다.
-  const titleHtml = title
-    ? `<tr><td colspan="${Math.max(1, colWidths.length)}" style='border:1px solid #999999; background:#E3E3E3; font-weight:bold; font-size:13pt; padding:4px 6px;'>${escapeHtmlCell(title)}</td></tr>`
-    : "";
-  // (2026-10-06 추가) "명판도 없고" 신고 — PDF 안에 그림으로 박혀있던 로고·회사정보·제품사진을
-  // extractPdfPageImages로 꺼내온 게 있으면, 표(글자) 바로 위에 한 줄로 넣어준다.
-  const imagesHtml = aoaImagesRowHtml(images, colWidths.length);
-  const rowsHtml = aoa
-    .map((row, ri) => {
-      const isHeader = headerRows.has(ri);
-      const cellsHtml = (row || [])
-        .map((cell) => {
-          const style = isHeader
-            ? 'border:1px solid #999999; background:#F2F2F2; font-weight:bold; padding:3px 6px; mso-number-format:"\\@";'
-            : 'border:1px solid #999999; padding:3px 6px; mso-number-format:"\\@";';
-          return `<td style='${style}'>${escapeHtmlCell(cell)}</td>`;
-        })
-        .join("");
-      return `<tr>${cellsHtml}</tr>`;
-    })
-    .join("");
-  return `<table border="0" cellspacing="0" cellpadding="0"><colgroup>${colsHtml}</colgroup>${titleHtml}${imagesHtml}${rowsHtml}</table>`;
-}
-
-// convertPdfFileToSheets가 만든 sheets(페이지별 aoa + images)를 받아, 엑셀이 테두리·배경색·글자굵기·
-// 그림을 그대로 살려서 열어주는 .xls(HTML 기반) 파일 내용을 만든다. 맨 앞의 BOM(﻿)은 한글이 깨지지
-// 않도록 엑셀에게 "이 파일은 UTF-8이다"라고 알려주는 역할이다.
-function aoaSheetsToStyledHtmlXls(sheets) {
-  const tables = sheets.map((s) => aoaSheetToHtmlTable(s.aoa, sheets.length > 1 ? s.name : null, s.images)).join("<br>");
-  return (
-    "﻿" +
-    `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
-<head>
-<meta charset="UTF-8">
-<!--[if gte mso 9]><xml>
-<x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Sheet1</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook>
-</xml><![endif]-->
-<style>
-table { border-collapse: collapse; font-family: "맑은 고딕", Calibri, Arial, sans-serif; font-size: 10.5pt; }
-td { vertical-align: middle; }
-</style>
-</head>
-<body>
-${tables}
-</body>
-</html>`
-  );
-}
-
 // ---------- A/S 접수 및 처리보고서 엑셀 파싱 ----------
 // 이 양식은 품목표처럼 행이 반복되는 표가 아니라, "라벨 칸 + 값 칸"이 나란히 있는 1장짜리 양식이다(예:
 // "고 객 명" 칸 바로 오른쪽에 실제 고객명이 적힌 칸이 옴). 그래서 견적서 파싱과 달리, 각 행을 훑으면서
@@ -2539,7 +2222,6 @@ function Dashboard({ profile, session, onLogout }) {
     ...(isStaff ? [{ key: "quickcalc", label: "품목별데이터/톤수/배송비" }] : []),
     ...(isStaff ? [{ key: "layoutSim", label: "가구배치(시뮬레이션)" }] : []),
     ...(isStaff ? [{ key: "photoLibrary", label: "제품사진 라이브러리" }] : []),
-    ...(isStaff ? [{ key: "pdfToExcel", label: "PDF를 엑셀로 변환" }] : []),
     ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
     ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
     ...(isStaff ? [{ key: "purchases", label: "구매내역" }] : []),
@@ -2796,8 +2478,6 @@ function Dashboard({ profile, session, onLogout }) {
             customers={customers}
           />
         )}
-
-        {activeTab === "pdfToExcel" && isStaff && <PdfToExcelTab />}
 
         {activeTab === "quickcalc" && isStaff && (
           <QuickTonCalcPanel tonOverrides={tonOverrides} onTonOverrideSaved={fetchTonOverrides} />
@@ -5634,112 +5314,6 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
   );
 }
 
-// "PDF를 엑셀로 변환" 메뉴 화면. 다른 메뉴들과 달리 Supabase 데이터를 전혀 다루지 않는 순수 변환
-// 도구라서, 상위(Dashboard)로부터 아무 prop도 받지 않는 독립 컴포넌트로 만들었다.
-function PdfToExcelTab() {
-  const inputRef = useRef(null);
-  const [dragOver, setDragOver] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [doneMsg, setDoneMsg] = useState("");
-
-  async function handleFile(file) {
-    if (!file) return;
-    setErr("");
-    setDoneMsg("");
-    const isPdf = file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf";
-    if (!isPdf) {
-      setErr("PDF 파일만 올릴 수 있어요.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const { sheets, anyTextFound } = await convertPdfFileToSheets(file);
-      if (!anyTextFound) {
-        setErr("이 PDF에서 글자를 읽어내지 못했어요. 스캔한 이미지로 만들어진 PDF는 아직 지원하지 않아요(엑셀·한글 프로그램에서 PDF로 저장한 파일이면 대부분 잘 변환돼요).");
-        return;
-      }
-      const html = aoaSheetsToStyledHtmlXls(sheets);
-      const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
-      const outName = file.name.replace(/\.pdf$/i, "") + "_변환.xls";
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = outName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      setDoneMsg(`"${outName}" 파일로 내려받았어요. (총 ${sheets.length}페이지, 테두리·표 머리글 색이 들어가요)`);
-    } catch (e) {
-      console.error(e);
-      setErr("PDF를 변환하는 중 문제가 발생했어요. 파일 형식을 확인해주세요.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function handleDrop(e) {
-    e.preventDefault();
-    setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) handleFile(file);
-  }
-
-  return (
-    <div>
-      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>PDF를 엑셀로 변환</div>
-      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16, maxWidth: 560, lineHeight: 1.7 }}>
-        PDF 파일을 올리면 화면에 보이는 줄·칸 구성과 표 테두리·머리글 색까지 살려서 엑셀(.xls) 파일로
-        내려받아요. 엑셀이나 한글 프로그램에서 PDF로 저장한 문서일수록 더 정확하게 변환돼요(표가 아닌
-        문서나 스캔한 이미지 PDF는 줄·칸이 완벽히 맞지 않을 수 있어요).
-      </div>
-
-      <div
-        onDragOver={(e) => {
-          e.preventDefault();
-          if (!busy) setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={busy ? undefined : handleDrop}
-        onClick={() => !busy && inputRef.current?.click()}
-        style={{
-          border: `2px dashed ${dragOver ? C.purple : C.lineSoft}`,
-          background: dragOver ? C.purpleBg : C.panel,
-          padding: 40,
-          textAlign: "center",
-          cursor: busy ? "default" : "pointer",
-          maxWidth: 520,
-        }}
-      >
-        <input
-          type="file"
-          accept=".pdf,application/pdf"
-          ref={inputRef}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            e.target.value = "";
-            if (file) handleFile(file);
-          }}
-          style={{ display: "none" }}
-        />
-        {busy ? (
-          <div style={{ fontSize: 13.5, color: C.inkSoft }}>변환 중…</div>
-        ) : (
-          <>
-            <div style={{ fontSize: 24, marginBottom: 8 }}>⬆️</div>
-            <div style={{ fontSize: 13.5, color: C.ink, marginBottom: 4 }}>PDF 파일을 끌어다 놓으세요</div>
-            <div style={{ fontSize: 11.5, color: C.muted }}>또는 클릭해서 파일 선택 (.pdf)</div>
-          </>
-        )}
-      </div>
-
-      {err && <div style={{ color: C.brick, fontSize: 13, marginTop: 14, maxWidth: 520 }}>{err}</div>}
-      {doneMsg && <div style={{ color: C.green, fontSize: 13, marginTop: 14 }}>{doneMsg}</div>}
-    </div>
-  );
-}
-
 function QuoteUploadPanel({ importState, setImportState, onFile, onPasteText, onCancel, onConfirm, importing, isAdmin = true, tonOverrides, onTonOverrideSaved, customers }) {
   const update = (patch) => setImportState({ ...importState, ...patch });
 
@@ -6844,8 +6418,19 @@ function PhotoLibraryTab() {
   function toggleSelect(id) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+        // (2026-10-06 수정) "105%로 맞췄는데 다시 클릭하면 100%로 되어 있음" 신고 — 저장은 제대로 됐는데
+        // (사진 자체는 105%로 계속 보임), 체크박스로 사진을 다시 선택할 때마다 슬라이더가 항상 기본값
+        // 100%로 뜨는 바람에 마치 저장한 값이 사라진 것처럼 보였다. 아무것도 선택 안 된 상태에서 사진을
+        // (다시) 선택하면, 슬라이더를 그 사진에 실제 저장된 비율로 미리 채워준다.
+        if (prev.size === 0) {
+          const p = photos.find((x) => x.id === id);
+          setBulkZoomValue(p?.zoom_pct || 100);
+        }
+      }
       return next;
     });
   }
@@ -6980,6 +6565,10 @@ function PhotoLibraryTab() {
         </button>
       </div>
 
+      {/* (2026-10-06 수정) "하단에서 작업하려니 작업창이 안보인다" 신고 — 사진이 많아서 아래쪽까지
+          스크롤해서 작업할 때, 이 선택 툴바가 맨 위에 고정된 채 안 따라와서 체크박스 고른 뒤 버튼을
+          누르려면 다시 위로 스크롤해야 했다. 왼쪽 메뉴(사이드바)와 똑같이 화면에 붙어서 따라오게(sticky)
+          바꿨다. */}
       {selectedIds.size > 0 && (
         <div
           style={{
@@ -6988,6 +6577,10 @@ function PhotoLibraryTab() {
             padding: "10px 14px",
             marginBottom: 14,
             fontSize: 12.5,
+            position: "sticky",
+            top: 10,
+            zIndex: 5,
+            boxShadow: "0 2px 10px rgba(28,43,58,0.12)",
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: selectedIds.size >= 2 ? 10 : 0 }}>
