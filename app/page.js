@@ -1336,6 +1336,135 @@ function buildPdfPageGridAOA(items, gapThreshold = 30) {
 
 // 업로드한 PDF 파일(여러 페이지 가능)을 읽어 페이지별 엑셀 시트 내용을 만든다. parseQuotePdf와 똑같은
 // 방식(pdfjs-dist로 글자 조각의 x/y 좌표를 읽음)을 쓰되, 특정 항목을 찾아내지 않고 줄·칸 구성만 그대로 돌려준다.
+// ---------- PDF 안에 "그림으로" 박혀있는 로고·사진도 함께 꺼내기 ----------
+// (2026-10-06 추가) "명판도 없고 아예 다른 폼" 신고 — 견적서 위쪽의 회사 로고·사업자정보(명판)가 PDF
+// 안에 글자가 아니라 통째로 그림으로 박혀있어서, 글자만 읽는 지금 방식으로는 애초에 가져올 수 없었다.
+// PDF 안의 그림 데이터를 직접 꺼내 PNG 파일로 만들어(새 라이브러리 설치 없이, 브라우저에 이미 내장된
+// 압축 기능만 사용— exceljs 등 새 라이브러리를 못 쓰는 사정은 위 설명 참고) 변환된 엑셀 파일에도 같이
+// 넣어준다. PNG 파일 구조(헤더+압축된 그림 데이터+체크섬)를 직접 만드는 부분이라 조금 길다.
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) {
+    crc ^= bytes[i];
+    for (let j = 0; j < 8; j++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+function pngU32(n) {
+  return new Uint8Array([(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
+}
+function pngChunk(type, data) {
+  const typeBytes = new TextEncoder().encode(type);
+  const body = new Uint8Array(typeBytes.length + data.length);
+  body.set(typeBytes, 0);
+  body.set(data, typeBytes.length);
+  const crc = crc32(body);
+  const chunk = new Uint8Array(4 + body.length + 4);
+  chunk.set(pngU32(data.length), 0);
+  chunk.set(body, 4);
+  chunk.set(pngU32(crc), 4 + body.length);
+  return chunk;
+}
+// PNG의 그림 데이터(IDAT)는 zlib 압축 형식을 쓰는데, 브라우저 내장 CompressionStream("deflate")가
+// 정확히 그 zlib 형식을 만들어줘서 별도 압축 라이브러리 없이도 쓸 수 있다.
+async function deflateZlib(bytes) {
+  const cs = new CompressionStream("deflate");
+  const writer = cs.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  const chunks = [];
+  const reader = cs.readable.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const total = chunks.reduce((a, c) => a + c.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.length;
+  }
+  return out;
+}
+// width×height 크기의 픽셀 데이터(순서대로 R,G,B[,A])를 PNG 파일(바이트 배열)로 만든다.
+// rgba가 true면 픽셀당 4바이트(R,G,B,A), 아니면 3바이트(R,G,B)로 본다.
+async function encodePngFromPixels(width, height, pixelData, rgba) {
+  const bpp = rgba ? 4 : 3;
+  const stride = width * bpp;
+  const raw = new Uint8Array(height * (stride + 1));
+  for (let y = 0; y < height; y++) {
+    raw[y * (stride + 1)] = 0; // 줄마다 맨 앞에 "필터 없음" 표시 바이트가 필요하다(PNG 스펙).
+    raw.set(pixelData.subarray(y * stride, y * stride + stride), y * (stride + 1) + 1);
+  }
+  const idatData = await deflateZlib(raw);
+  const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = new Uint8Array(13);
+  ihdr.set(pngU32(width), 0);
+  ihdr.set(pngU32(height), 4);
+  ihdr[8] = 8; // 색상당 8비트
+  ihdr[9] = rgba ? 6 : 2; // PNG 색상 종류: 6=RGBA, 2=RGB
+  const parts = [sig, pngChunk("IHDR", ihdr), pngChunk("IDAT", idatData), pngChunk("IEND", new Uint8Array(0))];
+  const total = parts.reduce((a, c) => a + c.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of parts) {
+    out.set(c, off);
+    off += c.length;
+  }
+  return out;
+}
+function bytesToBase64(bytes) {
+  let binary = "";
+  const CHUNK = 0x8000; // 한 번에 너무 많이 넘기면 브라우저에서 에러가 나서 나눠서 처리한다.
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+// 한 픽셀 크기를 가로/세로 중 긴 쪽이 maxDim을 넘지 않도록 비율 그대로 줄인 크기로 바꾼다
+// (엑셀 파일에 그림이 너무 크게 들어가지 않도록).
+function clampImgDisplaySize(w, h, maxDim) {
+  const scale = Math.min(1, maxDim / Math.max(w, h));
+  return { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) };
+}
+// PDF 한 페이지 안에 박혀있는 그림들을(나온 순서대로) PNG data URL 목록으로 꺼낸다. 그림 하나가
+// 알 수 없는 형식이거나 실패해도 조용히 건너뛰고 나머지는 계속 진행한다 — 그림을 하나도 못 꺼내도
+// 표(글자) 변환 자체는 그대로 되게 하려는 것이다.
+async function extractPdfPageImages(pdfjsLib, page) {
+  const images = [];
+  try {
+    const opList = await page.getOperatorList();
+    const seen = new Set();
+    const ids = [];
+    for (let i = 0; i < opList.fnArray.length; i++) {
+      if (opList.fnArray[i] === pdfjsLib.OPS.paintImageXObject) {
+        const id = opList.argsArray[i][0];
+        if (!seen.has(id)) {
+          seen.add(id);
+          ids.push(id);
+        }
+      }
+    }
+    for (const id of ids) {
+      try {
+        const obj = page.objs.get(id);
+        if (!obj || !obj.data || !obj.width || !obj.height) continue;
+        const rgba = obj.kind === pdfjsLib.ImageKind.RGBA_32BPP;
+        if (!rgba && obj.kind !== pdfjsLib.ImageKind.RGB_24BPP) continue; // 흑백 등 드문 형식은 건너뜀
+        const png = await encodePngFromPixels(obj.width, obj.height, obj.data, rgba);
+        images.push({ dataUrl: "data:image/png;base64," + bytesToBase64(png), width: obj.width, height: obj.height });
+      } catch (e) {
+        // 그림 하나가 실패해도 나머지는 계속 진행
+      }
+    }
+  } catch (e) {
+    // 그림 추출 자체가 실패해도(예: 구조가 특이한 PDF) 표 변환에는 영향이 없게 한다.
+  }
+  return images;
+}
+
 async function convertPdfFileToSheets(file) {
   const pdfjsLib = await import("pdfjs-dist/build/pdf.mjs");
   // 이유는 parseQuotePdf와 동일: 워커 파일을 번들에 포함시키면 Vercel 빌드 압축 도구가 처리하지 못해
@@ -1355,7 +1484,8 @@ async function convertPdfFileToSheets(file) {
       .filter((it) => it.str.trim() !== "");
     if (items.length > 0) anyTextFound = true;
     const aoa = buildPdfPageGridAOA(items);
-    sheets.push({ name: doc.numPages > 1 ? `${p}페이지` : "Sheet1", aoa: aoa.length ? aoa : [[""]] });
+    const images = await extractPdfPageImages(pdfjsLib, page);
+    sheets.push({ name: doc.numPages > 1 ? `${p}페이지` : "Sheet1", aoa: aoa.length ? aoa : [[""]], images });
   }
   return { sheets, anyTextFound };
 }
@@ -1423,7 +1553,20 @@ function computeColWidthsPx(aoa) {
   return widths.map((len) => Math.min(400, Math.max(50, len * 7 + 16)));
 }
 
-function aoaSheetToHtmlTable(aoa, title) {
+// extractPdfPageImages가 꺼낸 그림들을, 표 맨 위에 한 줄로 나란히 넣을 수 있는 HTML로 만든다
+// (그림 하나도 없으면 빈 문자열). 그림이 너무 크게 들어가지 않도록 한 변의 최대 길이를 200px로 줄인다.
+function aoaImagesRowHtml(images, colspan) {
+  if (!images || images.length === 0) return "";
+  const imgsHtml = images
+    .map((im) => {
+      const { w, h } = clampImgDisplaySize(im.width, im.height, 200);
+      return `<img src="${im.dataUrl}" width="${w}" height="${h}" style="margin:2px;">`;
+    })
+    .join("");
+  return `<tr><td colspan="${Math.max(1, colspan)}" style='border:1px solid #999999; padding:6px;'>${imgsHtml}</td></tr>`;
+}
+
+function aoaSheetToHtmlTable(aoa, title, images) {
   const headerRows = detectHeaderRowSet(aoa);
   const colWidths = computeColWidthsPx(aoa);
   const colsHtml = colWidths.map((w) => `<col style="width:${w}px">`).join("");
@@ -1432,6 +1575,9 @@ function aoaSheetToHtmlTable(aoa, title) {
   const titleHtml = title
     ? `<tr><td colspan="${Math.max(1, colWidths.length)}" style='border:1px solid #999999; background:#E3E3E3; font-weight:bold; font-size:13pt; padding:4px 6px;'>${escapeHtmlCell(title)}</td></tr>`
     : "";
+  // (2026-10-06 추가) "명판도 없고" 신고 — PDF 안에 그림으로 박혀있던 로고·회사정보·제품사진을
+  // extractPdfPageImages로 꺼내온 게 있으면, 표(글자) 바로 위에 한 줄로 넣어준다.
+  const imagesHtml = aoaImagesRowHtml(images, colWidths.length);
   const rowsHtml = aoa
     .map((row, ri) => {
       const isHeader = headerRows.has(ri);
@@ -1446,14 +1592,14 @@ function aoaSheetToHtmlTable(aoa, title) {
       return `<tr>${cellsHtml}</tr>`;
     })
     .join("");
-  return `<table border="0" cellspacing="0" cellpadding="0"><colgroup>${colsHtml}</colgroup>${titleHtml}${rowsHtml}</table>`;
+  return `<table border="0" cellspacing="0" cellpadding="0"><colgroup>${colsHtml}</colgroup>${titleHtml}${imagesHtml}${rowsHtml}</table>`;
 }
 
-// convertPdfFileToSheets가 만든 sheets(페이지별 aoa)를 받아, 엑셀이 테두리·배경색·글자굵기를 그대로
-// 살려서 열어주는 .xls(HTML 기반) 파일 내용을 만든다. 맨 앞의 BOM(﻿)은 한글이 깨지지 않도록
-// 엑셀에게 "이 파일은 UTF-8이다"라고 알려주는 역할이다.
+// convertPdfFileToSheets가 만든 sheets(페이지별 aoa + images)를 받아, 엑셀이 테두리·배경색·글자굵기·
+// 그림을 그대로 살려서 열어주는 .xls(HTML 기반) 파일 내용을 만든다. 맨 앞의 BOM(﻿)은 한글이 깨지지
+// 않도록 엑셀에게 "이 파일은 UTF-8이다"라고 알려주는 역할이다.
 function aoaSheetsToStyledHtmlXls(sheets) {
-  const tables = sheets.map((s) => aoaSheetToHtmlTable(s.aoa, sheets.length > 1 ? s.name : null)).join("<br>");
+  const tables = sheets.map((s) => aoaSheetToHtmlTable(s.aoa, sheets.length > 1 ? s.name : null, s.images)).join("<br>");
   return (
     "﻿" +
     `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
