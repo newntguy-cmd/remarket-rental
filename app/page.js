@@ -1303,6 +1303,88 @@ async function parseQuotePdf(file) {
   };
 }
 
+// ---------- 일반 PDF → 엑셀 변환 (새 메뉴 "PDF를 엑셀로 변환", 2026-10-06 추가) ----------
+// "피디에프 파일 올리면 엑셀로 이상하게 말고 보이는 화면 똑같이 엑셀로 변환해주는 기능" 요청으로 추가.
+// 위의 parseQuotePdf는 우리 회사 견적서 양식을 안다는 전제로 품목/금액 등 정해진 자리를 찾아 읽지만,
+// 이 변환기는 어떤 PDF든 양식을 전혀 모른 채 "글자가 찍힌 위치"만 보고 줄·칸으로 나눠 그대로 엑셀에 옮긴다.
+//  1) 같은 줄(y좌표가 비슷한 글자들)끼리 묶는다 — 위에서 이미 쓰고 있는 pdfGroupRows를 그대로 재사용.
+//  2) 페이지 전체에서 글자 조각들의 가로 시작 위치(x)를 모아, 비슷한 x끼리 하나의 "칸"으로 묶는다(칸
+//     경계는 페이지마다 딱 한 번만 계산해서 모든 줄에 똑같이 적용한다 — 줄마다 따로 잡으면 표의 세로줄이
+//     줄마다 어긋나 보이게 된다).
+// 완벽한 변환은 아니다(표가 아닌 문서나, 숫자처럼 오른쪽 정렬된 칸은 줄마다 시작 위치가 조금씩 달라
+// 칸이 어긋날 수 있다). 다만 엑셀·한글 프로그램에서 PDF로 저장한 문서는 칸 하나가 글자 조각 하나로
+// 그대로 찍혀 나오는 경우가 많아, 이 방식으로도 꽤 정확하게 줄·칸이 맞춰진다.
+function buildPdfPageGridAOA(items, colGap = 14) {
+  const rows = pdfGroupRows(items); // 위→아래 순, 각 줄 안에서는 왼쪽→오른쪽 순
+  if (rows.length === 0) return [];
+
+  // 칸 경계는 이 페이지의 모든 글자 조각 시작 위치(x)를 작은 값부터 순서대로 훑으면서, 바로 앞 칸의
+  // 평균 위치와 colGap(px)보다 가까우면 같은 칸으로, 멀면 새 칸으로 나눠서 잡는다.
+  const allX = [];
+  for (const r of rows) for (const it of r.items) allX.push(it.x);
+  allX.sort((a, b) => a - b);
+
+  const clusters = [];
+  for (const x of allX) {
+    const last = clusters[clusters.length - 1];
+    if (last && x - last.sum / last.n < colGap) {
+      last.sum += x;
+      last.n += 1;
+    } else {
+      clusters.push({ sum: x, n: 1 });
+    }
+  }
+  const centers = clusters.map((c) => c.sum / c.n);
+
+  function colIndexOf(x) {
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < centers.length; i++) {
+      const d = Math.abs(x - centers[i]);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  return rows.map((r) => {
+    const line = new Array(centers.length).fill("");
+    for (const it of r.items) {
+      const ci = colIndexOf(it.x);
+      line[ci] = line[ci] ? `${line[ci]} ${it.str}` : it.str;
+    }
+    return line;
+  });
+}
+
+// 업로드한 PDF 파일(여러 페이지 가능)을 읽어 페이지별 엑셀 시트 내용을 만든다. parseQuotePdf와 똑같은
+// 방식(pdfjs-dist로 글자 조각의 x/y 좌표를 읽음)을 쓰되, 특정 항목을 찾아내지 않고 줄·칸 구성만 그대로 돌려준다.
+async function convertPdfFileToSheets(file) {
+  const pdfjsLib = await import("pdfjs-dist/build/pdf.mjs");
+  // 이유는 parseQuotePdf와 동일: 워커 파일을 번들에 포함시키면 Vercel 빌드 압축 도구가 처리하지 못해
+  // 빌드가 실패하므로, 번들에 넣지 않고 CDN 주소를 그대로 가리키게 한다.
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+
+  const sheets = [];
+  let anyTextFound = false;
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p);
+    const content = await page.getTextContent();
+    const items = content.items
+      .map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width }))
+      .filter((it) => it.str.trim() !== "");
+    if (items.length > 0) anyTextFound = true;
+    const aoa = buildPdfPageGridAOA(items);
+    sheets.push({ name: doc.numPages > 1 ? `${p}페이지` : "Sheet1", aoa: aoa.length ? aoa : [[""]] });
+  }
+  return { sheets, anyTextFound };
+}
+
 // ---------- A/S 접수 및 처리보고서 엑셀 파싱 ----------
 // 이 양식은 품목표처럼 행이 반복되는 표가 아니라, "라벨 칸 + 값 칸"이 나란히 있는 1장짜리 양식이다(예:
 // "고 객 명" 칸 바로 오른쪽에 실제 고객명이 적힌 칸이 옴). 그래서 견적서 파싱과 달리, 각 행을 훑으면서
@@ -2223,6 +2305,7 @@ function Dashboard({ profile, session, onLogout }) {
     ...(isStaff ? [{ key: "layoutSim", label: "가구배치(시뮬레이션)" }] : []),
     ...(isStaff ? [{ key: "photoLibrary", label: "제품사진 라이브러리" }] : []),
     ...(isStaff ? [{ key: "quote", label: "견적서 업로드" }] : []),
+    ...(isStaff ? [{ key: "pdfToExcel", label: "PDF를 엑셀로 변환" }] : []),
     ...(isStaff ? [{ key: "rentals", label: "렌탈내역" }] : []),
     ...(isStaff ? [{ key: "purchases", label: "구매내역" }] : []),
     ...(isStaff ? [{ key: "shares", label: "지분관리" }] : []),
@@ -2478,6 +2561,8 @@ function Dashboard({ profile, session, onLogout }) {
             customers={customers}
           />
         )}
+
+        {activeTab === "pdfToExcel" && isStaff && <PdfToExcelTab />}
 
         {activeTab === "quickcalc" && isStaff && (
           <QuickTonCalcPanel tonOverrides={tonOverrides} onTonOverrideSaved={fetchTonOverrides} />
@@ -5310,6 +5395,109 @@ function QuickTonCalcPanel({ tonOverrides, onTonOverrideSaved }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// "PDF를 엑셀로 변환" 메뉴 화면. 다른 메뉴들과 달리 Supabase 데이터를 전혀 다루지 않는 순수 변환
+// 도구라서, 상위(Dashboard)로부터 아무 prop도 받지 않는 독립 컴포넌트로 만들었다.
+function PdfToExcelTab() {
+  const inputRef = useRef(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [doneMsg, setDoneMsg] = useState("");
+
+  async function handleFile(file) {
+    if (!file) return;
+    setErr("");
+    setDoneMsg("");
+    const isPdf = file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf";
+    if (!isPdf) {
+      setErr("PDF 파일만 올릴 수 있어요.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const { sheets, anyTextFound } = await convertPdfFileToSheets(file);
+      if (!anyTextFound) {
+        setErr("이 PDF에서 글자를 읽어내지 못했어요. 스캔한 이미지로 만들어진 PDF는 아직 지원하지 않아요(엑셀·한글 프로그램에서 PDF로 저장한 파일이면 대부분 잘 변환돼요).");
+        return;
+      }
+      const XLSX = await import("xlsx");
+      const wb = XLSX.utils.book_new();
+      sheets.forEach((s) => {
+        const ws = XLSX.utils.aoa_to_sheet(s.aoa);
+        XLSX.utils.book_append_sheet(wb, ws, s.name);
+      });
+      const outName = file.name.replace(/\.pdf$/i, "") + "_변환.xlsx";
+      XLSX.writeFile(wb, outName);
+      setDoneMsg(`"${outName}" 파일로 내려받았어요. (총 ${sheets.length}페이지)`);
+    } catch (e) {
+      console.error(e);
+      setErr("PDF를 변환하는 중 문제가 발생했어요. 파일 형식을 확인해주세요.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) handleFile(file);
+  }
+
+  return (
+    <div>
+      <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>PDF를 엑셀로 변환</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16, maxWidth: 560, lineHeight: 1.7 }}>
+        PDF 파일을 올리면 화면에 보이는 줄·칸 구성을 최대한 그대로 살려서 엑셀(.xlsx) 파일로 내려받아요.
+        엑셀이나 한글 프로그램에서 PDF로 저장한 문서일수록 더 정확하게 변환돼요(표가 아닌 문서나 스캔한
+        이미지 PDF는 줄·칸이 완벽히 맞지 않을 수 있어요).
+      </div>
+
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (!busy) setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={busy ? undefined : handleDrop}
+        onClick={() => !busy && inputRef.current?.click()}
+        style={{
+          border: `2px dashed ${dragOver ? C.purple : C.lineSoft}`,
+          background: dragOver ? C.purpleBg : C.panel,
+          padding: 40,
+          textAlign: "center",
+          cursor: busy ? "default" : "pointer",
+          maxWidth: 520,
+        }}
+      >
+        <input
+          type="file"
+          accept=".pdf,application/pdf"
+          ref={inputRef}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) handleFile(file);
+          }}
+          style={{ display: "none" }}
+        />
+        {busy ? (
+          <div style={{ fontSize: 13.5, color: C.inkSoft }}>변환 중…</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 24, marginBottom: 8 }}>⬆️</div>
+            <div style={{ fontSize: 13.5, color: C.ink, marginBottom: 4 }}>PDF 파일을 끌어다 놓으세요</div>
+            <div style={{ fontSize: 11.5, color: C.muted }}>또는 클릭해서 파일 선택 (.pdf)</div>
+          </>
+        )}
+      </div>
+
+      {err && <div style={{ color: C.brick, fontSize: 13, marginTop: 14, maxWidth: 520 }}>{err}</div>}
+      {doneMsg && <div style={{ color: C.green, fontSize: 13, marginTop: 14 }}>{doneMsg}</div>}
     </div>
   );
 }
