@@ -1307,56 +1307,31 @@ async function parseQuotePdf(file) {
 // "피디에프 파일 올리면 엑셀로 이상하게 말고 보이는 화면 똑같이 엑셀로 변환해주는 기능" 요청으로 추가.
 // 위의 parseQuotePdf는 우리 회사 견적서 양식을 안다는 전제로 품목/금액 등 정해진 자리를 찾아 읽지만,
 // 이 변환기는 어떤 PDF든 양식을 전혀 모른 채 "글자가 찍힌 위치"만 보고 줄·칸으로 나눠 그대로 엑셀에 옮긴다.
-//  1) 같은 줄(y좌표가 비슷한 글자들)끼리 묶는다 — 위에서 이미 쓰고 있는 pdfGroupRows를 그대로 재사용.
-//  2) 페이지 전체에서 글자 조각들의 가로 시작 위치(x)를 모아, 비슷한 x끼리 하나의 "칸"으로 묶는다(칸
-//     경계는 페이지마다 딱 한 번만 계산해서 모든 줄에 똑같이 적용한다 — 줄마다 따로 잡으면 표의 세로줄이
-//     줄마다 어긋나 보이게 된다).
-// 완벽한 변환은 아니다(표가 아닌 문서나, 숫자처럼 오른쪽 정렬된 칸은 줄마다 시작 위치가 조금씩 달라
-// 칸이 어긋날 수 있다). 다만 엑셀·한글 프로그램에서 PDF로 저장한 문서는 칸 하나가 글자 조각 하나로
-// 그대로 찍혀 나오는 경우가 많아, 이 방식으로도 꽤 정확하게 줄·칸이 맞춰진다.
-function buildPdfPageGridAOA(items, colGap = 14) {
+//
+// (2026-10-06 재작성) 처음엔 "페이지 전체에서 비슷한 x 위치끼리 하나의 칸으로 묶는" 방식이었는데,
+// 실제 한글(HWP)로 만든 공문 PDF로 테스트해보니 엉망으로 깨졌다("호환 좀 신경써줘" 신고). 원인은
+// 두 가지였다: ① 표가 아닌 일반 문서는 줄마다 글자가 전혀 다른 x 위치에서 시작해서, 페이지 전체
+// 기준으로 "칸"을 잡으면 사실상 거의 모든 글자 조각이 자기 혼자만의 칸이 돼버린다. ② "수  신"처럼
+// 라벨 글자 사이에 정렬용으로 넓은 공백을 일부러 넣어둔 경우, 같은 단어의 글자들마저 서로 다른
+// 칸으로 쪼개져 버린다. 그래서 페이지 전체를 아우르는 칸 경계를 만드는 대신, 줄마다 따로 "그 줄
+// 안에서 간격이 넓게 벌어지는 지점"만 기준으로 칸을 나누는 방식으로 바꿨다(견적서 업로드의 라벨:값
+// 2단 인식에 이미 쓰고 있던 pdfSplitRowSegments와 같은 방식). 표의 진짜 칸 사이는 보통 글자 한 칸
+// 너비보다 훨씬 넓게 벌어져 있어서 이 기준으로도 잘 갈라지고, 반대로 한 문장 안의 단어 사이나 "수 신"
+// 같은 라벨 안의 글자 사이는 간격이 좁아 한 칸으로 자연스럽게 합쳐진다. 줄마다 칸 개수가 다를 수
+// 있지만(표가 아닌 문서는 대부분 한 줄에 칸이 하나뿐), 표 형식 문서는 보통 모든 줄의 칸 개수가
+// 똑같이 나와서 결과적으로 엑셀에서도 줄끼리 칸이 잘 맞는다.
+//
+// (2026-10-06 추가 보완) 실제 엑셀/한글 혼합 양식의 "렌탈 견적서" PDF로 다시 테스트해보니("차이가
+// 심각하다" 신고), 품목명 칸이 유난히 좁고 규격 칸의 글자가 길어서 칸 경계에 거의 붙는 줄에서는
+// gapThreshold=35로도 품목명과 규격이 한 칸으로 잘못 합쳐지는 경우가 있었다. 실제 PDF 데이터로
+// "반드시 합쳐져야 하는 간격(라벨 안 글자 사이, 최대 약 29)"과 "반드시 나뉘어야 하는 간격(진짜 칸
+// 사이, 최소 약 31.6)"을 직접 비교해 그 사이 값인 30으로 낮췄다 — 한글 공문 PDF 쪽은 이 값으로 바꿔도
+// 결과가 그대로였고(여유 있는 범위라 안전), 렌탈 견적서 쪽은 품목명/규격이 더 잘 나뉘는 것으로 확인됨.
+// (참고: pdfSplitRowSegments 자체의 기본값 35는 그대로 둠 — 견적서 업로드의 2단 라벨:값 인식이
+// 이미 그 기본값에 맞춰 잘 동작하고 있어서, 거기엔 영향이 가지 않도록 이 함수 호출 쪽에서만 30을 썼다.)
+function buildPdfPageGridAOA(items, gapThreshold = 30) {
   const rows = pdfGroupRows(items); // 위→아래 순, 각 줄 안에서는 왼쪽→오른쪽 순
-  if (rows.length === 0) return [];
-
-  // 칸 경계는 이 페이지의 모든 글자 조각 시작 위치(x)를 작은 값부터 순서대로 훑으면서, 바로 앞 칸의
-  // 평균 위치와 colGap(px)보다 가까우면 같은 칸으로, 멀면 새 칸으로 나눠서 잡는다.
-  const allX = [];
-  for (const r of rows) for (const it of r.items) allX.push(it.x);
-  allX.sort((a, b) => a - b);
-
-  const clusters = [];
-  for (const x of allX) {
-    const last = clusters[clusters.length - 1];
-    if (last && x - last.sum / last.n < colGap) {
-      last.sum += x;
-      last.n += 1;
-    } else {
-      clusters.push({ sum: x, n: 1 });
-    }
-  }
-  const centers = clusters.map((c) => c.sum / c.n);
-
-  function colIndexOf(x) {
-    let best = 0;
-    let bestDist = Infinity;
-    for (let i = 0; i < centers.length; i++) {
-      const d = Math.abs(x - centers[i]);
-      if (d < bestDist) {
-        bestDist = d;
-        best = i;
-      }
-    }
-    return best;
-  }
-
-  return rows.map((r) => {
-    const line = new Array(centers.length).fill("");
-    for (const it of r.items) {
-      const ci = colIndexOf(it.x);
-      line[ci] = line[ci] ? `${line[ci]} ${it.str}` : it.str;
-    }
-    return line;
-  });
+  return rows.map((r) => pdfSplitRowSegments(r.items, gapThreshold));
 }
 
 // 업로드한 PDF 파일(여러 페이지 가능)을 읽어 페이지별 엑셀 시트 내용을 만든다. parseQuotePdf와 똑같은
@@ -6062,10 +6037,37 @@ function PhotoDropZone({ onFile, fileName, onClear }) {
   );
 }
 
+// (2026-10-06 추가) "품목끼리 자유롭게 이동 가능하게... 같은 제품은 보여지는 사이즈가 동일하게" 요청 —
+// 카드를 보여줄 때, 실제 사진의 픽셀 크기가 아니라 여기 입력해둔 실제 가로/세로/높이(mm) 값을 기준으로
+// 액자 안에서 차지하는 비율을 계산한다. 그러면 같은 제품(예: 이동서랍 W400*D520*H600)은 사진을 어떻게
+// 찍었든(얼마나 확대해서 찍었든) 항상 똑같은 비율로 보이고, 치수가 다른 제품끼리는 큰 제품이 더 크게
+// 보이도록 자연스럽게 차이가 난다. 가로/세로/높이를 하나도 안 넣은 사진(기존에 등록해둔 사진들 포함)은
+// 예전처럼 액자를 꽉 채워서 보여준다(동작이 갑자기 바뀌지 않도록).
+function photoSizeFrac(p) {
+  const dims = [p.width_mm, p.depth_mm, p.height_mm].map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  if (dims.length === 0) return 1;
+  const basis = Math.max(...dims);
+  const REFERENCE_MM = 2000; // 이 정도(2m) 이상이면 액자를 꽉 채운다
+  const MIN_FRAC = 0.35; // 아무리 작은 제품이어도 액자의 35%보다 작게는 안 보이게(너무 작아 안 보이는 것 방지)
+  return Math.min(1, Math.max(MIN_FRAC, basis / REFERENCE_MM));
+}
+
+// 카드에 표시할 "W400×D520×H600mm" 같은 치수 문구. 하나도 안 넣었으면 null.
+function formatDims(p) {
+  const parts = [];
+  if (p.width_mm) parts.push(`W${p.width_mm}`);
+  if (p.depth_mm) parts.push(`D${p.depth_mm}`);
+  if (p.height_mm) parts.push(`H${p.height_mm}`);
+  return parts.length ? parts.join("×") + "mm" : null;
+}
+
 // ---------- 제품사진 라이브러리 (사무집기 사진을 품목명과 함께 미리 등록해두는 관리 화면) ----------
 // "이미지 파일을 별도로 줄거야"라는 요청에 맞춰, 화면에서 사진을 하나씩 올리고 품목명(+선택적으로
 // 규격)을 입력해 등록하는 방식으로 만들었다. 여기 등록한 사진은 견적서 업로드 화면의 "사진 출력물
 // 보기"에서 matchItemPhoto로 자동 매칭된다.
+// (2026-10-06 추가) "품목끼리 자유롭게 이동 가능하게" 요청으로, 카드를 마우스로 드래그해서 순서를
+// 자유롭게 바꿀 수 있게 했다(sort_order 컬럼에 저장). 가로/세로/높이(mm)도 입력할 수 있게 하고, 이
+// 값으로 화면에 보여지는 사진 크기를 계산해 같은 제품끼리는 항상 같은 크기로 보이게 했다.
 function PhotoLibraryTab() {
   const [photos, setPhotos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -6076,6 +6078,11 @@ function PhotoLibraryTab() {
   // 우선 색상을 입력·저장·수정할 수 있게 칸을 추가해뒀다. 견적서 쪽 색상과 자동으로 매칭하는 로직은
   // "나중에"라고 하셔서 아직은 안 붙였고, 이 색상 칼럼(color)을 나중에 그대로 활용하면 된다.
   const [newColor, setNewColor] = useState("");
+  // "가로 세로 높이를 넣으면... 동일하게 구현되게" 요청 — 사진 자체의 픽셀 크기가 아니라 실제 치수(mm)로
+  // 화면 표시 크기를 맞추기 위한 입력칸. 선택 입력(안 넣으면 예전처럼 액자를 꽉 채워 보여줌).
+  const [newWidth, setNewWidth] = useState("");
+  const [newDepth, setNewDepth] = useState("");
+  const [newHeight, setNewHeight] = useState("");
   const [newFile, setNewFile] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
@@ -6085,11 +6092,32 @@ function PhotoLibraryTab() {
   const [editName, setEditName] = useState("");
   const [editSpec, setEditSpec] = useState("");
   const [editColor, setEditColor] = useState("");
+  const [editWidth, setEditWidth] = useState("");
+  const [editDepth, setEditDepth] = useState("");
+  const [editHeight, setEditHeight] = useState("");
+  // "사진도 수정할 수 있게 해줘" 요청 — 수정 모드에서 새 사진 파일을 고르면 그걸로 교체하고, 안 고르면
+  // (null로 두면) 원래 사진이 그대로 남는다.
+  const [editFile, setEditFile] = useState(null);
   const [renaming, setRenaming] = useState(false);
+  // "품목끼리 자유롭게 이동 가능하게" 요청 — 카드를 마우스로 끌어다 놓으면 순서가 바뀐다. dragId는
+  // 지금 끌고 있는 카드, reordering은 끌어다 놓은 뒤 서버에 순서를 저장하는 중인지 표시용.
+  const [dragId, setDragId] = useState(null);
+  const [reordering, setReordering] = useState(false);
 
   async function fetchPhotos() {
     setLoading(true);
-    const { data, error } = await supabase.from("item_photos").select("*").order("created_at", { ascending: false });
+    // sort_order가 있으면 그 순서(화면에서 드래그로 정한 순서)대로, 아직 순서를 안 정한(새로 등록했거나
+    // sort_order 컬럼을 막 추가한 직후) 사진들은 등록한 최신순으로 뒤에 붙는다.
+    let { data, error } = await supabase
+      .from("item_photos")
+      .select("*")
+      .order("sort_order", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: false });
+    if (error && /sort_order/i.test(error.message)) {
+      // item_photos_size_order_setup.sql을 아직 실행 안 해서 sort_order 컬럼이 없는 경우 — 드래그 순서
+      // 기능만 빠진 채로(예전처럼 최신순) 일단 화면은 뜨게 해준다.
+      ({ data, error } = await supabase.from("item_photos").select("*").order("created_at", { ascending: false }));
+    }
     if (error) {
       setLoading(false);
       alert(
@@ -6158,21 +6186,31 @@ function PhotoLibraryTab() {
       );
       return;
     }
+    // 가로/세로/높이는 선택 입력이라 비워두면 null로 저장한다(그러면 photoSizeFrac이 예전처럼 액자를
+    // 꽉 채우는 걸로 처리한다). 숫자가 아닌 값을 넣었으면(실수로 "약 400" 처럼) 무시하고 null로 저장.
+    const parseDim = (s) => {
+      const n = Number(String(s).trim());
+      return s && Number.isFinite(n) && n > 0 ? n : null;
+    };
     const { error: insertError } = await supabase.from("item_photos").insert({
       item_name: newName.trim(),
       spec: newSpec.trim() || null,
       color: newColor.trim() || null,
+      width_mm: parseDim(newWidth),
+      depth_mm: parseDim(newDepth),
+      height_mm: parseDim(newHeight),
       image_path: path,
     });
     setSaving(false);
     if (insertError) {
-      // color 컬럼이 아직 없는 예전 Supabase 테이블일 수 있다 — item_photos_setup.sql을 다시 실행하면
-      // color 컬럼이 추가된다.
+      // color/width_mm 등 컬럼이 아직 없는 예전 Supabase 테이블일 수 있다 — setup sql을 다시 실행하면 추가된다.
       alert(
         "등록에 실패했어요: " +
           insertError.message +
           (insertError.message.includes("color")
             ? " (Supabase의 item_photos 테이블에 color 컬럼이 아직 없을 수 있어요. item_photos_setup.sql을 다시 실행해주세요.)"
+            : /width_mm|depth_mm|height_mm/.test(insertError.message)
+            ? " (Supabase의 item_photos 테이블에 가로/세로/높이 컬럼이 아직 없을 수 있어요. item_photos_size_order_setup.sql을 Supabase SQL Editor에서 실행해주세요.)"
             : " (Supabase에 item_photos 테이블이 아직 없다면 관리자에게 설정을 요청해주세요.)")
       );
       return;
@@ -6180,6 +6218,9 @@ function PhotoLibraryTab() {
     setNewName("");
     setNewSpec("");
     setNewColor("");
+    setNewWidth("");
+    setNewDepth("");
+    setNewHeight("");
     setNewFile(null);
     fetchPhotos();
   }
@@ -6189,6 +6230,10 @@ function PhotoLibraryTab() {
     setEditName(p.item_name || "");
     setEditSpec(p.spec || "");
     setEditColor(p.color || "");
+    setEditWidth(p.width_mm != null ? String(p.width_mm) : "");
+    setEditDepth(p.depth_mm != null ? String(p.depth_mm) : "");
+    setEditHeight(p.height_mm != null ? String(p.height_mm) : "");
+    setEditFile(null);
   }
 
   function cancelEdit() {
@@ -6196,6 +6241,10 @@ function PhotoLibraryTab() {
     setEditName("");
     setEditSpec("");
     setEditColor("");
+    setEditWidth("");
+    setEditDepth("");
+    setEditHeight("");
+    setEditFile(null);
   }
 
   async function saveEdit(p) {
@@ -6204,33 +6253,79 @@ function PhotoLibraryTab() {
       return;
     }
     setRenaming(true);
+    const parseDim = (s) => {
+      const n = Number(String(s).trim());
+      return s && Number.isFinite(n) && n > 0 ? n : null;
+    };
+    // "사진도 수정할 수 있게 해줘" 요청 — 수정칸에서 새 사진을 골랐으면(editFile) 먼저 그 파일을
+    // Storage에 새 경로로 올려두고(등록할 때와 같은 방식), 아래 update에 그 새 경로를 같이 저장한다.
+    // 업로드가 실패하면 기존 정보(품목명 등)도 같이 틀어지지 않도록, 여기서 먼저 멈추고 기존 사진은
+    // 그대로 남겨둔다.
+    let newImagePath = null;
+    if (editFile) {
+      const extMatch = editFile.name.match(/\.[a-zA-Z0-9]+$/);
+      const ext = extMatch ? extMatch[0] : "";
+      newImagePath = `photo-${Date.now()}${ext}`;
+      const { error: uploadError } = await supabase.storage.from("item-photos").upload(newImagePath, editFile, { upsert: false });
+      if (uploadError) {
+        setRenaming(false);
+        alert(
+          "새 사진 업로드에 실패했어요: " +
+            uploadError.message +
+            (uploadError.message.includes("row-level security") || uploadError.message.includes("Bucket not found")
+              ? " (Supabase에 item-photos 저장공간(버킷)·권한 규칙이 아직 설정되지 않았을 수 있어요. item_photos_setup.sql을 Supabase SQL Editor에서 한 번 실행해주세요.)"
+              : "")
+        );
+        return;
+      }
+    }
     // (버그 수정) "수정 후 저장을 해도 반영이 안되네" 신고 — Supabase에 item_photos "수정(update)" 권한
     // 규칙이 빠져있으면, 오류 없이 조용히 그냥 반영만 안 되는 경우가 있다(등록·삭제와 달리 이 문제는
     // 화면에 아무 표시가 안 나서 알아채기 어려웠다). .select()를 붙여 실제로 몇 건이 바뀌었는지
     // 확인해서, 0건이면 권한 규칙 문제라는 걸 명확히 알려준다.
     const { data, error } = await supabase
       .from("item_photos")
-      .update({ item_name: editName.trim(), spec: editSpec.trim() || null, color: editColor.trim() || null })
+      .update({
+        item_name: editName.trim(),
+        spec: editSpec.trim() || null,
+        color: editColor.trim() || null,
+        width_mm: parseDim(editWidth),
+        depth_mm: parseDim(editDepth),
+        height_mm: parseDim(editHeight),
+        ...(newImagePath ? { image_path: newImagePath } : {}),
+      })
       .eq("id", p.id)
       .select();
     setRenaming(false);
     if (error) {
+      // 새 사진까지 이미 올려놨는데 정보 수정 자체가 실패했으면, 방금 올린(아무도 안 쓰는) 파일은
+      // 지워서 Storage에 쓸모없는 파일이 쌓이지 않게 한다(실패해도 그냥 넘어간다).
+      if (newImagePath) supabase.storage.from("item-photos").remove([newImagePath]).catch(() => {});
       alert(
         "수정에 실패했어요: " +
           error.message +
           (error.message.includes("color")
             ? " (Supabase의 item_photos 테이블에 color 컬럼이 아직 없을 수 있어요. item_photos_setup.sql을 다시 실행해주세요.)"
+            : /width_mm|depth_mm|height_mm/.test(error.message)
+            ? " (Supabase의 item_photos 테이블에 가로/세로/높이 컬럼이 아직 없을 수 있어요. item_photos_size_order_setup.sql을 Supabase SQL Editor에서 실행해주세요.)"
             : "")
       );
       return;
     }
     if (!data || data.length === 0) {
+      if (newImagePath) supabase.storage.from("item-photos").remove([newImagePath]).catch(() => {});
       alert(
         "수정 내용이 저장되지 않았어요. Supabase에 item_photos \"수정(update)\" 권한 규칙이 아직 없을 수 있어요. item_photos_setup.sql을 Supabase SQL Editor에서 다시 실행해주세요."
       );
       return;
     }
+    // 사진을 새로 바꿨으면, 더 이상 안 쓰는 예전 사진 파일은 Storage에서 지운다(실패해도 그냥 넘어감 —
+    // 안 지워져도 더 이상 화면 어디에서도 안 보이니 문제는 없다).
+    if (newImagePath && p.image_path) {
+      supabase.storage.from("item-photos").remove([p.image_path]).catch(() => {});
+    }
     setEditingId(null);
+    setEditFile(null);
     fetchPhotos();
   }
 
@@ -6250,13 +6345,48 @@ function PhotoLibraryTab() {
     fetchPhotos();
   }
 
+  // "품목끼리 자유롭게 이동 가능하게" 요청 — 카드를 끌어다(drag) 다른 카드 위에 놓으면 그 자리로
+  // 순서가 바뀐다. 끄는 동안은 화면에서만 즉시 순서를 바꿔 보여주고(바로바로 반응해야 자연스러우니까),
+  // 손을 떼는 순간(dragEnd) 그 최종 순서를 1,2,3...으로 Supabase에 저장한다.
+  function handleDragStart(id) {
+    if (editingId != null) return; // 수정 중인 카드가 있으면 드래그 중간에 꼬이지 않도록 막는다
+    setDragId(id);
+  }
+  function handleDragOverCard(e, overId) {
+    e.preventDefault();
+    if (dragId == null || dragId === overId) return;
+    setPhotos((prev) => {
+      const fromIdx = prev.findIndex((p) => p.id === dragId);
+      const toIdx = prev.findIndex((p) => p.id === overId);
+      if (fromIdx === -1 || toIdx === -1) return prev;
+      const list = [...prev];
+      const [moved] = list.splice(fromIdx, 1);
+      list.splice(toIdx, 0, moved);
+      return list;
+    });
+  }
+  async function handleDragEnd() {
+    if (dragId == null) return;
+    setDragId(null);
+    setReordering(true);
+    try {
+      await Promise.all(photos.map((p, i) => supabase.from("item_photos").update({ sort_order: i + 1 }).eq("id", p.id)));
+    } catch (e) {
+      // 저장이 실패해도 화면은 이미 바뀐 순서대로 보이고 있으니 조용히 넘어간다 — 새로고침하면
+      // sort_order 컬럼이 없는 경우(setup sql 미실행) 다시 예전 순서로 돌아간다.
+    }
+    setReordering(false);
+  }
+
   return (
     <div>
       <div style={{ fontFamily: serif, fontSize: 16, marginBottom: 4 }}>제품사진 라이브러리</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 16 }}>
         사무집기 사진을 품목명과 함께 등록해두면, 견적서 업로드 화면의 "사진 출력물 보기"에서 품목명이 비슷한 사진을 자동으로
         찾아 붙여줘요. 규격·색상까지 적어두면 더 정확하게 매칭돼요(둘 다 선택 입력) — 품목명 뒤 괄호 안 색상("접의자(밤색)")이나
-        콤마로 나열한 마지막 색상("탑책상, W1400*D800, 연체리")도 자동으로 읽어서 비교해요.
+        콤마로 나열한 마지막 색상("탑책상, W1400*D800, 연체리")도 자동으로 읽어서 비교해요. 가로·세로·높이(mm)를 적어두면 같은
+        제품은 사진을 어떻게 찍었든 화면에 항상 같은 크기로 보이고, 카드를 마우스로 끌어다 놓으면 순서를 자유롭게 바꿀 수 있어요.
+        {reordering && <span style={{ color: C.purple }}> (순서 저장 중…)</span>}
       </div>
 
       <div style={{ border: `1px solid ${C.line}`, background: C.panel, padding: 16, marginBottom: 20, display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
@@ -6271,6 +6401,18 @@ function PhotoLibraryTab() {
         <div>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>색상 (선택)</div>
           <input style={{ ...smallInputStyle, width: 120 }} value={newColor} onChange={(e) => setNewColor(e.target.value)} placeholder="예: 메이플" />
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>가로mm (선택)</div>
+          <input type="number" style={{ ...smallInputStyle, width: 80 }} value={newWidth} onChange={(e) => setNewWidth(e.target.value)} placeholder="예: 400" />
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>세로mm (선택)</div>
+          <input type="number" style={{ ...smallInputStyle, width: 80 }} value={newDepth} onChange={(e) => setNewDepth(e.target.value)} placeholder="예: 520" />
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>높이mm (선택)</div>
+          <input type="number" style={{ ...smallInputStyle, width: 80 }} value={newHeight} onChange={(e) => setNewHeight(e.target.value)} placeholder="예: 600" />
         </div>
         <div>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>사진 파일 *</div>
@@ -6290,10 +6432,28 @@ function PhotoLibraryTab() {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 14 }}>
           {photos.map((p) => (
-            <div key={p.id} style={{ border: `1px solid ${C.lineSoft}`, padding: 10 }}>
-              <div style={{ width: "100%", height: 130, background: "#F5F5F5", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 8, overflow: "hidden" }}>
+            <div
+              key={p.id}
+              draggable={editingId == null}
+              onDragStart={() => handleDragStart(p.id)}
+              onDragOver={(e) => handleDragOverCard(e, p.id)}
+              onDrop={(e) => e.preventDefault()}
+              onDragEnd={handleDragEnd}
+              title="끌어다 놓으면 순서를 바꿀 수 있어요"
+              style={{
+                border: `1px solid ${C.lineSoft}`,
+                padding: 10,
+                cursor: editingId == null ? "grab" : "default",
+                opacity: dragId === p.id ? 0.4 : 1,
+              }}
+            >
+              <div style={{ width: "100%", height: 130, background: C.panel, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 8, overflow: "hidden" }}>
                 {urlById[p.id] ? (
-                  <img src={urlById[p.id]} alt={p.item_name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                  <img
+                    src={urlById[p.id]}
+                    alt={p.item_name}
+                    style={{ maxWidth: `${(photoSizeFrac(p) * 100).toFixed(1)}%`, maxHeight: `${(photoSizeFrac(p) * 100).toFixed(1)}%`, objectFit: "contain" }}
+                  />
                 ) : (
                   <span style={{ fontSize: 11, color: C.muted }}>불러오는 중…</span>
                 )}
@@ -6313,18 +6473,47 @@ function PhotoLibraryTab() {
                     placeholder="규격 (선택)"
                   />
                   <input
-                    style={{ ...smallInputStyle, width: "100%", boxSizing: "border-box" }}
+                    style={{ ...smallInputStyle, width: "100%", marginBottom: 6, boxSizing: "border-box" }}
                     value={editColor}
                     onChange={(e) => setEditColor(e.target.value)}
                     placeholder="색상 (선택)"
                   />
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input
+                      type="number"
+                      style={{ ...smallInputStyle, width: "100%", boxSizing: "border-box" }}
+                      value={editWidth}
+                      onChange={(e) => setEditWidth(e.target.value)}
+                      placeholder="가로mm"
+                    />
+                    <input
+                      type="number"
+                      style={{ ...smallInputStyle, width: "100%", boxSizing: "border-box" }}
+                      value={editDepth}
+                      onChange={(e) => setEditDepth(e.target.value)}
+                      placeholder="세로mm"
+                    />
+                    <input
+                      type="number"
+                      style={{ ...smallInputStyle, width: "100%", boxSizing: "border-box" }}
+                      value={editHeight}
+                      onChange={(e) => setEditHeight(e.target.value)}
+                      placeholder="높이mm"
+                    />
+                  </div>
+                  <div style={{ marginTop: 6 }}>
+                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>
+                      사진 교체 (선택 — 그대로 두면 지금 사진이 유지돼요)
+                    </div>
+                    <PhotoDropZone onFile={setEditFile} fileName={editFile?.name} onClear={() => setEditFile(null)} />
+                  </div>
                 </div>
               ) : (
                 <>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{p.item_name}</div>
-                  {(p.spec || p.color) && (
+                  {(p.spec || p.color || formatDims(p)) && (
                     <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 8 }}>
-                      {[p.spec, p.color].filter(Boolean).join(" · ")}
+                      {[p.spec, p.color, formatDims(p)].filter(Boolean).join(" · ")}
                     </div>
                   )}
                 </>
