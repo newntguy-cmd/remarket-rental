@@ -1427,8 +1427,10 @@ function aoaSheetToHtmlTable(aoa, title) {
   const headerRows = detectHeaderRowSet(aoa);
   const colWidths = computeColWidthsPx(aoa);
   const colsHtml = colWidths.map((w) => `<col style="width:${w}px">`).join("");
+  // (2026-10-06 수정) border:none으로 뒀더니 실제 엑셀에서 검은 띠처럼 깨져 보인다는 신고가 있어,
+  // 다른 칸들과 똑같이 테두리를 그려서(엑셀이 자체적으로 처리 못 하는 속성에 기대지 않도록) 고쳤다.
   const titleHtml = title
-    ? `<tr><td colspan="${Math.max(1, colWidths.length)}" style="font-weight:bold; font-size:13pt; border:none; padding:4px 2px;">${escapeHtmlCell(title)}</td></tr>`
+    ? `<tr><td colspan="${Math.max(1, colWidths.length)}" style='border:1px solid #999999; background:#E3E3E3; font-weight:bold; font-size:13pt; padding:4px 6px;'>${escapeHtmlCell(title)}</td></tr>`
     : "";
   const rowsHtml = aoa
     .map((row, ri) => {
@@ -6193,15 +6195,21 @@ function autoBoostFromFillRatio(fillRatio) {
 
 // 체크박스로 고른 사진들 중 "이 사진 기준으로 맞추기"를 눌렀을 때, 나머지 사진들에 저장할 zoom_pct 값을
 // 계산하는 순수 함수(Supabase 호출 없이 계산만) — 기준 사진의 "실제 보이는 크기"(manual 배율 × fillRatio
-// 자동보정)를 구한 뒤, 나머지 사진도 똑같은 "실제 보이는 크기"가 나오도록 각자의 fillRatio를 감안해
-// 역산한다. 20~400% 범위로 한도를 둔다.
+// 자동보정 × 가로/세로/높이(mm) 기준 실제 크기 비율)를 구한 뒤, 나머지 사진도 똑같은 "실제 보이는 크기"가
+// 나오도록 각자의 fillRatio와 mm 비율을 감안해 역산한다. 20~400% 범위로 한도를 둔다.
+// (2026-10-06 수정) "2개 클릭 후 오른쪽 걸로 맞춰달라고 해도 사진이 변함 없다" 재신고 — fillRatio만
+// 보정하고 photoSizeFrac(가로/세로/높이mm으로 정해지는 액자 속 기본 크기)은 전혀 감안하지 않고 있었다.
+// 그래서 두 사진의 mm 값이 다르면(=실제 크기가 다른 제품이거나, mm 입력 여부가 서로 다르면) zoom_pct를
+// 아무리 계산해 넣어도 화면에 보이는 크기가 안 맞춰지는 경우가 있었다(두 사진 다 fillRatio가 1(보정 없음)
+// 이고 zoom_pct도 이미 100%였다면 계산 결과도 그대로 100%라서 저장은 됐지만 바뀐 게 전혀 없어 보였다).
 function computeReferenceZoomUpdates(ref, others, fillRatioById) {
   const refManual = ref.zoom_pct || 100;
   const refBoost = autoBoostFromFillRatio(fillRatioById[ref.id]);
-  const refEffective = refManual * refBoost;
+  const refEffective = refManual * refBoost * photoSizeFrac(ref);
   return others.map((p) => {
     const boost = autoBoostFromFillRatio(fillRatioById[p.id]);
-    const manual = Math.max(20, Math.min(400, Math.round(refEffective / boost)));
+    const frac = photoSizeFrac(p);
+    const manual = Math.max(20, Math.min(400, Math.round(refEffective / (boost * frac))));
     return { id: p.id, zoom_pct: manual };
   });
 }
