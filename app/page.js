@@ -14581,23 +14581,30 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     if (!error) setBoards(data || []);
   }
 
+  // (2026-10-07 수정) "입력란도 mm 단위로 가자, 통일하자" 요청 — 새 모형 등록 폼의 전체 가로·세로,
+  // 파인 부분 가로·세로 입력칸도 mm 기준으로 바꿨다. 입력값(mm)을 10으로 나눠 cm로 환산한 뒤에는
+  // DB 저장(width_cm 등)·검증 로직이 예전과 완전히 동일하다(내부적으로는 여전히 cm 기준).
   async function handleAddShape() {
-    const w = Number(newShapeWidth);
-    const d = Number(newShapeDepth);
+    const wMm = Number(newShapeWidth);
+    const dMm = Number(newShapeDepth);
     const isPoly = newShapeType === "l" || newShapeType === "curvedl" || newShapeType === "u";
-    const nw = isPoly ? Number(newShapeNotchWidth) : null;
-    const nd = isPoly ? Number(newShapeNotchDepth) : null;
+    const nwMm = isPoly ? Number(newShapeNotchWidth) : null;
+    const ndMm = isPoly ? Number(newShapeNotchDepth) : null;
+    const w = wMm / 10;
+    const d = dMm / 10;
+    const nw = isPoly ? nwMm / 10 : null;
+    const nd = isPoly ? ndMm / 10 : null;
     if (!newShapeName.trim()) {
       alert("모형 이름을 입력해주세요.");
       return;
     }
-    if (!w || !d) {
-      alert("전체 가로·세로 크기(cm)를 입력해주세요.");
+    if (!wMm || !dMm) {
+      alert("전체 가로·세로 크기(mm)를 입력해주세요.");
       return;
     }
     if (isPoly) {
-      if (!nw || !nd) {
-        alert(newShapeType === "l" || newShapeType === "curvedl" ? "잘려나간 모서리의 가로·세로 크기(cm)를 입력해주세요." : "안쪽 파인 부분의 가로·세로 크기(cm)를 입력해주세요.");
+      if (!nwMm || !ndMm) {
+        alert(newShapeType === "l" || newShapeType === "curvedl" ? "잘려나간 모서리의 가로·세로 크기(mm)를 입력해주세요." : "안쪽 파인 부분의 가로·세로 크기(mm)를 입력해주세요.");
         return;
       }
       if (nw >= w || nd >= d) {
@@ -14849,7 +14856,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
             style={{ ...smallInputStyle, flex: 1, minWidth: 0, boxSizing: "border-box" }}
           />
         ) : (
-          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          // (2026-10-07 수정) "왼쪽 목록에서 제품명이 풀로 안보이는데 마우스 갖다대면 위에 풀명칭
+          // 나오게끔" 요청 — 이름이 길면 ...으로 잘려서 안 보이는 경우가 있어서, 이 글자 위에 마우스를
+          // 올리면(title) 품목명+규격 전체를 풍선 도움말로 보여준다. 바깥 줄(div)에도 title이 있지만
+          // ("끌어서 배치판에 놓으세요"), 브라우저는 마우스가 가장 안쪽 요소의 title을 우선해서 보여주므로
+          // 이 글자 위에서는 풀명칭이, 그 옆 빈 공간에서는 기존 안내문구가 그대로 뜬다(서로 안 겹침).
+          <span
+            title={`${s.name} (${sizeLabel})`}
+            style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
             {s.name} <span style={{ color: C.muted, fontSize: 11 }}>({sizeLabel})</span>
           </span>
         )}
@@ -15806,13 +15821,16 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       const widthCm = Number(shape.width_cm);
       const depthCm = Number(shape.depth_cm);
       // (신규) 모형이 지금 방보다 가로나 세로가 더 크면 어느 벽에 놓든 왼쪽·위쪽 구석에 고정된 채
-      // 나머지가 방 밖으로 넘어가 보일 수밖에 없다("치수를 mm로 잘못 등록해서 실제보다 10배 큰"
-      // 경우가 대표적 — "가로(cm)"라고 적힌 칸에 실측 도면의 mm 숫자를 그대로 입력하면 이렇게 된다).
-      // 겉보기엔 "벽에 붙였는데도 자꾸 튀어나간다"는 버그처럼 보이지만 실제로는 모형 크기 자체가
-      // 잘못 등록된 것이라, 놓기 전에 바로 알려줘서 헷갈리지 않게 한다.
+      // 나머지가 방 밖으로 넘어가 보일 수밖에 없다. 겉보기엔 "벽에 붙였는데도 자꾸 튀어나간다"는
+      // 버그처럼 보이지만 실제로는 모형 크기 자체가 잘못 등록된 것이라, 놓기 전에 바로 알려줘서
+      // 헷갈리지 않게 한다.
+      // (2026-10-07 수정) "입력란도 mm 단위로" 요청으로 모형 등록 폼의 입력 단위가 cm→mm로 바뀌면서,
+      // 예전엔 흔했던 "mm 값을 cm 칸에 그대로 입력해 10배 커짐" 실수는 더 이상 거의 없을 것으로
+      // 보이지만, 알림 문구 자체는 등록된 실제 크기(내부 저장 단위인 cm)를 그대로 보여주는 진단
+      // 메시지라 안내 문장만 그 짐작(mm 입력 실수) 없이 사실만 전달하도록 다듬었다.
       if (widthCm > spaceWidthM * 100 || depthCm > spaceDepthM * 100) {
         alert(
-          `"${shape.name}"의 등록된 크기(가로 ${widthCm}cm × 세로 ${depthCm}cm)가 지금 방(가로 ${spaceWidthM * 100}cm × 세로 ${spaceDepthM * 100}cm)보다 큽니다.\n\n이대로 놓으면 어느 벽에 붙여도 한쪽 구석에 고정된 채 나머지 부분이 방 밖으로 튀어나와 보여요. 모형 등록 시 실측 도면의 mm 값을 cm 칸에 그대로 입력한 건 아닌지(예: 1400mm → 140cm) 확인해보시거나, 방 크기를 늘려주세요.`
+          `"${shape.name}"의 등록된 크기(가로 ${widthCm}cm × 세로 ${depthCm}cm)가 지금 방(가로 ${spaceWidthM * 100}cm × 세로 ${spaceDepthM * 100}cm)보다 큽니다.\n\n이대로 놓으면 어느 벽에 붙여도 한쪽 구석에 고정된 채 나머지 부분이 방 밖으로 튀어나와 보여요. 모형 목록에서 이 모형의 등록된 크기가 맞는지 확인해보시거나, 방 크기를 늘려주세요.`
         );
         return;
       }
@@ -16212,13 +16230,17 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 입력하는 도중에 같은 모형의 다른 값(예: 드래그로 살짝 움직인 좌표) 때문에 타이핑 중인 값이
   // 지워지지 않게.
   const selectedSingleItemId = selectedSingleItem?.id ?? null;
+  // (2026-10-07 수정) "입력란도 mm 단위로 가자, 통일하자" 요청 — 가로·세로·X·Y 입력칸을 cm에서 mm로
+  // 바꿨다. 모형 내부 상태(widthCm/depthCm/xCm/yCm)는 여전히 cm 그대로 두고, 여기서 화면에 보여줄
+  // 때만 10을 곱해 mm로 바꾼다(실측값이 보통 mm라 그대로 입력할 수 있게 하기 위함 — 줄자 축척 맞추기
+  // 입력칸을 mm로 바꾼 것과 같은 이유).
   useEffect(() => {
     if (selectedSingleItem) {
-      setManualWidthInput(String(selectedSingleItem.widthCm));
-      setManualDepthInput(String(selectedSingleItem.depthCm));
+      setManualWidthInput(String(selectedSingleItem.widthCm * 10));
+      setManualDepthInput(String(selectedSingleItem.depthCm * 10));
       setManualNameInput(selectedSingleItem.name || "");
-      setManualXInput(String(round2(selectedSingleItem.xCm)));
-      setManualYInput(String(round2(selectedSingleItem.yCm)));
+      setManualXInput(String(round2(selectedSingleItem.xCm * 10)));
+      setManualYInput(String(round2(selectedSingleItem.yCm * 10)));
       const curRotation = selectedSingleItem.rotation != null ? selectedSingleItem.rotation : selectedSingleItem.rotated ? 90 : 0;
       setManualAngleInput(String(Math.round(curRotation)));
     }
@@ -16385,8 +16407,12 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     // 얇은(예: 4.5cm, 실제 "45T" 파티션 두께) 값을 입력해도 그대로 반영되지 않고 10으로 바뀌어버렸다.
     // 직접 입력은 "정확히 이 숫자로 맞추기"가 목적이므로, 0이나 음수처럼 아예 말이 안 되는 값만
     // 걸러내고(최소 0.1cm) 나머지는 입력한 값 그대로 쓴다.
-    let newWidthCm = Math.max(0.1, Number(manualWidthInput) || it.widthCm);
-    let newDepthCm = Math.max(0.1, Number(manualDepthInput) || it.depthCm);
+    // (2026-10-07 수정) "입력란도 mm 단위로" 요청 — 입력칸 자체는 이제 mm 기준이라, 10으로 나눠 cm로
+    // 환산한 뒤에는 위 로직과 완전히 동일하다(내부 상태는 여전히 cm).
+    const widthMm = Number(manualWidthInput);
+    const depthMm = Number(manualDepthInput);
+    let newWidthCm = Math.max(0.1, widthMm ? widthMm / 10 : it.widthCm);
+    let newDepthCm = Math.max(0.1, depthMm ? depthMm / 10 : it.depthCm);
     // 화면에 보이는(회전 반영) 가로·세로가 배치판 오른쪽·아래쪽 벽을 넘지 않도록 제한한다(손잡이로
     // 끌어서 크기를 조절할 때와 똑같은 규칙 — 남은 공간이 좁으면 그 실제 값까지만 허용).
     const maxOnScreenW = Math.max(0, spaceWidthM * 100 - it.xCm);
@@ -16400,8 +16426,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     }
     pushHistory();
     setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, widthCm: newWidthCm, depthCm: newDepthCm } : p)));
-    setManualWidthInput(String(newWidthCm));
-    setManualDepthInput(String(newDepthCm));
+    setManualWidthInput(String(round2(newWidthCm * 10)));
+    setManualDepthInput(String(round2(newDepthCm * 10)));
   }
 
   // "제품 클릭해서 좌표값 넣어주는 기능 — 제일 정확하지" 요청. 끌어서 옮기는 대신 왼쪽위 모서리
@@ -16409,6 +16435,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // 위 가로·세로 입력처럼 "입력값이 없으면(falsy) 원래 값으로" 방식을 쓰지 않고, 숫자로 읽히면(0
   // 포함) 그 값을, 못 읽으면만 원래 좌표를 쓴다. 화면에 보이는(회전 반영) 크기 기준으로 배치판 밖을
   // 벗어나지 않게 제한하는 것은 마우스로 끌 때·가로세로 직접입력 때와 같은 규칙이다.
+  // (2026-10-07 수정) "입력란도 mm 단위로" 요청 — X·Y 입력칸도 mm 기준으로 바꿨다. 입력값을 10으로
+  // 나눠 cm로 환산한 뒤에는 아래 로직(0도 유효 좌표로 인정 등)이 예전과 완전히 동일하다.
   function handleApplyManualPosition() {
     if (!selectedSingleItem) return;
     const it = selectedSingleItem;
@@ -16416,16 +16444,16 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     const aabb = rotatedAabbSize(it.widthCm, it.depthCm, rotation);
     const maxX = Math.max(0, spaceWidthM * 100 - aabb.w);
     const maxY = Math.max(0, spaceDepthM * 100 - aabb.h);
-    const parsedX = Number(manualXInput);
-    const parsedY = Number(manualYInput);
-    const rawX = Number.isFinite(parsedX) ? parsedX : it.xCm;
-    const rawY = Number.isFinite(parsedY) ? parsedY : it.yCm;
+    const parsedXMm = Number(manualXInput);
+    const parsedYMm = Number(manualYInput);
+    const rawX = Number.isFinite(parsedXMm) ? parsedXMm / 10 : it.xCm;
+    const rawY = Number.isFinite(parsedYMm) ? parsedYMm / 10 : it.yCm;
     const newXCm = Math.min(Math.max(0, rawX), maxX);
     const newYCm = Math.min(Math.max(0, rawY), maxY);
     pushHistory();
     setPlacedItems((prev) => prev.map((p) => (p.id === it.id ? { ...p, xCm: newXCm, yCm: newYCm } : p)));
-    setManualXInput(String(round2(newXCm)));
-    setManualYInput(String(round2(newYCm)));
+    setManualXInput(String(round2(newXCm * 10)));
+    setManualYInput(String(round2(newYCm * 10)));
   }
 
   // "제품 선택하면 각도 넣어줘 — 지금 회전기능은 그대로 두고 각도 넣으면 조정되게" 요청. 90도 버튼이나
@@ -17184,8 +17212,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     onKeyDown={(e) => {
                       if (e.key === "Enter") handleApplyManualSize();
                     }}
-                    placeholder="가로(cm)"
-                    title="가로(cm)"
+                    placeholder="가로(mm)"
+                    title="가로(mm)"
                     style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
                   />
                   <span style={{ fontSize: 12, color: C.muted }}>×</span>
@@ -17197,14 +17225,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     onKeyDown={(e) => {
                       if (e.key === "Enter") handleApplyManualSize();
                     }}
-                    placeholder="세로(cm)"
-                    title="세로(cm)"
+                    placeholder="세로(mm)"
+                    title="세로(mm)"
                     style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
                   />
                   <button onClick={handleApplyManualSize} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>적용</button>
                   <span style={{ fontSize: 12, color: C.lineSoft }}>|</span>
                   {/* "제품 클릭해서 좌표값 넣어주는 기능 — 제일 정확하지" 요청 — 끌지 않고도 왼쪽위
-                      모서리 좌표(x, y, cm)를 숫자로 직접 입력해서 정확한 자리에 둘 수 있다. */}
+                      모서리 좌표(x, y, mm)를 숫자로 직접 입력해서 정확한 자리에 둘 수 있다.
+                      (2026-10-07: "입력란도 mm 단위로" 요청으로 cm→mm.) */}
                   <input
                     type="number"
                     step="0.1"
@@ -17213,8 +17242,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     onKeyDown={(e) => {
                       if (e.key === "Enter") handleApplyManualPosition();
                     }}
-                    placeholder="X(cm)"
-                    title="왼쪽위 모서리 X좌표(cm)"
+                    placeholder="X(mm)"
+                    title="왼쪽위 모서리 X좌표(mm)"
                     style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
                   />
                   <input
@@ -17225,8 +17254,8 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     onKeyDown={(e) => {
                       if (e.key === "Enter") handleApplyManualPosition();
                     }}
-                    placeholder="Y(cm)"
-                    title="왼쪽위 모서리 Y좌표(cm)"
+                    placeholder="Y(mm)"
+                    title="왼쪽위 모서리 Y좌표(mm)"
                     style={{ ...smallInputStyle, width: 68, boxSizing: "border-box" }}
                   />
                   <button onClick={handleApplyManualPosition} style={{ ...miniBtnStyle, whiteSpace: "nowrap" }}>이동</button>
@@ -17521,13 +17550,15 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
               ))}
             </div>
             <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-              {/* "소수점까지 인식되게 해줘" 요청 — 새로 등록하는 모형의 가로·세로·파인 크기도 0.1cm
-                  단위 소수점을 자연스럽게 입력할 수 있게 step을 맞췄다(예: 파티션 두께 4.5cm). */}
+              {/* "소수점까지 인식되게 해줘" 요청 — 새로 등록하는 모형의 가로·세로·파인 크기도 0.1 단위
+                  소수점을 자연스럽게 입력할 수 있게 step을 맞췄다. (2026-10-07 수정) "입력란도 mm
+                  단위로 가자, 통일하자" 요청으로 cm→mm — 실측값이 보통 mm라 그대로 입력할 수 있다
+                  (예: 파티션 두께 45mm). */}
               <input
                 type="number"
                 step="0.1"
                 style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
-                placeholder="전체 가로(cm)"
+                placeholder="전체 가로(mm)"
                 value={newShapeWidth}
                 onChange={(e) => setNewShapeWidth(e.target.value)}
               />
@@ -17535,7 +17566,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 type="number"
                 step="0.1"
                 style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
-                placeholder="전체 세로(cm)"
+                placeholder="전체 세로(mm)"
                 value={newShapeDepth}
                 onChange={(e) => setNewShapeDepth(e.target.value)}
               />
@@ -17543,14 +17574,14 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
             {(newShapeType === "l" || newShapeType === "curvedl" || newShapeType === "u") && (
               <div style={{ marginBottom: 6 }}>
                 <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>
-                  {newShapeType === "l" || newShapeType === "curvedl" ? "잘려나간 모서리 크기(cm)" : "안쪽 파인 부분 크기(cm)"}
+                  {newShapeType === "l" || newShapeType === "curvedl" ? "잘려나간 모서리 크기(mm)" : "안쪽 파인 부분 크기(mm)"}
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
                   <input
                     type="number"
                     step="0.1"
                     style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
-                    placeholder="가로(cm)"
+                    placeholder="가로(mm)"
                     value={newShapeNotchWidth}
                     onChange={(e) => setNewShapeNotchWidth(e.target.value)}
                   />
@@ -17558,7 +17589,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                     type="number"
                     step="0.1"
                     style={{ ...smallInputStyle, width: "50%", boxSizing: "border-box" }}
-                    placeholder="세로(cm)"
+                    placeholder="세로(mm)"
                     value={newShapeNotchDepth}
                     onChange={(e) => setNewShapeNotchDepth(e.target.value)}
                   />
