@@ -5667,9 +5667,37 @@ function QuotePhotoOutputView({ state, onClose }) {
   const [loading, setLoading] = useState(true);
   const [urlById, setUrlById] = useState({});
 
+  // (2026-10-07 추가) "동일품목이 나왔다면 하단에 동일품목은 사진 기능에서 걸러줘" 요청 — 같은
+  // 품목명이 여러 줄에 걸쳐 있으면(예: 이동서랍이 두 번 이상), 사진은 맨 처음 나온 한 번만 보여주고
+  // 그 아래 중복은 뺀다. 원본 견적서 품목 목록 자체는 그대로 두고, 이 출력물 화면에 보여줄지만 고른다.
+  const dedupedItems = useMemo(() => {
+    const seen = new Set();
+    const result = [];
+    state.items.forEach((it, idx) => {
+      const key = normalizeForPhotoMatch(it.item);
+      if (key) {
+        if (seen.has(key)) return;
+        seen.add(key);
+      }
+      result.push({ idx, it });
+    });
+    return result;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.items]);
+
+  // (2026-10-07 추가) "출력물에서 체크박스로 삭제, 배치 자유롭게" 요청 — 이 화면에서만 카드 순서를
+  // 끌어다 바꾸거나(order), 필요없는 카드를 체크해서 뺄 수 있게(removedIdx) 했다. idx는 원본
+  // state.items에서의 자리라서, 뭘 끌거나 뺐는지는 그 idx로 기억한다.
+  const [order, setOrder] = useState(() => dedupedItems.map((r) => r.idx));
+  const [removedIdx, setRemovedIdx] = useState(() => new Set());
+  const [selectedIdx, setSelectedIdx] = useState(() => new Set());
+  const [dragIdx, setDragIdx] = useState(null);
+
   useEffect(() => {
     let revoked = false;
     const urls = [];
+    // (2026-10-07 수정) "제품사진 라이브러리 켜면 좀 버벅거리네" 신고로 그쪽 화면을 고친 것과 같은
+    // 이유 — 여기서도 사진을 한 장씩 순서대로 받아오던 걸 한꺼번에(동시에) 받아오도록 고쳤다.
     async function load() {
       setLoading(true);
       const { data, error } = await supabase.from("item_photos").select("*").order("item_name", { ascending: true });
@@ -5682,19 +5710,26 @@ function QuotePhotoOutputView({ state, onClose }) {
       }
       const list = data || [];
       setPhotos(list);
+      const results = await Promise.all(
+        list
+          .filter((p) => p.image_path)
+          .map(async (p) => {
+            const { data: fileData, error: dlError } = await supabase.storage.from("item-photos").download(p.image_path);
+            if (!dlError && fileData) return { id: p.id, url: URL.createObjectURL(fileData) };
+            return null;
+          })
+      );
       const map = {};
-      for (const p of list) {
-        if (!p.image_path) continue;
-        const { data: fileData, error: dlError } = await supabase.storage.from("item-photos").download(p.image_path);
-        if (!dlError && fileData) {
-          const url = URL.createObjectURL(fileData);
-          urls.push(url);
-          map[p.id] = url;
-        }
+      for (const r of results) {
+        if (!r) continue;
+        urls.push(r.url);
+        map[r.id] = r.url;
       }
       if (!revoked) {
         setUrlById(map);
         setLoading(false);
+      } else {
+        urls.forEach((u) => URL.revokeObjectURL(u));
       }
     }
     load();
@@ -5715,8 +5750,52 @@ function QuotePhotoOutputView({ state, onClose }) {
     setTimeout(restoreTitle, 2000);
   }
 
-  const rowsWithMatch = state.items.map((it) => ({ it, photo: matchItemPhoto(it.item, it.spec, photos) }));
-  const matchedCount = rowsWithMatch.filter((r) => r.photo).length;
+  function toggleSelectCard(idx) {
+    setSelectedIdx((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  }
+  function clearCardSelection() {
+    setSelectedIdx(new Set());
+  }
+  function handleDeleteSelectedCards() {
+    if (selectedIdx.size === 0) return;
+    setRemovedIdx((prev) => new Set([...prev, ...selectedIdx]));
+    setSelectedIdx(new Set());
+  }
+
+  // "배치 자유롭게" 요청 — 카드를 끌어다 다른 카드 위에 놓으면 그 자리로 순서가 바뀐다(제품사진
+  // 라이브러리의 드래그 정렬과 같은 방식, 저장은 안 하고 이 화면 안에서만 유지됨).
+  function handleCardDragStart(idx) {
+    setDragIdx(idx);
+  }
+  function handleCardDragOver(e, overIdx) {
+    e.preventDefault();
+    if (dragIdx == null || dragIdx === overIdx) return;
+    setOrder((prev) => {
+      const fromPos = prev.indexOf(dragIdx);
+      const toPos = prev.indexOf(overIdx);
+      if (fromPos === -1 || toPos === -1) return prev;
+      const list = [...prev];
+      const [moved] = list.splice(fromPos, 1);
+      list.splice(toPos, 0, moved);
+      return list;
+    });
+  }
+  function handleCardDragEnd() {
+    setDragIdx(null);
+  }
+
+  const visibleRows = order
+    .filter((idx) => !removedIdx.has(idx))
+    .map((idx) => {
+      const it = state.items[idx];
+      return { idx, it, photo: matchItemPhoto(it.item, it.spec, photos) };
+    });
+  const matchedCount = visibleRows.filter((r) => r.photo).length;
 
   return (
     <div
@@ -5735,7 +5814,7 @@ function QuotePhotoOutputView({ state, onClose }) {
       <div style={{ background: "#fff", width: "min(920px, 100%)", maxHeight: "92vh", overflow: "auto", border: `1px solid ${C.line}`, padding: 24 }}>
         <div className="qpo-no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
           <div style={{ fontFamily: serif, fontSize: 16 }}>
-            사무집기 이미지 출력물{loading ? " (사진 불러오는 중…)" : ` — 사진 매칭 ${matchedCount}/${state.items.length}건`}
+            사무집기 이미지 출력물{loading ? " (사진 불러오는 중…)" : ` — 사진 매칭 ${matchedCount}/${visibleRows.length}건`}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button type="button" onClick={handlePrintPhotoOutput} disabled={loading} style={primaryBtnStyle2}>
@@ -5746,6 +5825,22 @@ function QuotePhotoOutputView({ state, onClose }) {
             </button>
           </div>
         </div>
+
+        {/* (2026-10-07 추가) "체크박스 후 삭제기능" 요청 — 카드를 1장 이상 선택했을 때만 나타난다. */}
+        {selectedIdx.size > 0 && (
+          <div
+            className="qpo-no-print"
+            style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, padding: "8px 12px", background: C.purpleBg }}
+          >
+            <span style={{ fontSize: 12.5, color: C.ink }}>{selectedIdx.size}장 선택됨</span>
+            <button type="button" onClick={handleDeleteSelectedCards} style={ghostBtnStyle}>
+              선택 삭제
+            </button>
+            <button type="button" onClick={clearCardSelection} style={ghostBtnStyle}>
+              선택 해제
+            </button>
+          </div>
+        )}
 
         {/* (2026-10-04) "출력물에서 '사무집기 이미지 출력물'이란 단어는 다 빼줘" 요청으로, 인쇄 영역
             맨 위에 있던 큰 제목을 뺐다. 거래처·현장·전표번호 줄은 어떤 전표의 출력물인지 구분하는 데
@@ -5760,9 +5855,31 @@ function QuotePhotoOutputView({ state, onClose }) {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
-            {rowsWithMatch.map(({ it, photo }, idx) => (
-              <div key={idx} style={{ border: `1px solid ${C.lineSoft}`, padding: 10, breakInside: "avoid" }}>
-                <div style={{ width: "100%", height: 150, background: "#F5F5F5", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 8, overflow: "hidden" }}>
+            {visibleRows.map(({ idx, it, photo }) => (
+              <div
+                key={idx}
+                draggable
+                onDragStart={() => handleCardDragStart(idx)}
+                onDragOver={(e) => handleCardDragOver(e, idx)}
+                onDrop={(e) => e.preventDefault()}
+                onDragEnd={handleCardDragEnd}
+                title="끌어다 놓으면 순서를 바꿀 수 있어요"
+                style={{ border: `1px solid ${C.lineSoft}`, padding: 10, breakInside: "avoid", cursor: "grab", opacity: dragIdx === idx ? 0.4 : 1 }}
+              >
+                <div style={{ width: "100%", height: 150, background: "#F5F5F5", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 8, overflow: "hidden", position: "relative" }}>
+                  {/* (2026-10-07 추가) "체크박스 후 삭제기능" 요청 — 인쇄물에는 안 보이도록 qpo-no-print */}
+                  <input
+                    type="checkbox"
+                    className="qpo-no-print"
+                    checked={selectedIdx.has(idx)}
+                    onChange={() => toggleSelectCard(idx)}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                    draggable={false}
+                    onDragStart={(e) => e.preventDefault()}
+                    title="체크해서 선택 삭제"
+                    style={{ position: "absolute", top: 6, left: 6, zIndex: 2, width: 16, height: 16, cursor: "pointer" }}
+                  />
                   {photo && urlById[photo.id] ? (
                     <img src={urlById[photo.id]} alt={it.item || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
                   ) : (
@@ -6106,18 +6223,27 @@ function PhotoLibraryTab() {
   useEffect(() => {
     let revoked = false;
     const urls = [];
+    // (2026-10-07 수정) "제품사진 라이브러리 켜면 좀 버벅거리네" 신고 — 사진을 한 장씩 순서대로(하나
+    // 끝나야 다음 걸 시작) 받아오던 걸, 전부 한꺼번에(동시에) 받아오도록 고쳤다. 등록된 사진이
+    // 많을수록 차이가 크게 느껴진다(화면 모습·기능은 그대로, 불러오는 속도만 빨라짐).
     async function loadThumbs() {
+      const results = await Promise.all(
+        photos
+          .filter((p) => p.image_path)
+          .map(async (p) => {
+            const { data, error } = await supabase.storage.from("item-photos").download(p.image_path);
+            if (!error && data) return { id: p.id, url: URL.createObjectURL(data) };
+            return null;
+          })
+      );
       const map = {};
-      for (const p of photos) {
-        if (!p.image_path) continue;
-        const { data, error } = await supabase.storage.from("item-photos").download(p.image_path);
-        if (!error && data) {
-          const url = URL.createObjectURL(data);
-          urls.push(url);
-          map[p.id] = url;
-        }
+      for (const r of results) {
+        if (!r) continue;
+        urls.push(r.url);
+        map[r.id] = r.url;
       }
       if (!revoked) setUrlById(map);
+      else urls.forEach((u) => URL.revokeObjectURL(u));
     }
     if (photos.length > 0) loadThumbs();
     return () => {
@@ -6134,12 +6260,20 @@ function PhotoLibraryTab() {
     const already = new Set(Object.keys(fillRatioById));
     const pending = Object.keys(urlById).filter((id) => !already.has(id));
     if (pending.length === 0) return;
+    // (2026-10-07 수정) 사진마다 가구가 차지하는 비율을 계산하는 것도 한 장씩 순서대로 처리하던 걸
+    // 한꺼번에(동시에) 처리하도록 고쳤다(위 사진 불러오기 병렬화와 같은 이유 — 켜면 버벅거리던 문제).
     (async () => {
-      for (const id of pending) {
-        const ratio = await detectContentFillRatio(urlById[id]);
-        if (cancelled) return;
-        setFillRatioById((prev) => (prev[id] !== undefined ? prev : { ...prev, [id]: ratio }));
-      }
+      const results = await Promise.all(
+        pending.map(async (id) => ({ id, ratio: await detectContentFillRatio(urlById[id]) }))
+      );
+      if (cancelled) return;
+      setFillRatioById((prev) => {
+        const next = { ...prev };
+        for (const { id, ratio } of results) {
+          if (next[id] === undefined) next[id] = ratio;
+        }
+        return next;
+      });
     })();
     return () => {
       cancelled = true;
