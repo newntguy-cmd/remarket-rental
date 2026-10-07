@@ -5660,6 +5660,33 @@ function matchItemPhoto(itemName, spec, photos) {
   return bestScore >= 0.5 ? best : null;
 }
 
+// (2026-10-07 추가) "사무집기 출력물에서 실제 사이즈를 반영해서 비례하게 보여줘(예: 책상 1600*800,
+// 이동서랍 800*400)" 요청 — 제품사진 라이브러리에 등록해둔 실제 가로·세로(width_mm/depth_mm)로
+// "바닥 면적"을 계산해서, 지금 출력물에 보이는 제품 중 가장 큰 제품을 기준(100%)으로 다른 제품들이
+// 상대적으로 얼마나 작게 보일지 비율을 구한다. 면적 비율이 아니라 그 제곱근(=길이 비율)을 쓰는
+// 이유는, 그래야 실제로 눈에 보이는 크기 차이가 면적 차이와 맞아떨어지기 때문이다(가로·세로가 둘 다
+// 2배면 면적은 4배지만, 눈에 보이는 크기는 2배가 되어야 자연스럽다). 가로·세로를 둘 다 안 넣은
+// 제품은(또는 이 출력물 안의 모든 제품이 치수가 없으면) 예전처럼 비교 기준 없이 액자를 꽉 채운다 —
+// 하나라도 치수를 안 넣었으면 그 제품만큼은 비교 자체가 불가능하므로.
+function computeOutputSizeFracByIdx(rows) {
+  const SIZE_MIN_FRAC = 0.35; // 아무리 작은 제품이어도 35%보다 작게는 안 보이게(너무 작아 안 보이는 것 방지)
+  const footprintByIdx = {};
+  let maxFootprint = 0;
+  for (const { idx, photo } of rows) {
+    const w = Number(photo?.width_mm);
+    const d = Number(photo?.depth_mm);
+    const footprint = Number.isFinite(w) && w > 0 && Number.isFinite(d) && d > 0 ? w * d : null;
+    footprintByIdx[idx] = footprint;
+    if (footprint && footprint > maxFootprint) maxFootprint = footprint;
+  }
+  const sizeFracByIdx = {};
+  for (const { idx } of rows) {
+    const footprint = footprintByIdx[idx];
+    sizeFracByIdx[idx] = footprint && maxFootprint > 0 ? Math.max(SIZE_MIN_FRAC, Math.sqrt(footprint / maxFootprint)) : 1;
+  }
+  return sizeFracByIdx;
+}
+
 // 견적서 품목 목록에 등록된 사진을 자동으로 매칭해서 인쇄/PDF 저장할 수 있는 출력물로 보여주는 화면.
 // ImportPreview의 "사진 출력물 보기" 버튼으로 열린다.
 function QuotePhotoOutputView({ state, onClose }) {
@@ -5797,6 +5824,9 @@ function QuotePhotoOutputView({ state, onClose }) {
     });
   const matchedCount = visibleRows.filter((r) => r.photo).length;
 
+  // (2026-10-07 추가) "책상 1600*800, 이동서랍 800*400이면 그거에 비례해서 비쥬얼이 보여지게" 요청
+  const sizeFracByIdx = computeOutputSizeFracByIdx(visibleRows);
+
   return (
     <div
       className="qpo-overlay"
@@ -5881,7 +5911,11 @@ function QuotePhotoOutputView({ state, onClose }) {
                     style={{ position: "absolute", top: 6, left: 6, zIndex: 2, width: 16, height: 16, cursor: "pointer" }}
                   />
                   {photo && urlById[photo.id] ? (
-                    <img src={urlById[photo.id]} alt={it.item || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                    <img
+                      src={urlById[photo.id]}
+                      alt={it.item || ""}
+                      style={{ maxWidth: `${Math.round((sizeFracByIdx[idx] ?? 1) * 100)}%`, maxHeight: `${Math.round((sizeFracByIdx[idx] ?? 1) * 100)}%`, objectFit: "contain" }}
+                    />
                   ) : (
                     <span style={{ fontSize: 11.5, color: C.muted }}>사진 없음</span>
                   )}
