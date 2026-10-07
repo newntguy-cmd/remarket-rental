@@ -165,21 +165,26 @@ function LoginScreen() {
   );
 }
 
-// "줄자 좀 섹시하게 편하게" 요청: 줄자 선 양쪽 끝에 도면(CAD)에서 흔히 보는 치수선처럼 짧은 수직
-// 눈금(tick)을 그려서 단순한 점보다 "정확히 여기부터 여기까지"라는 느낌이 나게 한다. 줄자 선은 항상
-// 완전히 가로 또는 완전히 세로(axisConstrainedSecondPoint)라서, 눈금은 그 선과 직각 방향으로만
-// 그리면 된다 — 가로선이면 세로 눈금을, 세로선이면 가로 눈금을 양 끝에 하나씩.
+// "줄자 좀 섹시하게 편하게" 요청: 줄자 선 양쪽 끝에 도면(CAD)에서 흔히 보는 치수선처럼 짧은 눈금
+// (tick)을 그려서 단순한 점보다 "정확히 여기부터 여기까지"라는 느낌이 나게 한다.
+// (2026-10-07 수정) "줄자 방향 자유자재로 부탁해 직각 아니어도 됨" 요청으로 줄자 선이 더 이상 항상
+// 완전한 가로·세로가 아니라 어떤 각도로도 그려질 수 있게 되면서, 눈금도 "가로면 세로 눈금, 세로면
+// 가로 눈금"이라는 단순 분기 대신 그 선분과 실제로 직각인 방향을 벡터로 계산해서 양 끝에 그린다
+// (선이 완전히 가로·완전히 세로일 때도 결과는 예전과 똑같다 — 특수 케이스가 아니라 일반식이 그
+// 경우를 포함한다). 두 점이 겹치는 극히 드문 경우(길이 0)만 과거처럼 세로 눈금으로 대체한다.
 function perpendicularTicks(x1, y1, x2, y2, tickLen) {
-  const horizontal = Math.abs(y1 - y2) < 0.5;
-  if (horizontal) {
-    return {
-      a: { x1, y1: y1 - tickLen / 2, x2: x1, y2: y1 + tickLen / 2 },
-      b: { x1: x2, y1: y2 - tickLen / 2, x2: x2, y2: y2 + tickLen / 2 },
-    };
-  }
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  // 선분과 직각인 단위벡터: (dx, dy)를 90도 돌리면 (-dy, dx). 길이가 0이면(두 점이 겹치면) 나눌 수
+  // 없으니, 예전 기본값과 같은 "세로 눈금"(단위벡터 (0,1))으로 대체한다.
+  const ux = len < 0.0001 ? 0 : -dy / len;
+  const uy = len < 0.0001 ? 1 : dx / len;
+  const hx = (ux * tickLen) / 2;
+  const hy = (uy * tickLen) / 2;
   return {
-    a: { x1: x1 - tickLen / 2, y1, x2: x1 + tickLen / 2, y2: y1 },
-    b: { x1: x2 - tickLen / 2, y1: y2, x2: x2 + tickLen / 2, y2: y2 },
+    a: { x1: x1 - hx, y1: y1 - hy, x2: x1 + hx, y2: y1 + hy },
+    b: { x1: x2 - hx, y1: y2 - hy, x2: x2 + hx, y2: y2 + hy },
   };
 }
 
@@ -1367,17 +1372,21 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     img.src = url;
   }
 
-  // 축척 맞추기 모달에서 두 지점을 찍은 뒤 실제 거리(cm)를 입력하고 "적용"을 누르면 여기로 온다.
+  // 축척 맞추기 모달에서 두 지점을 찍은 뒤 실제 거리(mm)를 입력하고 "적용"을 누르면 여기로 온다.
+  // (2026-10-07 수정) "이미지 임포트 때 실거리 입력할때 cm 기준 말고 mm 기준으로" 요청 — 문 폭·벽
+  // 모서리 사이처럼 도면에서 실측해 넣는 값이 보통 mm 단위라 그대로 쓸 수 있게, 입력칸 자체를 mm
+  // 기준으로 바꿨다. 내부 계산(cmPerNaturalPx 등)은 cm 기준 그대로 두고, 입력받은 mm 값만 10으로
+  // 나눠 cm로 바꿔서 넘긴다(나머지 계산 로직은 바뀌지 않음).
   // 화면에 보이는(줄어든) 미리보기 위에서 찍은 두 점 사이 거리를, previewScale로 나눠서 원본 사진의
-  // "진짜" 픽셀 거리로 되돌린 다음, 입력받은 실제 거리(cm)와 비교해 "원본 사진 1px = 몇 cm"인지를
-  // 구한다. 그 값에 원본 사진의 가로·세로 픽셀 수를 곱하면 도면 전체의 실제 가로·세로(cm)가 나오고,
-  // 그걸 그대로 공간 크기(spaceWidthM/spaceDepthM)에 맞춰서 이후 배치판 위에 사진이 실제 크기로
-  // 깔리게 한다.
+  // "진짜" 픽셀 거리로 되돌린 다음, 입력받은 실제 거리(cm로 환산한 값)와 비교해 "원본 사진 1px = 몇
+  // cm"인지를 구한다. 그 값에 원본 사진의 가로·세로 픽셀 수를 곱하면 도면 전체의 실제 가로·세로(cm)가
+  // 나오고, 그걸 그대로 공간 크기(spaceWidthM/spaceDepthM)에 맞춰서 이후 배치판 위에 사진이 실제
+  // 크기로 깔리게 한다.
   async function handleApplyCalibration() {
     if (!calibrating || calibrating.points.length !== 2) return;
-    const distCm = Number(calibDistanceInput);
-    if (!distCm || distCm <= 0) {
-      alert("두 지점 사이의 실제 거리(cm)를 입력해주세요.");
+    const distMm = Number(calibDistanceInput);
+    if (!distMm || distMm <= 0) {
+      alert("두 지점 사이의 실제 거리(mm)를 입력해주세요.");
       return;
     }
     const [p1, p2] = calibrating.points;
@@ -1387,6 +1396,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
       return;
     }
     const naturalPxDist = displayedPxDist / calibrating.previewScale;
+    const distCm = distMm / 10; // mm로 입력받은 실제 거리를 cm로 환산(이후 계산은 전부 cm 기준 그대로).
     const cmPerNaturalPx = distCm / naturalPxDist;
     const imageRealWidthCm = calibrating.naturalW * cmPerNaturalPx;
     const imageRealHeightCm = calibrating.naturalH * cmPerNaturalPx;
@@ -2959,23 +2969,17 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
     return best;
   }
 
-  // "줄자는 처음 찍었던 점에서 동서남북(가로·세로) 직선으로만 움직이게" 요청대로, 두 번째 점은 첫
-  // 점 기준으로 대각선이 되지 않게 보정한다 — 첫 점에서 가로로 더 많이 움직였으면 세로 좌표를 첫
-  // 점과 똑같이 맞추고(완전히 가로선), 세로로 더 많이 움직였으면 가로 좌표를 첫 점과 똑같이 맞춘다
-  // (완전히 세로선). "줄자 좀 섹시하게 편하게" 요청으로 이 계산을 별도 함수로 빼서, 실제로 찍히는
-  // 점(addRulerPoint)과 찍기 전에 미리 보여주는 점선 미리보기(rulerPreviewPoint)가 항상 똑같은
-  // 자리를 가리키게 한다(미리보기랑 실제로 찍히는 자리가 다르면 더 헷갈리므로).
-  function axisConstrainedSecondPoint(first, xCm, yCm) {
-    const dx = Math.abs(xCm - first.xCm);
-    const dy = Math.abs(yCm - first.yCm);
-    return dx >= dy ? { xCm, yCm: first.yCm } : { xCm: first.xCm, yCm };
-  }
+  // (2026-10-07 수정) "줄자 방향 자유자재로 부탁해 직각 아니어도 됨" 요청 — 예전엔 "줄자는 처음
+  // 찍었던 점에서 동서남북(가로·세로) 직선으로만 움직이게" 요청에 따라 두 번째 점을 항상 완전한
+  // 가로선·세로선으로 보정했는데(axisConstrainedSecondPoint), 도면 위의 비스듬한 벽·대각선 거리를
+  // 잴 수 없어 불편하다는 신고로 그 보정을 없앴다 — 이제 두 번째 점은 클릭(또는 끝점 스냅)한 자리를
+  // 그대로 쓰므로 어떤 각도로도 잴 수 있다. 끝점 스냅(nearestSnapPoint) 기능 자체는 그대로 남아있다.
   // 줄자 점을 하나 추가한다. 세 번째 클릭부터는(이미 두 점이 있으면) 이전 측정을 지우고 그 자리를 새
   // 첫 점으로 삼아 다시 잰다(기존 동작 그대로).
   function addRulerPoint(xCm, yCm) {
     setRulerPoints((prev) => {
       if (prev.length === 1) {
-        return [prev[0], axisConstrainedSecondPoint(prev[0], xCm, yCm)];
+        return [prev[0], { xCm, yCm }];
       }
       return prev.length >= 2 ? [{ xCm, yCm }] : [...prev, { xCm, yCm }];
     });
@@ -2983,13 +2987,12 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
   // "줄자 좀 섹시하게 편하게 안될까" 요청: 첫 점을 찍은 뒤 클릭을 두 번째로 또 하기 전에도, 지금
   // 마우스가 어디 있는지에 따라 두 번째 점이 어디에 찍힐지(끝점에 딱 붙는 것까지 포함해서) 점선으로
   // 미리 보여준다 — 실제로 클릭 한 번 안 해도 눈으로 재보면서 딱 맞는 자리를 찾을 수 있어서 훨씬
-  // 편하다. hoverCm(실시간 마우스 좌표)에 nearestSnapPoint(끝점 인식)·axisConstrainedSecondPoint(가로·
-  // 세로 직선 보정)를 똑같이 적용해서, 이 미리보기가 실제로 클릭했을 때 찍히는 자리와 항상 일치한다.
+  // 편하다. hoverCm(실시간 마우스 좌표)에 nearestSnapPoint(끝점 인식)를 적용해서, 이 미리보기가
+  // 실제로 클릭했을 때 찍히는 자리와 항상 일치한다(2026-10-07: 가로·세로 직선 보정은 없어짐).
   const rulerPreviewPoint = useMemo(() => {
     if (!rulerMode || rulerPoints.length !== 1 || !hoverCm) return null;
     const snapped = nearestSnapPoint(hoverCm.xCm, hoverCm.yCm);
-    const raw = snapped || hoverCm;
-    return axisConstrainedSecondPoint(rulerPoints[0], raw.xCm, raw.yCm);
+    return snapped || hoverCm;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rulerMode, rulerPoints, hoverCm, rulerSnapPoints, renderScale]);
   const rulerPreviewDistanceCm = rulerPreviewPoint
@@ -3482,8 +3485,14 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
           (2026-10-01 4차) "오른쪽 스크롤 안생기게 한 화면에 들어가게... 상단 메뉴를 좀 축소화
           하더라도" 요청으로, minHeight를 44px→32px로 줄였다(바로 위 파티션 줄과 같은 높이로 통일) —
           안의 줄자·도면업로드·격자·확대축소·전체보기 버튼(miniBtnStyle)도 높이 26px 안팎이라 32px로
-          충분히 들어간다. "줄 높이가 고정돼 모형 목록·대지가 안 흔들린다"는 원래 목적은 그대로다. */}
-      <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "nowrap", gap: 8, marginBottom: 4, minHeight: 32 }}>
+          충분히 들어간다. "줄 높이가 고정돼 모형 목록·대지가 안 흔들린다"는 원래 목적은 그대로다.
+          (2026-10-07 수정) "도면 임포트 한뒤에 작업할 때 줄자 등이 하단에서 작업하면 상단까지 가서
+          가져와야 하는 어려움이 있다" 신고 — 확대하거나 큰 배치판을 작업하면서 화면을 아래로 스크롤하면
+          줄자·선택 도구모음 줄이 맨 위에 고정된 채 안 따라와서, 매번 위로 스크롤해 다시 찾아야 했다.
+          왼쪽 메뉴(사이드바)·제품사진 라이브러리 선택 툴바와 똑같이 화면에 붙어서 따라오게(sticky)
+          바꿨다. 이 줄 바로 아래가 "모형 목록·대지" 본문이라 배경색(C.bg)을 깔아줘야 스크롤되는 내용이
+          붙어있는 줄 뒤로 비쳐 보이지 않는다. */}
+      <div className="layoutsim-no-print" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "nowrap", gap: 8, marginBottom: 4, minHeight: 32, position: "sticky", top: 10, zIndex: 5, background: C.bg, boxShadow: "0 2px 10px rgba(28,43,58,0.12)" }}>
         <div style={{ fontSize: 12, color: C.muted, flex: "1 1 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "nowrap", overflowX: "auto" }}>
           {selectedPlacedIds.size > 0 && (
             <div
@@ -4877,7 +4886,7 @@ function LayoutSimTab({ managerName = "", insideAppShell = true }) {
                 <>
                   <input
                     type="number"
-                    placeholder="두 지점 사이 실제 거리(cm)"
+                    placeholder="두 지점 사이 실제 거리(mm)"
                     value={calibDistanceInput}
                     onChange={(e) => setCalibDistanceInput(e.target.value)}
                     style={{ ...inputStyle, width: 200 }}
